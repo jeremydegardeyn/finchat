@@ -170,6 +170,12 @@ resource "google_bigquery_table" "gold_account_summary" {
   dataset_id          = google_bigquery_dataset.gold.dataset_id
   table_id            = "account_summary"
   deletion_protection = false
+  # View query is a string, so TF can't infer the dependency — make it explicit
+  # (BigQuery validates referenced tables exist at view creation).
+  depends_on = [
+    google_bigquery_table.silver_account,
+    google_bigquery_table.silver_transaction,
+  ]
   view {
     use_legacy_sql = false
     query          = <<-SQL

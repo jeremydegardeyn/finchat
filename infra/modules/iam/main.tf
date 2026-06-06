@@ -32,8 +32,9 @@ resource "google_project_iam_custom_role" "loan_approver" {
     "bigquery.tables.getData",
     "bigquery.tables.updateData", # INSERT-only enforced by table design (append)
     "bigquery.jobs.create",
-    "workflowexecutions.executions.create",
-    "workflowexecutions.executions.get",
+    # NOTE: workflowexecutions.* permissions are not supported in custom roles;
+    # grant the predefined roles/workflows.invoker separately if an approver
+    # needs to resolve workflow callbacks.
   ]
 }
 
