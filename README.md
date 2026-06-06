@@ -126,7 +126,7 @@ This repository is built **incrementally**. Status of each increment:
 - [x] **Increment 2 — Infrastructure:** 10 Terraform modules + dev/test/prod environments (validated, `fmt`+`validate` clean). Physical architecture doc.
 - [x] **Increment 3 — Product 1:** generator (✅ invariant-tested), Beam pipeline (✅ DirectRunner + 10 unit tests), BQ schemas/DDL, DaaS API (✅ FastAPI/OpenAPI), ADK conversational agent (✅ offline grounding). Data-flow/API/agent docs.
 - [x] **Increment 4 — Product 2:** loan DDL + append-only audit tables, full Cloud Workflows orchestration (HITL callback), 5 ADK agents (✅ offline orchestration), loan API (✅ 6 risk tests + flow test). docs/04 expanded.
-- [ ] **Increment 5 — UX:** Customer / Employee / Admin web UI with persona simulation.
+- [x] **Increment 5 — UX:** SPA + BFF proxy on Cloud Run; Customer / Employee / Admin views with persona simulation (✅ all 3 views rendered + loan-submit verified in preview).
 - [ ] **Increment 6 — Platform:** CI/CD (GitHub Actions + Cloud Build), promotion.
 - [ ] **Increment 7 — AgentOps:** evaluation datasets, pipelines, dashboards.
 

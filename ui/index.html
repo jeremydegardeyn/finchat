@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FinChat — Banking Data & AI Platform</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --ink:#e2e8f0; --mut:#94a3b8; --acc:#38bdf8; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; --line:#334155; }
+  * { box-sizing:border-box; } body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; align-items:center; gap:16px; padding:12px 20px; background:#0b1220; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
+  header h1 { font-size:16px; margin:0; letter-spacing:.5px; } header .logo { color:var(--acc); font-weight:700; }
+  header .spacer { flex:1; }
+  select, input, textarea, button { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  button { cursor:pointer; background:var(--acc); color:#04212e; border:none; font-weight:600; }
+  button.ghost { background:var(--panel); color:var(--ink); border:1px solid var(--line); font-weight:500; }
+  button.bad { background:var(--bad); color:#2a0a0a; } button.ok { background:var(--ok); color:#04231a; } button.warn{ background:var(--warn); color:#2a1f02; }
+  .demo-badge { font-size:12px; color:var(--warn); border:1px solid var(--warn); border-radius:999px; padding:2px 10px; }
+  nav { display:flex; gap:8px; padding:12px 20px; } nav button.tab { background:transparent; color:var(--mut); border:1px solid transparent; }
+  nav button.tab.active { color:var(--acc); border-bottom:2px solid var(--acc); border-radius:0; }
+  main { padding:8px 20px 40px; max-width:1100px; margin:0 auto; }
+  .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card h3 { margin:0 0 12px; font-size:14px; color:var(--acc); }
+  label { display:block; font-size:12px; color:var(--mut); margin:8px 0 2px; }
+  input, textarea, select { width:100%; }
+  table { width:100%; border-collapse:collapse; font-size:13px; } th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:600; } .pill { padding:1px 8px; border-radius:999px; font-size:11px; border:1px solid var(--line); }
+  .pill.APPROVE,.pill.APPROVED,.pill.ok { color:var(--ok); border-color:var(--ok); }
+  .pill.DECLINE,.pill.REJECTED,.pill.bad { color:var(--bad); border-color:var(--bad); }
+  .pill.REVIEW,.pill.PENDING_APPROVAL,.pill.warn { color:var(--warn); border-color:var(--warn); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .mut { color:var(--mut); } .right{ text-align:right; }
+  pre { background:#0b1220; border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto; font-size:12px; }
+  .chat { height:280px; overflow:auto; background:#0b1220; border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .msg { margin:6px 0; } .msg.u { text-align:right; } .msg .b { display:inline-block; padding:6px 10px; border-radius:10px; background:var(--panel); }
+  .msg.u .b { background:var(--acc); color:#04212e; }
+  .metric { font-size:26px; font-weight:700; } .metric.small{ font-size:18px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="logo">◆ FinChat</span> Banking Data &amp; AI Platform</h1>
+  <span id="demoBadge" class="demo-badge hidden">DEMO DATA</span>
+  <div class="spacer"></div>
+  <label style="margin:0;color:var(--mut)">Persona&nbsp;</label>
+  <select id="persona"></select>
+</header>
+<nav id="tabs"></nav>
+<main id="view"></main>
+
+<script>
+const S = { persona:"customer", live:{loan_api:false,txn_api:false,agent:false}, demo:true };
+
+// ---------- embedded demo data (standalone fallback) ----------
+const DEMO = {
+  accounts: {
+    "acct-001": { balance:-2972.49, currency:"USD", deposit_count:6, withdrawal_count:9, fee_count:2, net_balance:-2972.49 },
+    "acct-002": { balance:4821.10, currency:"USD", deposit_count:7, withdrawal_count:4, fee_count:1, net_balance:4821.10 },
+    "acct-003": { balance:1500.00, currency:"USD", deposit_count:5, withdrawal_count:3, fee_count:0, net_balance:1500.00 },
+  },
+  txns: {
+    "acct-001":[["DEPOSIT",486.03,"POSTED"],["TRANSFER",974.33,"POSTED"],["FEE",35,"POSTED"],["WITHDRAWAL",1200,"POSTED"]],
+    "acct-002":[["DEPOSIT",2500,"POSTED"],["WITHDRAWAL",120,"POSTED"],["DEPOSIT",300,"POSTED"]],
+    "acct-003":[["DEPOSIT",1500,"POSTED"],["WITHDRAWAL",250,"POSTED"]],
+  },
+  loans: [
+    { loan_id:"loan-demo-1", customer_name:"Jeremy D", amount:15000, term_months:36, status:"PENDING_APPROVAL", risk:{risk_score:47,recommendation:"REVIEW"}, decisions:[] },
+    { loan_id:"loan-demo-2", customer_name:"A. Smith", amount:60000, term_months:60, status:"PENDING_APPROVAL", risk:{risk_score:72,recommendation:"DECLINE"}, decisions:[] },
+  ],
+  audit: { "loan-demo-1":[
+    {actor:"loan-api",action:"CREATE_LOAN",event_time:"2026-06-06T10:00:00Z"},
+    {actor:"credit-agent",action:"CREDIT_PROFILE",event_time:"2026-06-06T10:00:01Z"},
+    {actor:"approval-agent",action:"RISK_ASSESSMENT",event_time:"2026-06-06T10:00:02Z"}
+  ]},
+};
+
+// ---------- api helper (BFF proxy, demo fallback) ----------
+async function api(kind, path, opts={}) {
+  try {
+    const r = await fetch(`/api/${kind}/${path}`, { ...opts,
+      headers:{ "Content-Type":"application/json", "X-Persona":S.persona, ...(opts.headers||{}) } });
+    if (r.status === 503) throw new Error("demo");
+    return await r.json();
+  } catch(e) { return { __demo:true }; }
+}
+
+// ---------- views ----------
+const VIEWS = {
+  customer: { label:"Customer", render: renderCustomer },
+  employee: { label:"Employee", render: renderEmployee },
+  admin:    { label:"Admin",    render: renderAdmin },
+};
+function viewsFor(p){ return p==="customer"?["customer"]:p==="employee"?["employee"]:["admin"]; }
+let activeTab = "customer";
+
+function setTabs() {
+  const allowed = viewsFor(S.persona);
+  activeTab = allowed[0];
+  tabs.innerHTML = allowed.map(v=>`<button class="tab ${v===activeTab?'active':''}" data-v="${v}">${VIEWS[v].label} View</button>`).join("");
+  tabs.querySelectorAll("button").forEach(b=>b.onclick=()=>{ activeTab=b.dataset.v;
+    tabs.querySelectorAll("button").forEach(x=>x.classList.toggle("active",x.dataset.v===activeTab)); draw(); });
+  draw();
+}
+function draw(){ VIEWS[activeTab].render(); }
+const el = id => document.getElementById(id);
+
+// ===== CUSTOMER =====
+function renderCustomer() {
+  view.innerHTML = `
+  <div class="grid">
+    <div class="card"><h3>Submit Loan Request</h3>
+      <label>Full name</label><input id="ln" value="Jeremy D">
+      <label>Amount (USD)</label><input id="la" type="number" value="15000">
+      <label>Term (months)</label><input id="lt" type="number" value="36">
+      <label>Account id (optional)</label><input id="lacc" value="acct-001">
+      <div class="row" style="margin-top:12px"><button id="lsub">Submit</button></div>
+      <pre id="lres" class="hidden"></pre>
+    </div>
+    <div class="card"><h3>View Loan Status</h3>
+      <label>Loan id</label><input id="lsid" placeholder="loan-...">
+      <div class="row" style="margin-top:12px"><button class="ghost" id="lsget">Check status</button></div>
+      <div id="lsout"></div>
+    </div>
+    <div class="card" style="grid-column:1/-1"><h3>Chat with Banking Assistant</h3>
+      <div class="row"><label style="margin:0">Account&nbsp;</label><input id="cacc" style="width:140px" value="acct-001"></div>
+      <div id="chat" class="chat" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:8px"><input id="cmsg" placeholder="e.g. what is my balance?" style="flex:1"><button id="csend">Send</button></div>
+    </div>
+  </div>`;
+  el("lsub").onclick = submitLoan; el("lsget").onclick = checkStatus; el("csend").onclick = chatSend;
+  el("cmsg").addEventListener("keydown",e=>{ if(e.key==="Enter") chatSend(); });
+  pushChat("a","Hi! I'm FinChat. Ask me about your balance, recent transactions, or an account summary.");
+}
+async function submitLoan() {
+  const body = { customer_name:el("ln").value, amount:+el("la").value, term_months:+el("lt").value, account_id:el("lacc").value||null };
+  let res = await api("loan","v1/loans",{ method:"POST", body:JSON.stringify(body) });
+  if (res.__demo) { const score = body.amount>40000?72:47; res = { loan_id:"loan-demo-"+Math.floor(Math.random()*9000),
+    status:"PENDING_APPROVAL", risk_score:score, recommendation:score>=65?"DECLINE":score<=35?"APPROVE":"REVIEW", reasons:["demo scoring"] }; }
+  const p = el("lres"); p.classList.remove("hidden");
+  p.textContent = `Loan ${res.loan_id}\nStatus: ${res.status}\nRisk score: ${res.risk_score}  ->  ${res.recommendation}\n${(res.reasons||[]).join("; ")}`;
+}
+async function checkStatus() {
+  const id = el("lsid").value.trim(); if(!id) return;
+  let res = await api("loan",`v1/loans/${id}`);
+  if (res.__demo) res = DEMO.loans.find(l=>l.loan_id===id) || {error:"not found (demo)"};
+  el("lsout").innerHTML = `<pre>${JSON.stringify(res,null,2)}</pre>`;
+}
+function pushChat(who,text){ const d=document.createElement("div"); d.className="msg "+(who==="u"?"u":"a");
+  d.innerHTML=`<span class="b"></span>`; d.querySelector(".b").textContent=text; el("chat").appendChild(d); el("chat").scrollTop=1e9; }
+async function chatSend() {
+  const q = el("cmsg").value.trim(); if(!q) return; const acc = el("cacc").value.trim();
+  pushChat("u",q); el("cmsg").value="";
+  // Grounded answer: prefer real agent, else compute from txn data (demo).
+  let ans = await groundedAnswer(q, acc); pushChat("a",ans);
+}
+async function groundedAnswer(q, acc) {
+  const ql=q.toLowerCase();
+  if(/balance|how much/.test(ql)){ let b=await api("txn",`v1/accounts/${acc}/balance`);
+    if(b.__demo){ const d=DEMO.accounts[acc]; b=d?{balance:d.balance,currency:d.currency}:{error:1}; }
+    return b.error?`I couldn't find account ${acc}.`:`Your balance on ${acc} is ${b.balance} ${b.currency}.`; }
+  if(/summary|overview/.test(ql)){ let s=await api("txn",`v1/accounts/${acc}/summary`);
+    if(s.__demo){ const d=DEMO.accounts[acc]; s=d?{deposit_count:d.deposit_count,withdrawal_count:d.withdrawal_count,net_balance:d.net_balance}:{error:1}; }
+    return s.error?`No data for ${acc}.`:`${acc}: ${s.deposit_count} deposits, ${s.withdrawal_count} withdrawals, net ${s.net_balance}.`; }
+  if(/transaction|recent|spent|activity/.test(ql)){ let t=await api("txn",`v1/accounts/${acc}/transactions?limit=5`);
+    if(t.__demo){ const d=DEMO.txns[acc]||[]; return d.length?("Recent: "+d.map(x=>`${x[0]} ${x[1]}`).join(", ")):`No transactions for ${acc}.`; }
+    return Array.isArray(t)&&t.length?("Recent: "+t.map(x=>`${x.txn_type} ${x.amount}`).join(", ")):`No transactions for ${acc}.`; }
+  if(/invest|stock|advice/.test(ql)) return "I can't provide investment advice, but I can share your account data.";
+  return "I can share your balance, recent transactions, or an account summary. Try 'what is my balance?'";
+}
+
+// ===== EMPLOYEE =====
+async function renderEmployee() {
+  view.innerHTML = `<div class="card"><h3>Loan Requests — Review Queue</h3><div id="lq">Loading…</div></div>
+    <div class="card" style="margin-top:16px"><h3>Audit Trail</h3><div id="auditbox" class="mut">Select a loan to view its immutable audit trail.</div></div>`;
+  let loans = await api("loan","v1/loans");
+  if (loans.__demo || !Array.isArray(loans)) { loans = DEMO.loans; }
+  el("lq").innerHTML = `<table><thead><tr><th>Loan</th><th>Customer</th><th class="right">Amount</th><th>Term</th><th>Risk</th><th>Status</th><th>Actions</th></tr></thead><tbody>${
+    loans.map(l=>{ const rec=(l.risk&&l.risk.recommendation)||l.recommendation||"-"; const rs=(l.risk&&l.risk.risk_score)??l.risk_score??"-";
+    return `<tr>
+      <td>${l.loan_id}</td><td>${l.customer_name}</td><td class="right">${l.amount}</td><td>${l.term_months}</td>
+      <td><span class="pill ${rec}">${rs} ${rec}</span></td>
+      <td><span class="pill ${l.status}">${l.status}</span></td>
+      <td class="row">
+        <button class="ok" data-d="APPROVE" data-id="${l.loan_id}">Approve</button>
+        <button class="bad" data-d="REJECT" data-id="${l.loan_id}">Reject</button>
+        <button class="warn" data-d="REQUEST_MODIFICATION" data-id="${l.loan_id}">Modify</button>
+        <button class="ghost" data-d="COUNTEROFFER" data-id="${l.loan_id}">Counter</button>
+        <button class="ghost" data-a="${l.loan_id}">Audit</button>
+      </td></tr>`; }).join("")}</tbody></table>`;
+  el("lq").querySelectorAll("button[data-d]").forEach(b=>b.onclick=()=>decide(b.dataset.id,b.dataset.d));
+  el("lq").querySelectorAll("button[data-a]").forEach(b=>b.onclick=()=>showAudit(b.dataset.a));
+}
+async function decide(id, decision) {
+  let body = { decision, rationale: "reviewed in console" };
+  if (decision==="COUNTEROFFER") { const a=prompt("Counteroffer amount:"); if(!a) return; body.counteroffer_amount=+a; }
+  let res = await api("loan",`v1/loans/${id}/decision`,{ method:"POST", body:JSON.stringify(body),
+    headers:{ "X-Approver":"loan-officer@datadinosaur.com" } });
+  if (res.__demo) { const l=DEMO.loans.find(x=>x.loan_id===id); if(l){ l.status={APPROVE:"APPROVED",REJECT:"REJECTED",REQUEST_MODIFICATION:"MODIFIED",COUNTEROFFER:"MODIFIED"}[decision];
+    l.decisions.push({version:l.decisions.length+1,decision}); } res={decision,version:(l?l.decisions.length:1)}; }
+  alert(`Recorded ${res.decision} (v${res.version}) — append-only & audited.`); renderEmployee();
+}
+async function showAudit(id) {
+  let a = await api("loan",`v1/loans/${id}/audit`);
+  if (a.__demo || !Array.isArray(a)) a = DEMO.audit[id] || [];
+  el("auditbox").innerHTML = a.length? `<table><thead><tr><th>Time</th><th>Actor</th><th>Action</th></tr></thead><tbody>${
+    a.map(x=>`<tr><td class="mut">${x.event_time||""}</td><td>${x.actor}</td><td>${x.action}</td></tr>`).join("")}</tbody></table>`
+    : `<span class="mut">No audit entries for ${id}.</span>`;
+}
+
+// ===== ADMIN =====
+async function renderAdmin() {
+  const h = await (await fetch("/healthz").catch(()=>({json:()=>({})}))).json().catch(()=>({}));
+  const live = S.live;
+  view.innerHTML = `<div class="grid">
+    <div class="card"><h3>Pipeline Monitor</h3>
+      ${stat("Pub/Sub ingest", live.txn_api)}${stat("Dataflow (on-demand)", live.txn_api)}
+      ${stat("BigQuery Medallion", live.txn_api)}<div class="mut" style="margin-top:8px">DLQ backlog: <b>0</b></div></div>
+    <div class="card"><h3>Agent Monitor</h3>
+      ${stat("Banking Assistant", live.agent)}${stat("Loan Planner + specialists", live.agent)}
+      <div class="mut" style="margin-top:8px">Runtime: Agent Engine (scale-to-zero)</div></div>
+    <div class="card"><h3>Evaluations</h3>
+      <div class="row"><div><div class="metric">${live.agent?"—":"0.94"}</div><div class="mut">Grounding accuracy</div></div>
+      <div><div class="metric">${live.agent?"—":"0.03"}</div><div class="mut">Hallucination rate</div></div></div>
+      <div class="row" style="margin-top:10px"><div><div class="metric small">${live.agent?"—":"0.97"}</div><div class="mut">Tool utilization</div></div>
+      <div><div class="metric small">${live.agent?"—":"0.91"}</div><div class="mut">Approval rec. accuracy</div></div></div>
+      <div class="mut" style="margin-top:8px">Full framework: Increment 7</div></div>
+    <div class="card" style="grid-column:1/-1"><h3>Backend health</h3><pre>${JSON.stringify(h,null,2)}</pre></div>
+  </div>`;
+}
+function stat(name, ok){ return `<div class="row" style="justify-content:space-between"><span>${name}</span><span class="pill ${ok?'ok':'warn'}">${ok?'LIVE':'DEMO'}</span></div>`; }
+
+// ---------- boot ----------
+(async function(){
+  let cfg = {}; try { cfg = await (await fetch("/api/config")).json(); } catch(e){}
+  S.live = cfg.live || S.live; S.demo = !(S.live.loan_api||S.live.txn_api||S.live.agent);
+  el("demoBadge").classList.toggle("hidden", !S.demo);
+  const personas = cfg.personas || [{id:"customer",label:"Customer"},{id:"employee",label:"Loan Officer"},{id:"admin",label:"Platform Admin"}];
+  persona.innerHTML = personas.map(p=>`<option value="${p.id}">${p.label}</option>`).join("");
+  persona.onchange = ()=>{ S.persona=persona.value; setTabs(); };
+  S.persona = personas[0].id; setTabs();
+})();
+</script>
+</body>
+</html>
