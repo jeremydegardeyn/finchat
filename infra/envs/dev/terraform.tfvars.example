@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored.
+project_id  = "strongsville-city-schools"
+region      = "us-central1"
+env         = "dev"
+name_prefix = "finchat"
+
+# Governance
+privileged_group   = "" # e.g. "group:fraud-ops@datadinosaur.com"
+notification_email = "" # e.g. "alerts@datadinosaur.com"
+
+# Cost guardrails
+enable_budget     = false # set true + billing_account to create a budget alert
+billing_account   = ""    # "XXXXXX-XXXXXX-XXXXXX"
+budget_amount_usd = 25
+
+# Enterprise toggles (keep OFF for near-zero cost)
+enable_streaming_job = false # true = 24/7 Dataflow streaming
+run_min_instances    = 0     # >0 = warm Cloud Run
+enable_api_gateway   = false # true after Increment 3 (OpenAPI spec)
+enable_workflows     = false # true after Increment 4 (workflow source)

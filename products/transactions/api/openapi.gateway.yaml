@@ -1,0 +1,73 @@
+# OpenAPI 2.0 (Swagger) for Cloud API Gateway — Transactions DaaS.
+# Rendered by Terraform via templatefile(); ${txn_api_url} is the Cloud Run backend.
+# The SAME contract imports into Apigee X for the enterprise path (ADR-0006).
+# NOTE: minimal skeleton — full schemas/paths land in Increment 3.
+swagger: "2.0"
+info:
+  title: FinChat Transactions DaaS
+  description: Data-as-a-Service API over the Gold serving layer.
+  version: "1.0.0"
+schemes:
+  - https
+produces:
+  - application/json
+securityDefinitions:
+  api_key:
+    type: apiKey
+    name: x-api-key
+    in: header
+security:
+  - api_key: []
+paths:
+  /v1/accounts/{accountId}/balance:
+    get:
+      operationId: getBalance
+      summary: Current balance for an account.
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          type: string
+      x-google-backend:
+        address: ${txn_api_url}/v1/accounts/{accountId}/balance
+      responses:
+        "200": { description: OK }
+  /v1/accounts/{accountId}/transactions:
+    get:
+      operationId: getTransactionHistory
+      summary: Transaction history for an account.
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          type: string
+      x-google-backend:
+        address: ${txn_api_url}/v1/accounts/{accountId}/transactions
+      responses:
+        "200": { description: OK }
+  /v1/accounts/{accountId}/activity:
+    get:
+      operationId: getRecentActivity
+      summary: Recent activity for an account.
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          type: string
+      x-google-backend:
+        address: ${txn_api_url}/v1/accounts/{accountId}/activity
+      responses:
+        "200": { description: OK }
+  /v1/accounts/{accountId}/summary:
+    get:
+      operationId: getAccountSummary
+      summary: Account summary (Gold serving view).
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          type: string
+      x-google-backend:
+        address: ${txn_api_url}/v1/accounts/{accountId}/summary
+      responses:
+        "200": { description: OK }

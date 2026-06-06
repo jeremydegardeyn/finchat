@@ -7,7 +7,7 @@
 crash.log
 override.tf
 override.tf.json
-.terraform.lock.hcl
+# NOTE: .terraform.lock.hcl is intentionally committed (provider pinning).
 
 # Python
 __pycache__/

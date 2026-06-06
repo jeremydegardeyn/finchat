@@ -123,7 +123,7 @@ finchat/
 This repository is built **incrementally**. Status of each increment:
 
 - [x] **Increment 1 — Foundation:** repo skeleton, executive overview, service mapping, data model, cost estimate, anchor ADRs.
-- [ ] **Increment 2 — Infrastructure:** Terraform modules + dev/test/prod environments.
+- [x] **Increment 2 — Infrastructure:** 10 Terraform modules + dev/test/prod environments (validated, `fmt`+`validate` clean). Physical architecture doc.
 - [ ] **Increment 3 — Product 1:** generator, Beam pipeline, BQ schemas, DaaS API, conversational agent.
 - [ ] **Increment 4 — Product 2:** loan workflow, multi-agent system, HITL approval.
 - [ ] **Increment 5 — UX:** Customer / Employee / Admin web UI with persona simulation.

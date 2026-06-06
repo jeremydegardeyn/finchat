@@ -1,0 +1,21 @@
+# PROD — illustrates promotion to the enterprise cost profile.
+# Even here we keep defaults conservative; flip toggles deliberately.
+project_id  = "strongsville-city-schools"
+region      = "us-central1"
+env         = "prod"
+name_prefix = "finchat"
+
+privileged_group   = "group:fraud-ops@datadinosaur.com"
+notification_email = "alerts@datadinosaur.com"
+
+# Cost guardrails (always on in prod)
+enable_budget     = true
+billing_account   = "XXXXXX-XXXXXX-XXXXXX"
+budget_amount_usd = 50
+
+# Enterprise toggles — turn on as the business requires latency/throughput SLOs.
+# (Each one increases cost; see docs/08-cost-estimate.md.)
+enable_streaming_job = false # -> true for 24/7 Dataflow (real cost)
+run_min_instances    = 0     # -> 1+ for warm Cloud Run (no cold start)
+enable_api_gateway   = true  # OpenAPI present after Increment 3
+enable_workflows     = true  # workflow source present after Increment 4
