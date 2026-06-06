@@ -88,9 +88,10 @@ resource "google_project_service" "apis" {
 
 # --- Service accounts --------------------------------------------------------
 resource "google_service_account" "sa" {
-  for_each     = local.service_accounts
-  project      = var.project_id
-  account_id   = "${local.prefix}-${each.key}"
+  for_each = local.service_accounts
+  project  = var.project_id
+  # account_id allows only [a-z0-9-]; map keys use underscores as logical names.
+  account_id   = "${local.prefix}-${replace(each.key, "_", "-")}"
   display_name = "${each.value.display} (${var.env})"
   depends_on   = [google_project_service.apis]
 }
