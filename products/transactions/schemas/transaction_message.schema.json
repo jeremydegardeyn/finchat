@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TransactionMessage",
+  "description": "Contract for a transaction event published to Pub/Sub (matches the Avro topic schema).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["transaction_id", "idempotency_key", "account_id", "txn_type", "amount", "currency", "status", "event_time"],
+  "properties": {
+    "transaction_id": { "type": "string", "format": "uuid" },
+    "idempotency_key": { "type": "string", "minLength": 8 },
+    "account_id": { "type": "string" },
+    "txn_type": { "type": "string", "enum": ["DEPOSIT", "WITHDRAWAL", "TRANSFER", "FEE"] },
+    "amount": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,2})?$", "description": "Decimal as string to preserve NUMERIC precision." },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "counterparty_account": { "type": ["string", "null"] },
+    "status": { "type": "string", "enum": ["POSTED", "PENDING", "REJECTED"] },
+    "event_time": { "type": "string", "format": "date-time" }
+  }
+}

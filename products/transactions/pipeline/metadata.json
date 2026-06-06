@@ -1,0 +1,11 @@
+{
+  "name": "FinChat Transactions Streaming",
+  "description": "Pub/Sub -> validate -> DLP -> BigQuery Silver, with DLQ routing.",
+  "parameters": [
+    { "name": "input_subscription", "label": "Input Pub/Sub subscription", "helpText": "projects/PROJECT/subscriptions/...", "regexes": ["^projects/[^/]+/subscriptions/[^/]+$"] },
+    { "name": "output_table", "label": "BigQuery Silver table", "helpText": "project:dataset.transaction" },
+    { "name": "dlq_topic", "label": "Dead-letter topic", "helpText": "projects/PROJECT/topics/...", "regexes": ["^projects/[^/]+/topics/[^/]+$"] },
+    { "name": "deid_template", "label": "DLP de-identify template", "helpText": "Optional DLP template name.", "isOptional": true },
+    { "name": "dlp_sample_rate", "label": "DLP sample rate", "helpText": "0..1 fraction inspected (cost control).", "isOptional": true }
+  ]
+}
