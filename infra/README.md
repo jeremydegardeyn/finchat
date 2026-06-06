@@ -43,7 +43,7 @@ Promotion dev→prod is a **tfvars change**, not a code change (see [ADR-0002](.
 
 # Per environment
 cd infra/envs/dev
-cp terraform.tfvars.example terraform.tfvars   # edit as needed
+#cp terraform.tfvars.example terraform.tfvars   # edit as needed
 terraform init
 terraform plan
 terraform apply

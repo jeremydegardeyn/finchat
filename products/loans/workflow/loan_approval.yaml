@@ -1,38 +1,129 @@
-# Cloud Workflows — Loan Approval orchestration (ADR-0005).
-# Long-running with a native callback for human-in-the-loop approval.
-# NOTE: skeleton — full agent calls, BigQuery writes, and risk scoring land in Increment 4.
+# =============================================================================
+# Cloud Workflows — Loan Approval orchestration (Data Product 2)
+# Long-running with a NATIVE CALLBACK for human-in-the-loop approval (ADR-0005).
+# State across the (possibly multi-day) approval wait lives in the Workflows
+# execution + BigQuery system-of-record — not in any agent process.
+#
+# Requires env vars on the workflow: LOAN_API_URL, TXN_API_URL.
+# Calls Cloud Run services with OIDC (the workflow SA has roles/run.invoker).
+# =============================================================================
 main:
   params: [input]
   steps:
-    - init:
+    - setup:
         assign:
-          - loan_id: ${input.loan_id}
-          - project: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - loan_api: ${sys.get_env("LOAN_API_URL")}
+          - txn_api: ${sys.get_env("TXN_API_URL")}
+
+    # (1)(2) Validate submission; request missing info.
     - validate_submission:
         switch:
-          - condition: ${not("name" in input) or not("amount" in input) or not("term" in input)}
-            raise: "Missing required fields: name, amount, term"
-    - create_loan_record:
-        # Increment 4: INSERT loan_request row via BigQuery connector
+          - condition: ${not("customer_name" in input) or not("amount" in input) or not("term_months" in input)}
+            steps:
+              - missing:
+                  return:
+                    status: "NEEDS_INFO"
+                    message: "Required: customer_name, amount, term_months"
+
+    # (3)(4)(5)(6)(7)(8)(9) Create record, synth credit profile, store, pull txn
+    # history, evaluate overdraft, calculate risk, generate recommendation.
+    # The Loan API bundles these steps (also driven by the ADK agents); the
+    # workflow owns the durable orchestration + HITL around them.
+    - submit_and_assess:
+        call: http.post
+        args:
+          url: ${loan_api + "/v1/loans"}
+          auth:
+            type: OIDC
+          body:
+            customer_name: ${input.customer_name}
+            amount: ${input.amount}
+            term_months: ${input.term_months}
+            account_id: ${default(map.get(input, "account_id"), null)}
+        result: assessment
+    - capture_assessment:
         assign:
-          - status: "CREATED"
-    - generate_credit_profile:
-        # Increment 4: Credit Agent -> synthetic profile -> BigQuery
-        assign:
-          - status: "PROFILED"
-    - retrieve_transaction_history:
-        # Increment 4: call Transactions DaaS API (cross-product lineage)
-        assign:
-          - status: "TXN_REVIEWED"
-    - calculate_risk_and_recommend:
-        # Increment 4: Risk score + recommendation
-        assign:
-          - status: "RECOMMENDED"
+          - loan_id: ${assessment.body.loan_id}
+          - recommendation: ${assessment.body.recommendation}
+          - risk_score: ${assessment.body.risk_score}
+
+    # Auto-decision shortcut for unambiguous cases keeps humans focused on REVIEW.
+    - route:
+        switch:
+          - condition: ${recommendation == "APPROVE" and risk_score <= 20}
+            next: auto_approve
+          - condition: ${recommendation == "DECLINE"}
+            next: auto_reject
+        next: await_human_approval
+
+    # (10) Route to human approver — create a callback the approver UI resolves.
     - await_human_approval:
-        # Increment 4: create_callback_endpoint + await_callback (HITL)
+        steps:
+          - create_callback:
+              call: events.create_callback_endpoint
+              args:
+                http_callback_method: "POST"
+              result: callback_details
+          - wait_for_decision:
+              # Suspends the execution (up to 7 days) until the approver POSTs.
+              call: events.await_callback
+              args:
+                callback: ${callback_details}
+                timeout: 604800
+              result: approval
+          - apply_human_decision:
+              assign:
+                - decision: ${approval.http_request.body.decision}
+                - approver: ${approval.http_request.body.approver}
+                - rationale: ${default(map.get(approval.http_request.body, "rationale"), "")}
+                - counteroffer: ${default(map.get(approval.http_request.body, "counteroffer_amount"), null)}
+        next: capture_decision
+
+    - auto_approve:
         assign:
-          - decision: "PENDING"
-    - finalize:
+          - decision: "APPROVE"
+          - approver: "auto-policy"
+          - rationale: '${"auto-approved low risk " + string(risk_score)}'
+          - counteroffer: null
+        next: capture_decision
+
+    - auto_reject:
+        assign:
+          - decision: "REJECT"
+          - approver: "auto-policy"
+          - rationale: "auto-declined by policy"
+          - counteroffer: null
+        next: capture_decision
+
+    # (11)(12) Capture decision + update status (append-only, versioned, audited).
+    - capture_decision:
+        call: http.post
+        args:
+          url: ${loan_api + "/v1/loans/" + loan_id + "/decision"}
+          auth:
+            type: OIDC
+          headers:
+            X-Approver: ${approver}
+          body:
+            decision: ${decision}
+            rationale: ${rationale}
+            counteroffer_amount: ${counteroffer}
+        result: decision_result
+
+    # (13) Notify customer.
+    - notify_customer:
+        call: http.post
+        args:
+          url: ${loan_api + "/v1/loans/" + loan_id + "/notify"}
+          auth:
+            type: OIDC
+          body:
+            decision: ${decision}
+        result: _notify
+        # notify endpoint is optional in the sandbox; failures shouldn't fail the loan
+    - done:
         return:
           loan_id: ${loan_id}
-          status: ${status}
+          decision: ${decision}
+          risk_score: ${risk_score}
+          approver: ${approver}
