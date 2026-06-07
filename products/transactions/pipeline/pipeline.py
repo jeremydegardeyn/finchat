@@ -23,7 +23,7 @@ import os
 
 import apache_beam as beam
 from apache_beam.options.pipeline_options import (
-    PipelineOptions, StandardOptions, GoogleCloudOptions, SetupOptions)
+    PipelineOptions, StandardOptions, GoogleCloudOptions)
 
 from transforms import parse_and_validate, enrich, to_dlq_envelope, ValidationError
 
@@ -148,7 +148,9 @@ def run(argv=None):
     known, beam_args = parser.parse_known_args(argv)
 
     options = PipelineOptions(beam_args)
-    options.view_as(SetupOptions).save_main_session = True
+    # No save_main_session: our transforms ship in the worker container image
+    # (see Dockerfile), so workers import them normally — pickling __main__ is
+    # both unnecessary and was the cause of LoadMainSessionException.
     if not known.input_file:
         options.view_as(StandardOptions).streaming = True
         # The Flex Template launcher passes --project/--region, but argparse above
