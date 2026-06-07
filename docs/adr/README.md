@@ -11,6 +11,7 @@ Lightweight ADRs capturing significant, hard-to-reverse decisions and their rati
 | [0005](0005-workflows-vs-composer.md) | Cloud Workflows + Scheduler over Cloud Composer | Accepted |
 | [0006](0006-api-gateway-vs-apigee.md) | Cloud API Gateway over Apigee X (sandbox) | Accepted |
 | [0007](0007-cloud-run-vs-gke.md) | Cloud Run over GKE for service hosting | Accepted |
+| [0008](0008-model-armor-llm-screening.md) | Model Armor for runtime LLM I/O screening | Accepted |
 
 _Future ADRs (planned): row/column-level security model, idempotency & exactly-once strategy,
 multi-agent state management, environment promotion gating._

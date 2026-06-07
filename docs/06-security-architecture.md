@@ -14,6 +14,7 @@ flowchart TB
     GW[API Gateway - keys/JWT/quota]
     RUN[Cloud Run - private, IAM run.invoker only]
     TLS[TLS in transit · Google-managed encryption at rest]
+    ARMOR[Model Armor - prompt/response screening]
   end
   subgraph data["Data-Layer Controls"]
     CLS[Column-level security - policy tags]
@@ -42,6 +43,7 @@ flowchart TB
 | **Column-level security** | Data Catalog taxonomy + policy tags on `full_name`, `email`, `account_number`, `amount`, `counterparty_account`; only the privileged group is fine-grained reader |
 | **Row-level security** | Row access policy on `silver.transaction` (e.g., posted-only / role-scoped) |
 | **PII protection** | Cloud DLP inspect + de-identify (mask direct identifiers; deterministic crypto for SSN/card/IBAN with surrogate) before Silver |
+| **LLM I/O screening** | **Model Armor** template screens agent prompts + responses for prompt injection/jailbreak, sensitive data, malicious URLs, harmful content; enforced in the UI BFF ([ADR-0008](adr/0008-model-armor-llm-screening.md)) |
 | **Encryption** | Google-managed at rest (CMEK-ready: `kms_key` hooks in pipeline/Cloud Run), TLS in transit |
 | **Network exposure** | Cloud Run services private (`--no-allow-unauthenticated`); access only via API Gateway / authorized SAs; UI is the only public surface |
 | **Auditability** | All `cloudaudit.googleapis.com` logs routed to an immutable 10-year logging bucket; loan decisions are append-only + versioned |
@@ -52,7 +54,8 @@ flowchart TB
 
 A request to read a balance crosses: UI persona → API Gateway (key/JWT/quota) → IAM (`run.invoker`)
 → Cloud Run service SA (`dataViewer` on Gold only, bytes capped) → BigQuery (CLS/RLS) → audit log.
-No single control is the only line of defense.
+A **chat** request additionally crosses **Model Armor** (prompt screened in, response screened out)
+before/after the agent. No single control is the only line of defense.
 
 ## Supporting future regulatory requirements
 

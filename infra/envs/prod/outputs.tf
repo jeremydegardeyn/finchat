@@ -28,3 +28,10 @@ output "service_urls" {
 output "api_gateway_url" {
   value = var.enable_api_gateway ? module.api_gateway[0].gateway_url : null
 }
+output "model_armor_template" {
+  value = var.enable_model_armor ? module.model_armor[0].template_name : null
+}
+output "ui_custom_domain_dns_records" {
+  description = "Add these records at datadinosaur.com to activate the custom domain + TLS."
+  value       = var.custom_domain == "" ? null : module.ui_domain[0].dns_records
+}

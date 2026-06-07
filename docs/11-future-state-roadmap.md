@@ -11,7 +11,7 @@
 | API management | Import the OpenAPI contracts into **Apigee X**; add developer portal, spike-arrest, analytics |
 | Streaming | Flip `enable_streaming_job=true` → 24/7 Dataflow w/ Streaming Engine + autoscaling |
 | Agents | Warm Agent Engine min-instances for latency SLOs; enable Memory Bank |
-| Security | Turn on **VPC Service Controls** perimeter + **CMEK** (hooks already present) |
+| Security | ✅ **Model Armor** screening on the agent (done); turn on **VPC Service Controls** perimeter + **CMEK** (hooks present); enable the Model Armor **floor setting** org-wide |
 | Identity | Replace persona simulation with **IAP / Cloud Identity / external IdP (OIDC/SAML)** + real RBAC |
 | Quality gate | Branch protection + required CI + signed commits + `terraform plan` PR comments |
 

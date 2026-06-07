@@ -108,6 +108,32 @@ UI=$(gcloud run services describe finchat-dev-ui --region us-central1 --format='
 open "$UI"   # switch personas; submit a loan; chat
 ```
 
+## 9. Custom domain (finchat.datadinosaur.com)
+
+The UI is a **Cloud Run service** — map a custom domain onto it (no VM, no separate host).
+
+```bash
+# a) Verify you own the domain for this project (one-time)
+gcloud domains verify datadinosaur.com         # opens Search Console; follow the TXT-record step
+
+# b) Enable + apply the mapping (prod)
+#    set in infra/envs/prod/terraform.tfvars:  custom_domain = "finchat.datadinosaur.com"
+cd infra/envs/prod && terraform apply
+
+# c) Read the DNS records Terraform returns, then add them at datadinosaur.com
+terraform output ui_custom_domain_dns_records
+```
+
+Add the returned record at your DNS provider for `datadinosaur.com` — typically a **CNAME** on the
+`finchat` subdomain pointing to `ghs.googlehosted.com` (Google returns the exact rrdata). Google then
+auto-provisions a **managed TLS cert** (a few minutes). Done — `https://finchat.datadinosaur.com`
+serves the UI.
+
+> **Cost:** Cloud Run domain mapping is **free** (near-zero posture).
+> **Enterprise target:** a **Global External HTTPS Load Balancer** + serverless NEG + managed cert +
+> **Cloud Armor** (WAF/DDoS) — better for apex domains, multi-region, and edge security. Same DNS swap;
+> ~$18/mo for the forwarding rule. Documented as the H1 upgrade in [11-roadmap](11-future-state-roadmap.md).
+
 ## Rollback
 
 - **Services:** redeploy a previous image tag (`gcloud run deploy --image .../<svc>:<old-sha>`); Cloud Run keeps revisions.

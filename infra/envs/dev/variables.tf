@@ -62,6 +62,25 @@ variable "enable_workflows" {
   default     = false
 }
 
+# --- Model Armor (LLM I/O screening) -----------------------------------------
+variable "enable_model_armor" {
+  type        = bool
+  description = "Create a Model Armor template for agent prompt/response screening."
+  default     = true
+}
+variable "enable_model_armor_floor" {
+  type        = bool
+  description = "Also create a project-level Model Armor floor setting (needs elevated perms)."
+  default     = false
+}
+
+# --- Custom domain -----------------------------------------------------------
+variable "custom_domain" {
+  type        = string
+  description = "Map this domain to the UI Cloud Run service (e.g. finchat.datadinosaur.com). Empty = skip. Domain must be verified for the project first."
+  default     = ""
+}
+
 variable "labels" {
   type    = map(string)
   default = { app = "finchat", managed_by = "terraform" }

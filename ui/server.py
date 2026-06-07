@@ -75,7 +75,26 @@ async def txn_proxy(path: str, request: Request):
 
 @app.api_route("/api/agent/{path:path}", methods=["GET", "POST"])
 async def agent_proxy(path: str, request: Request):
-    return await _proxy(AGENT_URL, path, request)
+    """Agent path with Model Armor screening on prompt (in) and response (out)."""
+    import armor
+    body = await request.body()
+    if body:
+        ok, reason = await armor.screen_prompt(body.decode("utf-8", "replace"))
+        if not ok:
+            return JSONResponse(
+                {"error": "Your message was blocked by safety screening.", "reason": reason},
+                status_code=400)
+    resp = await _proxy(AGENT_URL, path, request)
+    # Screen the model response before returning it to the user.
+    try:
+        ok, reason = await armor.screen_response(resp.body.decode("utf-8", "replace"))
+        if not ok:
+            return JSONResponse(
+                {"error": "The response was withheld by safety screening.", "reason": reason},
+                status_code=502)
+    except Exception:
+        pass
+    return resp
 
 
 @app.get("/")

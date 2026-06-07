@@ -128,7 +128,8 @@ This repository is built **incrementally**. Status of each increment:
 - [x] **Increment 4 — Product 2:** loan DDL + append-only audit tables, full Cloud Workflows orchestration (HITL callback), 5 ADK agents (✅ offline orchestration), loan API (✅ 6 risk tests + flow test). docs/04 expanded.
 - [x] **Increment 5 — UX:** SPA + BFF proxy on Cloud Run; Customer / Employee / Admin views with persona simulation (✅ all 3 views rendered + loan-submit verified in preview).
 - [x] **Increment 6 — Platform:** CI/CD (GitHub Actions: ci/build-deploy/infra), Cloud Build, Workload Identity Federation (keyless), dev→test→prod promotion. Remaining docs filled: 01 logical, 06 security, 09 governance, 10 runbook, 11 roadmap — **all 12 deliverables complete**.
-- [x] **Increment 7 — AgentOps:** eval datasets (txn + labeled loan), offline eval pipeline (✅ runs: grounding 1.0, hallucination 0.0, tool-use 1.0, approval acc 0.875) gated in CI, Vertex eval sketch, reporting/dashboard strategy. **Build complete.**
+- [x] **Increment 7 — AgentOps:** eval datasets (txn + labeled loan), offline eval pipeline (✅ runs: grounding 1.0, hallucination 0.0, tool-use 1.0, approval acc 0.875) gated in CI, Vertex eval sketch, reporting/dashboard strategy.
+- [x] **Increment 8 — Model Armor + custom domain:** Model Armor template + BFF prompt/response screening (ADR-0008, ✅ validated + fail-open verified); Cloud Run custom-domain module for `finchat.datadinosaur.com`. **Build complete.**
 
 ---
 

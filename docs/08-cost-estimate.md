@@ -22,6 +22,7 @@ Assumes: a few generation runs/week (≤10k txns each), light API/agent traffic,
 | Agent Engine (scale-0) | vCPU-hr+GiB-hr | none | **~$0** idle |
 | Gemini tokens | per 1M tokens | — | **~$1–5** (demo) |
 | Cloud DLP | per unit inspected | small free | **~$0–2** (sampled) |
+| Model Armor | per unit screened | — | **~$0–2** (chat volume) |
 | Secret Manager | $0.06/secret/mo | 6 free | **$0** |
 | Artifact Registry | $0.10/GiB | 0.5 GiB free | **~$0–1** |
 | Cloud Build | per build-min | 2,500 min/mo free | **$0** |

@@ -20,6 +20,9 @@ flowchart TB
 
 - **Grounding:** every answer derives from tool results over the governed data product; the system instruction forbids fabricating financial data and blocks cross-customer access + advice.
 - **Tools = the DaaS API:** the agent is just another governed consumer (no privileged data path).
+- **Runtime safety:** the UI BFF runs **Model Armor** on the prompt (in) and response (out) —
+  prompt-injection/jailbreak, sensitive-data, malicious-URL, and harmful-content screening
+  ([ADR-0008](adr/0008-model-armor-llm-screening.md)).
 
 ## Loan multi-agent system (Product 2 — Increment 4)
 

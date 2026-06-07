@@ -17,9 +17,10 @@ locals {
       "roles/storage.objectAdmin",
       "roles/dlp.user",
     ] }
-    txn_api = { display = "Transactions DaaS API (Cloud Run)", roles = [
+    txn_api = { display = "Transactions DaaS API + UI BFF (Cloud Run)", roles = [
       "roles/bigquery.dataViewer",
       "roles/bigquery.jobUser",
+      "roles/modelarmor.user", # UI BFF runs as this SA and screens agent I/O
     ] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [
       "roles/bigquery.dataEditor",
@@ -65,6 +66,7 @@ locals {
     "workflowexecutions.googleapis.com",
     "cloudscheduler.googleapis.com",
     "aiplatform.googleapis.com",
+    "modelarmor.googleapis.com",
     "dlp.googleapis.com",
     "datacatalog.googleapis.com",
     "secretmanager.googleapis.com",

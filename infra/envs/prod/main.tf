@@ -164,6 +164,27 @@ module "workflows" {
   workflow_source = file("${path.module}/../../../products/loans/workflow/loan_approval.yaml")
 }
 
+# --- Model Armor (agent prompt/response screening) ---------------------------
+module "model_armor" {
+  count                = var.enable_model_armor ? 1 : 0
+  source               = "../../modules/model_armor"
+  project_id           = var.project_id
+  region               = var.region
+  env                  = var.env
+  name_prefix          = var.name_prefix
+  enable_floor_setting = var.enable_model_armor_floor
+}
+
+# --- Custom domain for the UI (e.g. finchat.datadinosaur.com) -----------------
+module "ui_domain" {
+  count        = var.custom_domain == "" ? 0 : 1
+  source       = "../../modules/domain_mapping"
+  project_id   = var.project_id
+  region       = var.region
+  domain       = var.custom_domain
+  service_name = module.ui.service_name
+}
+
 # --- Monitoring + audit sink -------------------------------------------------
 module "monitoring" {
   source              = "../../modules/monitoring"
