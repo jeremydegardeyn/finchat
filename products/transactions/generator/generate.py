@@ -102,7 +102,8 @@ def make_transaction(
     event_time = base_time - timedelta(
         days=rng.randint(0, 90), seconds=rng.randint(0, 86_400)
     )
-    counterparty = None
+    # "" = no counterparty (schema is a plain string, not an Avro union).
+    counterparty = ""
     if txn_type == "TRANSFER":
         counterparty = f"{rng.randint(10**9, 10**10 - 1)}"
 

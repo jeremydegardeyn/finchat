@@ -12,7 +12,7 @@
     "txn_type": { "type": "string", "enum": ["DEPOSIT", "WITHDRAWAL", "TRANSFER", "FEE"] },
     "amount": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,2})?$", "description": "Decimal as string to preserve NUMERIC precision." },
     "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
-    "counterparty_account": { "type": ["string", "null"] },
+    "counterparty_account": { "type": "string", "description": "Empty string when no counterparty (e.g., non-transfers)." },
     "status": { "type": "string", "enum": ["POSTED", "PENDING", "REJECTED"] },
     "event_time": { "type": "string", "format": "date-time" }
   }

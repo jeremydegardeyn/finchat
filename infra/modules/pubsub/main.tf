@@ -24,7 +24,9 @@ resource "google_pubsub_schema" "transaction" {
       { name = "txn_type", type = "string" },
       { name = "amount", type = "string" },
       { name = "currency", type = "string" },
-      { name = "counterparty_account", type = ["null", "string"], default = null },
+      # Plain string (not a union): Avro-JSON unions require {"string": x} wrappers,
+      # which breaks normal JSON publishers. Empty string "" means "no counterparty".
+      { name = "counterparty_account", type = "string", default = "" },
       { name = "status", type = "string" },
       { name = "event_time", type = "string" },
     ]
