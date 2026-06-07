@@ -2,18 +2,31 @@
 # Launch the transactions Dataflow Flex Template (streaming) on-demand (ADR-0003).
 # Reads the CI/Terraform-built template at gs://finchat-<env>-dataflow/templates/txn-pipeline.json.
 #
-# Usage: ./scripts/run_dataflow.sh [dev|test|prod] [dlp]
-#   ./scripts/run_dataflow.sh dev          # no DLP de-identification
-#   ./scripts/run_dataflow.sh dev dlp      # with DLP (pulls templates from terraform output)
+# Usage: ./scripts/run_dataflow.sh [dev|test|prod] [dlp] [DRAIN_MINUTES]
+#   ./scripts/run_dataflow.sh dev            # launch, leave running
+#   ./scripts/run_dataflow.sh dev dlp        # with DLP de-identification
+#   ./scripts/run_dataflow.sh dev 15         # launch, auto-drain after 15 min (on-demand)
+#   ./scripts/run_dataflow.sh dev dlp 15     # DLP + auto-drain after 15 min
 #
-# It's a STREAMING job — it stays up until you drain it (see hint at the end).
+# Without a drain time it's a STREAMING job that stays up until you drain it.
+# With DRAIN_MINUTES the script waits then drains (run with `&` to background it).
 set -euo pipefail
 
 PROJECT="strongsville-city-schools"
 REGION="us-central1"
 ENV="${1:-dev}"
-WITH_DLP="${2:-}"
+shift || true
 case "$ENV" in dev | test | prod) ;; *) echo "env must be dev|test|prod" >&2; exit 1 ;; esac
+
+WITH_DLP=""
+DRAIN_AFTER="" # minutes; empty = leave running
+for arg in "$@"; do
+  case "$arg" in
+    dlp) WITH_DLP="dlp" ;;
+    *[!0-9]*) echo "ignoring unknown arg: $arg" >&2 ;;
+    *) DRAIN_AFTER="$arg" ;;
+  esac
+done
 
 BUCKET="finchat-${ENV}-dataflow"
 SA="finchat-${ENV}-pipeline@${PROJECT}.iam.gserviceaccount.com"
@@ -40,5 +53,23 @@ gcloud dataflow flex-template run "$JOB" \
   --parameters "$PARAMS"
 
 echo
-echo "Status: gcloud dataflow jobs list --region ${REGION} --filter='name:${JOB}'"
-echo "Drain : gcloud dataflow jobs drain <JOB_ID> --region ${REGION}   # stop billing when done"
+echo "→ Resolving job id…"
+JOB_ID=""
+for _ in $(seq 1 12); do
+  JOB_ID="$(gcloud dataflow jobs list --region "$REGION" --project "$PROJECT" \
+    --filter="name=${JOB}" --format='value(JOB_ID)' 2>/dev/null | head -1)"
+  [ -n "$JOB_ID" ] && break
+  sleep 5
+done
+echo "Job: ${JOB_ID:-<pending>}  (name ${JOB})"
+
+if [ -n "$DRAIN_AFTER" ] && [ -n "$JOB_ID" ]; then
+  echo "→ Auto-drain in ${DRAIN_AFTER} min. Ctrl-C cancels the wait (the job keeps running)."
+  sleep $((DRAIN_AFTER * 60))
+  echo "→ Draining ${JOB_ID}…"
+  gcloud dataflow jobs drain "$JOB_ID" --region "$REGION" --project "$PROJECT"
+  echo "✓ Drain requested — workers stop after in-flight work finishes (idle cost → ~0)."
+else
+  echo "Status: gcloud dataflow jobs list --region ${REGION} --filter='name:${JOB}'"
+  echo "Drain : gcloud dataflow jobs drain ${JOB_ID:-<JOB_ID>} --region ${REGION}   # stop billing when done"
+fi
