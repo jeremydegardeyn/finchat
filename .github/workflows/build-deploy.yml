@@ -20,6 +20,9 @@ permissions:
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
+    # Skip cleanly until Workload Identity Federation is configured (vars set by
+    # scripts/setup_wif.sh). Avoids red failures on push before infra is wired.
+    if: ${{ vars.WIF_PROVIDER != '' }}
     # GitHub Environments gate promotion (required reviewers on test/prod).
     environment: ${{ github.event.inputs.environment || 'dev' }}
     env:

@@ -24,6 +24,8 @@ permissions:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    # Skip until WIF is configured (scripts/setup_wif.sh sets vars.WIF_PROVIDER).
+    if: ${{ vars.WIF_PROVIDER != '' }}
     environment: ${{ github.event.inputs.environment || 'dev' }}
     defaults:
       run:
