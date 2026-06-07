@@ -20,10 +20,9 @@ permissions:
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
-    # Skip cleanly until Workload Identity Federation is configured (vars set by
-    # scripts/setup_wif.sh). Avoids red failures on push before infra is wired.
-    if: ${{ vars.WIF_PROVIDER != '' }}
-    # GitHub Environments gate promotion (required reviewers on test/prod).
+    # GitHub Environments gate promotion (required reviewers on test/prod) and
+    # supply WIF_PROVIDER/DEPLOY_SA/GCP_* as environment variables. (No job-level
+    # `if` guard on those vars — env-scoped vars aren't visible to job-level `if`.)
     environment: ${{ github.event.inputs.environment || 'dev' }}
     env:
       ENV: ${{ github.event.inputs.environment || 'dev' }}
@@ -79,6 +78,9 @@ jobs:
             "--set-env-vars=LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),GCP_PROJECT=${PROJECT},MODEL_ARMOR_LOCATION=${REGION},MODEL_ARMOR_TEMPLATE=finchat-${ENV}-armor --allow-unauthenticated"
 
       - name: Build Dataflow Flex Template
+        # Non-fatal: needs storage/dataflow perms on the CI/CD SA (granted in
+        # foundation). If it fails, services still deploy; build the template manually.
+        continue-on-error: true
         run: |
           REPO="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images"
           SHA="${GITHUB_SHA::12}"

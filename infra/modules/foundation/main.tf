@@ -45,6 +45,8 @@ locals {
       "roles/artifactregistry.writer",
       "roles/cloudbuild.builds.editor",
       "roles/iam.serviceAccountUser",
+      "roles/dataflow.developer",  # build/launch the Flex Template
+      "roles/storage.objectAdmin", # write the Flex Template spec to the dataflow bucket
     ] }
   }
 
