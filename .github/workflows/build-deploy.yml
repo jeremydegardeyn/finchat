@@ -1,0 +1,87 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ["products/**", "ui/**", ".github/workflows/build-deploy.yml"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, test, prod]
+        default: dev
+
+# Keyless auth to GCP via Workload Identity Federation (no SA keys).
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    # GitHub Environments gate promotion (required reviewers on test/prod).
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    env:
+      ENV: ${{ github.event.inputs.environment || 'dev' }}
+      PROJECT: ${{ vars.GCP_PROJECT }}
+      REGION: ${{ vars.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}   # projects/NUM/locations/global/workloadIdentityPools/POOL/providers/PROVIDER
+          service_account: ${{ vars.DEPLOY_SA }}                  # finchat-<env>-cicd@PROJECT.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+      - name: Build & push images
+        run: |
+          REPO="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images"
+          SHA="${GITHUB_SHA::12}"
+          declare -A SVC=(
+            [txn-api]=products/transactions/api
+            [txn-generator]=products/transactions/generator
+            [loan-api]=products/loans/api
+            [ui]=ui
+          )
+          for name in "${!SVC[@]}"; do
+            img="${REPO}/${name}:${SHA}"
+            echo "::group::build ${name}"
+            docker build -t "$img" -t "${REPO}/${name}:latest" "${SVC[$name]}"
+            docker push "$img"; docker push "${REPO}/${name}:latest"
+            echo "::endgroup::"
+          done
+
+      - name: Deploy Cloud Run services
+        run: |
+          REPO="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images"
+          SHA="${GITHUB_SHA::12}"
+          deploy() { # name image-name service-account extra-env
+            gcloud run deploy "finchat-${ENV}-$1" \
+              --image "${REPO}/$2:${SHA}" --region "${REGION}" \
+              --service-account "finchat-${ENV}-$3@${PROJECT}.iam.gserviceaccount.com" \
+              --quiet $4
+          }
+          deploy txn-api txn-api txn-api \
+            "--set-env-vars=GCP_PROJECT=${PROJECT},GOLD_DATASET=finchat_gold_${ENV},SILVER_DATASET=finchat_silver_${ENV} --no-allow-unauthenticated"
+          deploy loan-api loan-api loan-api \
+            "--set-env-vars=GCP_PROJECT=${PROJECT},LOANS_DATASET=finchat_loans_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+          deploy ui ui txn-api \
+            "--set-env-vars=LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)') --allow-unauthenticated"
+
+      - name: Build Dataflow Flex Template
+        run: |
+          REPO="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images"
+          SHA="${GITHUB_SHA::12}"
+          docker build -t "${REPO}/txn-pipeline:${SHA}" products/transactions/pipeline
+          docker push "${REPO}/txn-pipeline:${SHA}"
+          gcloud dataflow flex-template build \
+            "gs://finchat-${ENV}-dataflow/templates/txn-pipeline.json" \
+            --image "${REPO}/txn-pipeline:${SHA}" --sdk-language PYTHON \
+            --metadata-file products/transactions/pipeline/metadata.json

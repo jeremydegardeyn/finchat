@@ -1,7 +1,72 @@
-# Data Governance Strategy
+# 09 — Data Governance Strategy
 
-> **Status: planned — delivered in Increment 3.**
+> How FinChat governs data across its lifecycle: classification, quality, metadata, lineage, access,
+> retention, and stewardship. Security controls: [06](06-security-architecture.md). Model: [data-model](data-model.md).
 
-This deliverable is scaffolded. See the root [README](../README.md) and
-[ADR index](adr/README.md) for the decisions that drive it. Content lands with the
-corresponding build increment.
+## Governance operating model
+
+Federated, product-aligned governance with central guardrails (data-mesh): each **data product owns**
+its schema, quality, and access contract; the **platform enforces** common policy (classification,
+DLP, audit, IaC) so standards are consistent without a central bottleneck.
+
+## 1. Classification
+
+Five-tier taxonomy (`PII_DIRECT`, `PII_FINANCIAL`, `CONFIDENTIAL`, `INTERNAL`, `PUBLIC`) implemented as
+**Data Catalog policy tags** and applied to columns at the Silver layer. Drives column-level access and
+masking. See the [data-model classification table](data-model.md#classification-taxonomy).
+
+## 2. Data quality
+
+| Dimension | Control | Where |
+|-----------|---------|-------|
+| Validity | Schema enforcement + field/enum/format validation | Pub/Sub Avro schema + Beam `parse_and_validate` |
+| Completeness | Required-field checks | pipeline validation → DLQ on miss |
+| Uniqueness | Idempotency-key dedup (`insertId` / MERGE) | Beam → BigQuery Silver |
+| Integrity | FK conventions, append-only decisions | schema design |
+| Timeliness | Stream processing + DLQ backlog alert | Dataflow + monitoring |
+| Quarantine | Dead-letter queue with error reason | `transactions-dlq` + 7-day triage sub |
+
+## 3. Metadata & catalog
+
+- **Technical metadata:** table/column descriptions, partition/cluster declared in Terraform + DDL.
+- **Business metadata:** policy-tag taxonomy = the business classification glossary.
+- **Operational metadata:** `pipeline_version`, `source_system`, `ingest_time` on every row.
+- **Discovery:** Dataplex/Data Catalog (enterprise scale) for search, profiling, and tag templates.
+
+## 4. Lineage
+
+Captured along `Pub/Sub message_id → Bronze.transaction_event → Silver.transaction (idempotency_key)
+→ Gold views → DaaS API → Agent / Loan product`. Inline provenance columns + Dataplex lineage API at
+scale. **Cross-product lineage:** loan `risk_assessment` ← transaction `gold.overdraft_history`.
+
+## 5. Access governance
+
+- Least-privilege IAM + custom roles; column-level (policy tags) and row-level (RAP) security.
+- **Authorized views**: consumers read Gold without any grant on Silver.
+- Privileged PII access limited to a fine-grained-reader group; everything audited.
+
+## 6. Retention & lifecycle
+
+| Data | Retention | Mechanism |
+|------|-----------|-----------|
+| Bronze events | 400d → GCS cold | partition expiration + bucket lifecycle |
+| Silver/Gold | 7y (regulatory) | table/partition policy |
+| Loan decisions & audit | 10y immutable | append-only + locked log bucket |
+| RTBF | crypto-shred | delete DLP deterministic key |
+
+## 7. Stewardship & RACI (illustrative)
+
+| Activity | Product Owner | Platform Team | Security/Compliance |
+|----------|:-:|:-:|:-:|
+| Schema & contract | **R/A** | C | C |
+| Classification tags | R | **A** | C |
+| DLP / masking policy | C | R | **A** |
+| Access approvals | R | C | **A** |
+| Retention policy | C | R | **A** |
+| Incident / DLQ triage | **R** | A | I |
+
+## 8. Compliance alignment
+
+Designed to support **GLBA / SOX / PCI-DSS / BCBS 239 / GDPR-CCPA** controls: provenance &
+reconcilability (BCBS 239), PII safeguarding (GLBA/GDPR), immutable audit (SOX), cardholder data
+tokenization (PCI), and auditable, versioned credit decisions (SR 11-7 model risk).

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: pip install pytest
+      - name: Pipeline transform tests (Beam-free)
+        working-directory: products/transactions/pipeline
+        run: pytest test_transforms.py -q
+      - name: Loan risk-scoring tests
+        working-directory: products/loans/api
+        run: pytest test_risk.py -q
+      - name: Generator invariant check (<=4 per customer)
+        working-directory: products/transactions/generator
+        run: |
+          python generate.py --count 500 --seed 1 --dry-run > out.jsonl
+          python - <<'PY'
+          import json, collections
+          rows=[json.loads(l) for l in open('out.jsonl')]
+          per=collections.Counter(r['account_id'] for r in rows)
+          assert max(per.values())<=4, "invariant violated"
+          print(f"OK {len(rows)} txns, max/customer={max(per.values())}")
+          PY
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [dev, test, prod]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+      - name: fmt check
+        run: terraform fmt -check -recursive infra
+      - name: init + validate (${{ matrix.env }})
+        working-directory: infra/envs/${{ matrix.env }}
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - products/transactions/api
+          - products/transactions/generator
+          - products/loans/api
+          - ui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image (no push)
+        run: docker build -t finchat-ci-test ${{ matrix.service }}

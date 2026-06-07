@@ -127,7 +127,7 @@ This repository is built **incrementally**. Status of each increment:
 - [x] **Increment 3 — Product 1:** generator (✅ invariant-tested), Beam pipeline (✅ DirectRunner + 10 unit tests), BQ schemas/DDL, DaaS API (✅ FastAPI/OpenAPI), ADK conversational agent (✅ offline grounding). Data-flow/API/agent docs.
 - [x] **Increment 4 — Product 2:** loan DDL + append-only audit tables, full Cloud Workflows orchestration (HITL callback), 5 ADK agents (✅ offline orchestration), loan API (✅ 6 risk tests + flow test). docs/04 expanded.
 - [x] **Increment 5 — UX:** SPA + BFF proxy on Cloud Run; Customer / Employee / Admin views with persona simulation (✅ all 3 views rendered + loan-submit verified in preview).
-- [ ] **Increment 6 — Platform:** CI/CD (GitHub Actions + Cloud Build), promotion.
+- [x] **Increment 6 — Platform:** CI/CD (GitHub Actions: ci/build-deploy/infra), Cloud Build, Workload Identity Federation (keyless), dev→test→prod promotion. Remaining docs filled: 01 logical, 06 security, 09 governance, 10 runbook, 11 roadmap — **all 12 deliverables complete**.
 - [ ] **Increment 7 — AgentOps:** evaluation datasets, pipelines, dashboards.
 
 ---

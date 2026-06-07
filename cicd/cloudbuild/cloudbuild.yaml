@@ -1,0 +1,39 @@
+# Cloud Build alternative to GitHub Actions for image build + push + deploy.
+# Trigger: gcloud builds submit --config cicd/cloudbuild/cloudbuild.yaml \
+#            --substitutions=_ENV=dev,_REGION=us-central1
+substitutions:
+  _ENV: dev
+  _REGION: us-central1
+  _SERVICE: txn-api
+  _CONTEXT: products/transactions/api
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/finchat-${_ENV}-images/${_SERVICE}:$SHORT_SHA
+      - ${_CONTEXT}
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/finchat-${_ENV}-images/${_SERVICE}:$SHORT_SHA
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - finchat-${_ENV}-${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/finchat-${_ENV}-images/${_SERVICE}:$SHORT_SHA
+      - --region=${_REGION}
+      - --service-account=finchat-${_ENV}-${_SERVICE}@$PROJECT_ID.iam.gserviceaccount.com
+      - --quiet
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/finchat-${_ENV}-images/${_SERVICE}:$SHORT_SHA

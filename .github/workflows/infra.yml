@@ -1,0 +1,52 @@
+name: Terraform
+
+on:
+  pull_request:
+    paths: ["infra/**"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, test, prod]
+        default: dev
+      action:
+        description: plan or apply
+        type: choice
+        options: [plan, apply]
+        default: plan
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    defaults:
+      run:
+        working-directory: infra/envs/${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Plan
+        if: ${{ github.event_name == 'pull_request' || github.event.inputs.action == 'plan' }}
+        run: terraform plan -input=false -no-color
+
+      - name: Apply
+        if: ${{ github.event.inputs.action == 'apply' }}
+        run: terraform apply -input=false -auto-approve
