@@ -14,9 +14,25 @@ API_BASE = os.getenv("TXN_API_URL", "http://localhost:8080")
 _TIMEOUT = 8.0
 
 
+def _id_token(audience: str):
+    """Mint a Google-signed OIDC ID token so we can call a private Cloud Run service."""
+    if not audience.startswith("https://"):
+        return None  # local/demo (http) — no auth needed
+    try:
+        from google.auth.transport.requests import Request
+        import google.oauth2.id_token as idt
+        return idt.fetch_id_token(Request(), audience)
+    except Exception:
+        return None
+
+
 def _get(path: str):
     import httpx
-    resp = httpx.get(f"{API_BASE}{path}", timeout=_TIMEOUT)
+    headers = {}
+    token = _id_token(API_BASE)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    resp = httpx.get(f"{API_BASE}{path}", headers=headers, timeout=_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
