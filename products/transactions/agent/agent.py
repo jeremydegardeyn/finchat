@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import os
 
-from tools import get_account_balance, get_transaction_history, get_account_summary
+from tools import (get_account_balance, get_transaction_history, get_account_summary,
+                   search_knowledge_base)
 
 MODEL = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
 
@@ -26,6 +27,10 @@ Rules of engagement:
 - If the user has not provided an account id, ask for it before calling tools.
 - Use get_account_balance for "how much do I have", get_transaction_history for
   "what did I spend / recent transactions", and get_account_summary for overviews.
+- For general bank questions — fees, overdraft/funds/privacy policy, terms &
+  conditions, branch locations & hours, ATMs, lending/rates — call
+  search_knowledge_base and ground your answer ONLY in the returned snippets.
+  If the snippets don't cover it, say you don't have that information.
 - If a tool returns an error or no data, say so plainly; do not fabricate.
 - Be concise, professional, and never reveal another customer's data.
 - Do not provide financial, tax, or investment advice; stick to factual account data.
@@ -40,7 +45,8 @@ try:
         model=MODEL,
         description="Answers account questions grounded in the banking transaction data product.",
         instruction=INSTRUCTION,
-        tools=[get_account_balance, get_transaction_history, get_account_summary],
+        tools=[get_account_balance, get_transaction_history, get_account_summary,
+               search_knowledge_base],
     )
 except Exception:  # pragma: no cover - ADK not installed (offline dev)
     # Lightweight stand-in so `python agent.py` works without the ADK installed:

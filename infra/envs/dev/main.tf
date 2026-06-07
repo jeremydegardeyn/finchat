@@ -170,6 +170,19 @@ module "workflows" {
   }
 }
 
+# --- RAG knowledge base (BigQuery vector store) ------------------------------
+module "rag" {
+  source      = "../../modules/bigquery_rag"
+  project_id  = var.project_id
+  region      = var.region
+  env         = var.env
+  name_prefix = var.name_prefix
+  reader_members = [
+    "serviceAccount:${module.foundation.service_account_emails["agent"]}",
+  ]
+  labels = local.labels
+}
+
 # --- Model Armor (agent prompt/response screening) ---------------------------
 module "model_armor" {
   count                = var.enable_model_armor ? 1 : 0

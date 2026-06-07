@@ -57,6 +57,7 @@ locals {
     "serviceusage.googleapis.com",
     "bigquery.googleapis.com",
     "bigquerystorage.googleapis.com",
+    "bigqueryconnection.googleapis.com",
     "biglake.googleapis.com",
     "storage.googleapis.com",
     "pubsub.googleapis.com",

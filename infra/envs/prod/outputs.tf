@@ -39,6 +39,14 @@ output "dlp_deidentify_template" {
   description = "Pass to the pipeline as deid_template."
   value       = module.dlp.deidentify_template
 }
+output "kb_dataset" {
+  description = "RAG knowledge-base dataset (set as KB_DATASET on the agent)."
+  value       = module.rag.kb_dataset
+}
+output "kb_connection_id" {
+  description = "Connection id for the remote embedding model DDL."
+  value       = module.rag.connection_id
+}
 output "ui_custom_domain_dns_records" {
   description = "Add these records at datadinosaur.com to activate the custom domain + TLS."
   value       = var.custom_domain == "" ? null : module.ui_domain[0].dns_records

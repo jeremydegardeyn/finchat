@@ -13,6 +13,10 @@ import os
 API_BASE = os.getenv("TXN_API_URL", "http://localhost:8080")
 _TIMEOUT = 8.0
 
+# RAG knowledge base (BigQuery vector store).
+PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT", "")
+KB_DATASET = os.getenv("KB_DATASET", "")
+
 
 def _id_token(audience: str):
     """Mint a Google-signed OIDC ID token so we can call a private Cloud Run service."""
@@ -75,6 +79,44 @@ def get_transaction_history(account_id: str, limit: int = 10) -> list[dict]:
         return _get(f"/v1/accounts/{account_id}/transactions?limit={limit}")
     except Exception:
         return _fallback_repo().get_transactions(account_id, limit)
+
+
+def search_knowledge_base(query: str) -> list[dict]:
+    """Search FinChat Bank's knowledge base for policies, terms & conditions, fees,
+    branch locations & hours, and lending info. Use this for general bank questions
+    (NOT for a customer's own balance/transactions — use the account tools for those).
+
+    Args:
+        query: A natural-language question, e.g. 'what are the overdraft fees?' or
+               'when is the Lakewood branch open?'.
+    Returns:
+        A list of the most relevant knowledge snippets (title, category, content).
+        Ground your answer in these snippets; if empty, say you don't have that info.
+    """
+    if not (PROJECT and KB_DATASET):
+        return [{"error": "knowledge base not configured"}]
+    try:
+        from google.cloud import bigquery
+        client = bigquery.Client(project=PROJECT)
+        sql = f"""
+          SELECT base.title AS title, base.category AS category, base.content AS content
+          FROM VECTOR_SEARCH(
+            TABLE `{PROJECT}.{KB_DATASET}.kb_chunks`, 'embedding',
+            (SELECT ml_generate_embedding_result AS embedding
+             FROM ML.GENERATE_EMBEDDING(
+               MODEL `{PROJECT}.{KB_DATASET}.embedding_model`,
+               (SELECT @q AS content),
+               STRUCT(TRUE AS flatten_json_output))),
+            top_k => 4, distance_type => 'COSINE')
+        """
+        job = client.query(sql, job_config=bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("q", "STRING", query)],
+            maximum_bytes_billed=2 * 1024**3,
+        ))
+        return [{"title": r["title"], "category": r["category"], "content": r["content"]}
+                for r in job.result()]
+    except Exception as e:
+        return [{"error": f"knowledge base unavailable: {type(e).__name__}"}]
 
 
 def get_account_summary(account_id: str) -> dict:
