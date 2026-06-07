@@ -16,6 +16,7 @@ locals {
       "roles/bigquery.jobUser",
       "roles/storage.objectAdmin",
       "roles/dlp.user",
+      "roles/artifactregistry.reader", # Dataflow workers pull the Flex Template image
     ] }
     txn_api = { display = "Transactions DaaS API + UI BFF (Cloud Run)", roles = [
       "roles/bigquery.dataViewer",
