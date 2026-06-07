@@ -12,12 +12,19 @@ terraform {
   }
 }
 
+# billing_project + user_project_override send X-Goog-User-Project on every call,
+# overriding the ADC quota project (fixes DLP/billing "quota project not set" 403s
+# without relying on `gcloud auth application-default set-quota-project`).
 provider "google" {
-  project = var.project_id
-  region  = var.region
+  project               = var.project_id
+  region                = var.region
+  billing_project       = var.project_id
+  user_project_override = true
 }
 
 provider "google-beta" {
-  project = var.project_id
-  region  = var.region
+  project               = var.project_id
+  region                = var.region
+  billing_project       = var.project_id
+  user_project_override = true
 }
