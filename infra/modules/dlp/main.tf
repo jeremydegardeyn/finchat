@@ -51,6 +51,11 @@ resource "google_data_loss_prevention_deidentify_template" "mask" {
                 name = "${var.name_prefix}-deid-key"
               }
             }
+            # Required for deterministic crypto: the surrogate label wrapping the
+            # tokenized value so it can be re-identified later.
+            surrogate_info_type {
+              name = "FINCHAT_TOKEN"
+            }
           }
         }
       }
