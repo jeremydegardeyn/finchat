@@ -140,10 +140,17 @@ class MaybeDeidentify(beam.DoFn):
 
     def __init__(self, project, deid_template, inspect_template, sample_rate):
         self.project = project
-        self.deid_template = deid_template
-        self.inspect_template = inspect_template
+        # DLP wants FULL resource names; terraform output may give the bare id.
+        self.deid_template = self._full(project, "deidentifyTemplates", deid_template)
+        self.inspect_template = self._full(project, "inspectTemplates", inspect_template)
         self.sample_rate = sample_rate
         self._client = None
+
+    @staticmethod
+    def _full(project, kind, tmpl):
+        if tmpl and not tmpl.startswith("projects/"):
+            return f"projects/{project}/{kind}/{tmpl}"
+        return tmpl
 
     def setup(self):
         if self.deid_template:
