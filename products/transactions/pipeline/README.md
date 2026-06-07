@@ -35,13 +35,11 @@ gcloud dataflow flex-template run "txn-stream-$(date +%s)" \
   --service-account-email finchat-dev-pipeline@strongsville-city-schools.iam.gserviceaccount.com \
   --parameters input_subscription=projects/strongsville-city-schools/subscriptions/finchat-dev-transactions-dataflow,\
 output_table=strongsville-city-schools:finchat_silver_dev.transaction,\
-dlq_topic=projects/strongsville-city-schools/topics/finchat-dev-transactions-dlq,\
-sdk_container_image=$REPO/txn-pipeline:latest
+dlq_topic=projects/strongsville-city-schools/topics/finchat-dev-transactions-dlq
 ```
 
-> `sdk_container_image` makes the **workers** run our container (which contains
-> `transforms.py`); without it they use the stock Beam image and fail with
-> `ModuleNotFoundError: transforms`.
+> The pipeline is a single self-contained module shipped to the stock Beam
+> workers via `save_main_session` — no custom worker container / `sdk_container_image`.
 
 For the **enterprise** 24/7 streaming job, set `enable_streaming_job = true` in Terraform — same
 template, different lifetime.

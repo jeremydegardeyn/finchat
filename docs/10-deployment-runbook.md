@@ -80,7 +80,6 @@ gcloud dataflow flex-template build gs://finchat-dev-dataflow/templates/txn-pipe
 python products/transactions/generator/generate.py --count 5000 \
   --project strongsville-city-schools --topic finchat-dev-transactions-ingest
 
-REPO=us-central1-docker.pkg.dev/strongsville-city-schools/finchat-dev-images
 gcloud dataflow flex-template run "txn-stream-$(date +%s)" \
   --template-file-gcs-location gs://finchat-dev-dataflow/templates/txn-pipeline.json \
   --region us-central1 --project strongsville-city-schools \
@@ -88,10 +87,7 @@ gcloud dataflow flex-template run "txn-stream-$(date +%s)" \
   --service-account-email finchat-dev-pipeline@strongsville-city-schools.iam.gserviceaccount.com \
   --parameters input_subscription=projects/strongsville-city-schools/subscriptions/finchat-dev-transactions-dataflow,\
 output_table=strongsville-city-schools:finchat_silver_dev.transaction,\
-dlq_topic=projects/strongsville-city-schools/topics/finchat-dev-transactions-dlq,\
-sdk_container_image=$REPO/txn-pipeline:latest
-
-# sdk_container_image -> workers run OUR image (with transforms.py). Required.
+dlq_topic=projects/strongsville-city-schools/topics/finchat-dev-transactions-dlq
 ```
 
 (Or rely solely on the Pub/Sub→BigQuery subscription for raw Bronze; drain the Dataflow job when done.)

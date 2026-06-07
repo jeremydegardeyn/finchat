@@ -1,2 +1,5 @@
 apache-beam[gcp]==2.58.0
-google-cloud-dlp==3.20.0
+# google-cloud-dlp is imported lazily and only when --deid_template is set.
+# Add it back (a version compatible with apache-beam's protobuf/grpc) when you
+# enable DLP de-identification:
+# google-cloud-dlp==3.20.0
