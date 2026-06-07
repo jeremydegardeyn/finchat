@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 
 import apache_beam as beam
-from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
+from apache_beam.options.pipeline_options import (
+    PipelineOptions, StandardOptions, GoogleCloudOptions, SetupOptions)
 
 from transforms import parse_and_validate, enrich, to_dlq_envelope, ValidationError
 
@@ -133,6 +135,7 @@ def build_pipeline(p, opts):
 def run(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--project")
+    parser.add_argument("--region")
     parser.add_argument("--input_subscription")
     parser.add_argument("--output_table", help="project:dataset.table for Silver.transaction")
     parser.add_argument("--dlq_topic")
@@ -145,8 +148,15 @@ def run(argv=None):
     known, beam_args = parser.parse_known_args(argv)
 
     options = PipelineOptions(beam_args)
+    options.view_as(SetupOptions).save_main_session = True
     if not known.input_file:
         options.view_as(StandardOptions).streaming = True
+        # The Flex Template launcher passes --project/--region, but argparse above
+        # consumes them out of beam_args; re-apply so the Dataflow runner sees them.
+        gcp = options.view_as(GoogleCloudOptions)
+        gcp.project = known.project or gcp.project or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if known.region or not gcp.region:
+            gcp.region = known.region or gcp.region or os.environ.get("REGION", "us-central1")
 
     with beam.Pipeline(options=options) as p:
         build_pipeline(p, known)
