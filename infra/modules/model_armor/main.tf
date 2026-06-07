@@ -10,6 +10,12 @@ resource "google_model_armor_template" "this" {
   location    = var.region
   template_id = "${var.name_prefix}-${var.env}-armor"
 
+  template_metadata {
+    ignore_partial_invocation_failures = true
+    log_sanitize_operations            = true
+    log_template_operations            = true
+  }
+
   filter_config {
     # Responsible-AI content filters.
     rai_settings {

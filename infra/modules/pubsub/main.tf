@@ -11,8 +11,11 @@ locals {
 }
 
 # --- Message schema (governance: schema enforcement at the edge) -------------
+# NOTE: schema name is versioned. Changing the Avro definition incompatibly
+# (e.g., union -> string) can't be a new *revision*; use a new schema name so a
+# fresh schema is created and the topic re-points to it.
 resource "google_pubsub_schema" "transaction" {
-  name = "${local.prefix}-transaction"
+  name = "${local.prefix}-transaction-v2"
   type = "AVRO"
   definition = jsonencode({
     type = "record"
