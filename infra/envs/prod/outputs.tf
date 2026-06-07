@@ -31,6 +31,14 @@ output "api_gateway_url" {
 output "model_armor_template" {
   value = var.enable_model_armor ? module.model_armor[0].template_name : null
 }
+output "dlp_inspect_template" {
+  description = "Pass to the pipeline as inspect_template."
+  value       = module.dlp.inspect_template
+}
+output "dlp_deidentify_template" {
+  description = "Pass to the pipeline as deid_template."
+  value       = module.dlp.deidentify_template
+}
 output "ui_custom_domain_dns_records" {
   description = "Add these records at datadinosaur.com to activate the custom domain + TLS."
   value       = var.custom_domain == "" ? null : module.ui_domain[0].dns_records

@@ -45,6 +45,13 @@ scale. **Cross-product lineage:** loan `risk_assessment` ← transaction `gold.o
 - **Authorized views**: consumers read Gold without any grant on Silver.
 - Privileged PII access limited to a fine-grained-reader group; everything audited.
 
+> **Bronze is raw by design.** The Bronze landing (`transaction_event.data`) stores the exact
+> published payload, **un-de-identified** — it is the immutable audit/replay source of truth. The
+> control for Bronze is **restricted access** (only the pipeline service account + admins;
+> no `viewer_members` granted), short partition expiration, encryption, and audit logging — **not**
+> masking. **De-identification (DLP) is applied on promotion Bronze/stream → Silver**, which is the
+> broadly-consumed layer. This is the standard medallion contract: lock down raw, govern the curated copy.
+
 ## 6. Retention & lifecycle
 
 | Data | Retention | Mechanism |

@@ -138,9 +138,10 @@ class ParseAndValidate(beam.DoFn):
 class MaybeDeidentify(beam.DoFn):
     """Sampled DLP de-identification of counterparty_account (cost-controlled)."""
 
-    def __init__(self, project, deid_template, sample_rate):
+    def __init__(self, project, deid_template, inspect_template, sample_rate):
         self.project = project
         self.deid_template = deid_template
+        self.inspect_template = inspect_template
         self.sample_rate = sample_rate
         self._client = None
 
@@ -152,11 +153,15 @@ class MaybeDeidentify(beam.DoFn):
     def process(self, record):
         import random
         if self._client and record.get("counterparty_account") and random.random() < self.sample_rate:
-            resp = self._client.deidentify_content(request={
+            req = {
                 "parent": f"projects/{self.project}",
                 "deidentify_template_name": self.deid_template,
                 "item": {"value": str(record["counterparty_account"])},
-            })
+            }
+            # info_type_transformations need an inspect config/template to find PII.
+            if self.inspect_template:
+                req["inspect_template_name"] = self.inspect_template
+            resp = self._client.deidentify_content(request=req)
             record["counterparty_account"] = resp.item.value
         yield record
 
@@ -171,7 +176,7 @@ def build_pipeline(p, opts):
 
     valid = (
         parsed[VALID]
-        | "Deidentify" >> beam.ParDo(MaybeDeidentify(opts.project, opts.deid_template, opts.dlp_sample_rate))
+        | "Deidentify" >> beam.ParDo(MaybeDeidentify(opts.project, opts.deid_template, opts.inspect_template, opts.dlp_sample_rate))
         | "Enrich" >> beam.Map(enrich)
     )
 
@@ -201,6 +206,7 @@ def run(argv=None):
     parser.add_argument("--output_table", help="project:dataset.table for Silver.transaction")
     parser.add_argument("--dlq_topic")
     parser.add_argument("--deid_template", default="")
+    parser.add_argument("--inspect_template", default="")
     parser.add_argument("--dlp_sample_rate", type=float, default=0.1)
     parser.add_argument("--input_file")
     parser.add_argument("--output_file")

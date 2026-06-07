@@ -41,6 +41,11 @@ dlq_topic=projects/strongsville-city-schools/topics/finchat-dev-transactions-dlq
 > The pipeline is a single self-contained module shipped to the stock Beam
 > workers via `save_main_session` — no custom worker container / `sdk_container_image`.
 
+**Enable DLP de-identification** (optional) by adding the template names to `--parameters`:
+> `deid_template=$(terraform -chdir=../../../infra/envs/dev output -raw dlp_deidentify_template),`
+> `inspect_template=$(terraform -chdir=../../../infra/envs/dev output -raw dlp_inspect_template),dlp_sample_rate=0.2`
+> Omit them to skip DLP (the `MaybeDeidentify` step becomes a no-op).
+
 For the **enterprise** 24/7 streaming job, set `enable_streaming_job = true` in Terraform — same
 template, different lifetime.
 

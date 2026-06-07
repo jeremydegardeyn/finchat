@@ -80,6 +80,10 @@ gcloud dataflow flex-template build gs://finchat-dev-dataflow/templates/txn-pipe
 python products/transactions/generator/generate.py --count 5000 \
   --project strongsville-city-schools --topic finchat-dev-transactions-ingest
 
+# Optional DLP de-identification: grab the template names from terraform output.
+DEID=$(terraform -chdir=infra/envs/dev output -raw dlp_deidentify_template)
+INSPECT=$(terraform -chdir=infra/envs/dev output -raw dlp_inspect_template)
+
 gcloud dataflow flex-template run "txn-stream-$(date +%s)" \
   --template-file-gcs-location gs://finchat-dev-dataflow/templates/txn-pipeline.json \
   --region us-central1 --project strongsville-city-schools \
@@ -87,7 +91,10 @@ gcloud dataflow flex-template run "txn-stream-$(date +%s)" \
   --service-account-email finchat-dev-pipeline@strongsville-city-schools.iam.gserviceaccount.com \
   --parameters input_subscription=projects/strongsville-city-schools/subscriptions/finchat-dev-transactions-dataflow,\
 output_table=strongsville-city-schools:finchat_silver_dev.transaction,\
-dlq_topic=projects/strongsville-city-schools/topics/finchat-dev-transactions-dlq
+dlq_topic=projects/strongsville-city-schools/topics/finchat-dev-transactions-dlq,\
+deid_template=$DEID,inspect_template=$INSPECT,dlp_sample_rate=0.2
+
+# Omit deid_template/inspect_template to skip DLP. The pipeline SA already has roles/dlp.user.
 ```
 
 (Or rely solely on the Pub/Sub→BigQuery subscription for raw Bronze; drain the Dataflow job when done.)
