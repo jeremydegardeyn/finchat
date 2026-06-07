@@ -12,4 +12,5 @@ resource "google_workflows_workflow" "loan" {
   source_contents = var.workflow_source
   labels          = var.labels
   call_log_level  = "LOG_ALL_CALLS"
+  user_env_vars   = var.env_vars
 }

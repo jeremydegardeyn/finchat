@@ -37,6 +37,12 @@ variable "allow_unauthenticated" {
   default     = false
 }
 
+variable "invokers" {
+  type        = list(string)
+  description = "Members granted roles/run.invoker on this service (e.g., the API Gateway SA, the UI BFF SA)."
+  default     = []
+}
+
 variable "cpu" {
   type    = string
   default = "1"

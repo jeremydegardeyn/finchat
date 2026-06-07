@@ -96,7 +96,9 @@ module "txn_api" {
     SILVER_DATASET  = module.bigquery.silver_dataset
     ACCOUNT_SUMMARY = module.bigquery.gold_account_summary
   }
-  labels = local.labels
+  # When API Gateway is enabled, let its SA invoke this (private) service.
+  invokers = var.enable_api_gateway ? ["serviceAccount:${module.foundation.service_account_emails["txn_api"]}"] : []
+  labels   = local.labels
 }
 
 module "loan_api" {
@@ -162,6 +164,10 @@ module "workflows" {
   name_prefix     = var.name_prefix
   service_account = module.foundation.service_account_emails["workflow"]
   workflow_source = file("${path.module}/../../../products/loans/workflow/loan_approval.yaml")
+  env_vars = {
+    LOAN_API_URL = module.loan_api.uri
+    TXN_API_URL  = module.txn_api.uri
+  }
 }
 
 # --- Model Armor (agent prompt/response screening) ---------------------------

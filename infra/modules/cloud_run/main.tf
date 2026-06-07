@@ -49,3 +49,13 @@ resource "google_cloud_run_v2_service_iam_member" "public" {
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
+
+# Explicit invokers (e.g., API Gateway SA) for private services.
+resource "google_cloud_run_v2_service_iam_member" "invokers" {
+  for_each = toset(var.invokers)
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.this.name
+  role     = "roles/run.invoker"
+  member   = each.value
+}
