@@ -1,0 +1,8 @@
+{"id": "loan-strong-1", "credit_score": 790, "annual_income": 160000, "existing_debt": 8000, "dti_ratio": 0.14, "amount": 12000, "overdraft_events": 0, "expected_recommendation": "APPROVE"}
+{"id": "loan-strong-2", "credit_score": 760, "annual_income": 120000, "existing_debt": 15000, "dti_ratio": 0.2, "amount": 10000, "overdraft_events": 0, "expected_recommendation": "APPROVE"}
+{"id": "loan-weak-1", "credit_score": 575, "annual_income": 28000, "existing_debt": 22000, "dti_ratio": 0.6, "amount": 55000, "overdraft_events": 6, "expected_recommendation": "DECLINE"}
+{"id": "loan-weak-2", "credit_score": 600, "annual_income": 35000, "existing_debt": 20000, "dti_ratio": 0.5, "amount": 45000, "overdraft_events": 4, "expected_recommendation": "DECLINE"}
+{"id": "loan-mid-1", "credit_score": 665, "annual_income": 62000, "existing_debt": 18000, "dti_ratio": 0.34, "amount": 24000, "overdraft_events": 1, "expected_recommendation": "REVIEW"}
+{"id": "loan-mid-2", "credit_score": 690, "annual_income": 70000, "existing_debt": 16000, "dti_ratio": 0.36, "amount": 22000, "overdraft_events": 2, "expected_recommendation": "REVIEW"}
+{"id": "loan-overdraft-heavy", "credit_score": 720, "annual_income": 90000, "existing_debt": 12000, "dti_ratio": 0.25, "amount": 15000, "overdraft_events": 7, "expected_recommendation": "REVIEW"}
+{"id": "loan-large-strong", "credit_score": 800, "annual_income": 200000, "existing_debt": 10000, "dti_ratio": 0.18, "amount": 60000, "overdraft_events": 0, "expected_recommendation": "APPROVE"}

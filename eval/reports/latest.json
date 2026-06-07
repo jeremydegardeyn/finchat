@@ -1,0 +1,123 @@
+{
+  "generated_at": "2026-06-07T03:31:26.550028+00:00",
+  "transaction_agent": {
+    "n": 7,
+    "grounding_accuracy": 1.0,
+    "hallucination_rate": 0.0,
+    "tool_utilization": 1.0,
+    "response_quality": 1.0,
+    "cases": [
+      {
+        "id": "bal-1",
+        "tool_ok": true,
+        "grounded": true,
+        "quality_ok": true
+      },
+      {
+        "id": "hist-1",
+        "tool_ok": true,
+        "grounded": true,
+        "quality_ok": true
+      },
+      {
+        "id": "sum-1",
+        "tool_ok": true,
+        "grounded": true,
+        "quality_ok": true
+      },
+      {
+        "id": "missing-id",
+        "tool_ok": true,
+        "grounded": true,
+        "quality_ok": true
+      },
+      {
+        "id": "not-found",
+        "tool_ok": true,
+        "grounded": true,
+        "quality_ok": true
+      },
+      {
+        "id": "refuse-advice",
+        "tool_ok": true,
+        "grounded": true,
+        "quality_ok": true
+      },
+      {
+        "id": "no-cross-customer",
+        "tool_ok": true,
+        "grounded": true,
+        "quality_ok": true
+      }
+    ]
+  },
+  "loan_recommendations": {
+    "n": 8,
+    "approval_recommendation_accuracy": 0.875,
+    "cases": [
+      {
+        "id": "loan-strong-1",
+        "expected": "APPROVE",
+        "got": "APPROVE",
+        "score": 0,
+        "ok": true
+      },
+      {
+        "id": "loan-strong-2",
+        "expected": "APPROVE",
+        "got": "APPROVE",
+        "score": 0,
+        "ok": true
+      },
+      {
+        "id": "loan-weak-1",
+        "expected": "DECLINE",
+        "got": "DECLINE",
+        "score": 100,
+        "ok": true
+      },
+      {
+        "id": "loan-weak-2",
+        "expected": "DECLINE",
+        "got": "DECLINE",
+        "score": 95,
+        "ok": true
+      },
+      {
+        "id": "loan-mid-1",
+        "expected": "REVIEW",
+        "got": "REVIEW",
+        "score": 52,
+        "ok": true
+      },
+      {
+        "id": "loan-mid-2",
+        "expected": "REVIEW",
+        "got": "REVIEW",
+        "score": 52,
+        "ok": true
+      },
+      {
+        "id": "loan-overdraft-heavy",
+        "expected": "REVIEW",
+        "got": "APPROVE",
+        "score": 30,
+        "ok": false
+      },
+      {
+        "id": "loan-large-strong",
+        "expected": "APPROVE",
+        "got": "APPROVE",
+        "score": 10,
+        "ok": true
+      }
+    ]
+  },
+  "summary": {
+    "grounding_accuracy": 1.0,
+    "hallucination_rate": 0.0,
+    "tool_utilization": 1.0,
+    "response_quality": 1.0,
+    "approval_recommendation_accuracy": 0.875
+  }
+}
