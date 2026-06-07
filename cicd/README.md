@@ -24,6 +24,14 @@ Then create **GitHub Environments** `dev`, `test`, `prod` (Settings → Environm
 **variables**: `GCP_PROJECT`, `GCP_REGION`, `WIF_PROVIDER`, `DEPLOY_SA` (printed by the script). Add
 **required reviewers** on `test` and `prod` to enforce promotion approval.
 
+## Deploy helper
+
+```bash
+./scripts/deploy.sh test          # dispatch build-deploy for test + watch to completion
+./scripts/deploy.sh prod main     # explicit git ref
+```
+Wraps `gh workflow run build-deploy.yml -f environment=<env>` + `gh run watch --exit-status`.
+
 ## Promotion strategy (dev → test → prod)
 
 ```mermaid

@@ -1,5 +1,9 @@
 # FinChat — Enterprise Banking Data & AI Platform (GCP Reference Implementation)
 
+[![CI](https://github.com/jeremydegardeyn/finchat/actions/workflows/ci.yml/badge.svg)](https://github.com/jeremydegardeyn/finchat/actions/workflows/ci.yml)
+[![Build & Deploy](https://github.com/jeremydegardeyn/finchat/actions/workflows/build-deploy.yml/badge.svg)](https://github.com/jeremydegardeyn/finchat/actions/workflows/build-deploy.yml)
+[![Terraform](https://github.com/jeremydegardeyn/finchat/actions/workflows/infra.yml/badge.svg)](https://github.com/jeremydegardeyn/finchat/actions/workflows/infra.yml)
+
 > A production-grade, enterprise-scale **Data & AI platform** for retail banking, implemented as a
 > near-zero-cost reference architecture on Google Cloud. Designed to be reviewed by a Fortune 500
 > banking architecture board, and engineered to scale to **billions of transactions / millions of
