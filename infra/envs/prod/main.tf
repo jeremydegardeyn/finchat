@@ -44,6 +44,11 @@ module "bigquery" {
     "serviceAccount:${module.foundation.service_account_emails["pipeline"]}",
     "serviceAccount:${module.foundation.service_account_emails["loan_api"]}",
   ]
+  # DaaS API serves balances derived from the PII_FINANCIAL-tagged `amount` column,
+  # so its SA must be a fine-grained reader on that tag (CLS enforced through views).
+  financial_reader_members = [
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+  ]
   labels = local.labels
 }
 

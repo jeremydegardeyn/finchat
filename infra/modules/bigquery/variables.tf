@@ -29,8 +29,14 @@ variable "editor_members" {
 
 variable "privileged_group" {
   type        = string
-  description = "Group/member allowed to read unmasked PII (fine-grained reader on policy tags)."
+  description = "Group/member allowed to read unmasked PII (fine-grained reader on ALL policy tags)."
   default     = ""
+}
+
+variable "financial_reader_members" {
+  type        = list(string)
+  description = "Members granted fine-grained read on PII_FINANCIAL only (e.g. the DaaS API SA that serves balances)."
+  default     = []
 }
 
 variable "labels" {

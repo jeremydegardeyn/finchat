@@ -89,6 +89,17 @@ resource "google_data_catalog_policy_tag_iam_member" "fine_grained_reader" {
   member     = var.privileged_group
 }
 
+# Serving SAs (e.g. the DaaS API) need fine-grained read on PII_FINANCIAL — the
+# Gold balance/summary views aggregate `amount`, which is policy-tag protected.
+# Column-level security is enforced even through authorized views, so the querying
+# SA must be a fine-grained reader (not just have dataset access).
+resource "google_data_catalog_policy_tag_iam_member" "financial_readers" {
+  for_each   = toset(var.financial_reader_members)
+  policy_tag = google_data_catalog_policy_tag.tags["pii_financial"].id
+  role       = "roles/datacatalog.categoryFineGrainedReader"
+  member     = each.value
+}
+
 # --- Silver tables (partitioned, clustered, PII policy-tagged) ----------------
 resource "google_bigquery_table" "silver_customer" {
   project             = var.project_id
