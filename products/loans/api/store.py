@@ -52,9 +52,14 @@ class LoanStore:
     def _insert(self, table: str, row: dict):
         if self._demo:
             return
-        errors = self._client.insert_rows_json(self._t(table), [row])
-        if errors:
-            raise RuntimeError(f"BigQuery insert errors on {table}: {errors}")
+        # Use a LOAD job (not the streaming API): streamed rows sit in a buffer
+        # that can't be UPDATE'd for ~30 min, which breaks set_status right after
+        # insert. Load-job rows are immediately updatable.
+        from google.cloud import bigquery
+        job = self._client.load_table_from_json(
+            [row], self._t(table),
+            job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND"))
+        job.result()
 
     # --- audit ---------------------------------------------------------------
     def audit(self, loan_id: str | None, actor: str, action: str, detail: str = ""):
