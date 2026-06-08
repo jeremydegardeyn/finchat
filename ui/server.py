@@ -78,16 +78,6 @@ def _mint_token(audience: str) -> str:
     return creds.token
 
 
-@app.get("/debug/token")
-def debug_token():
-    """TEMP: surface whether the BFF can mint an id-token for the agent."""
-    try:
-        t = _mint_token(AGENT_URL)
-        return {"ok": True, "audience": AGENT_URL, "token_len": len(t)}
-    except Exception as e:
-        return {"ok": False, "audience": AGENT_URL, "error": f"{type(e).__name__}: {e}"}
-
-
 async def _proxy(base: str, path: str, request: Request) -> Response:
     if not base:
         return JSONResponse({"error": "backend not configured", "demo": True}, status_code=503)
