@@ -98,7 +98,26 @@ class Repository:
                 maximum_bytes_billed=10 * 1024**3,
             ),
         )
-        return [dict(row) for row in job.result()]
+        return [_jsonable(dict(row)) for row in job.result()]
+
+
+def _jsonable(row: dict) -> dict:
+    """Coerce BigQuery native types to JSON/Pydantic-friendly ones.
+
+    NUMERIC -> float, TIMESTAMP/DATE -> ISO string. The Pydantic response models
+    expect float/str, so without this the API raises ResponseValidationError.
+    """
+    from datetime import date, datetime
+    from decimal import Decimal
+    out = {}
+    for k, v in row.items():
+        if isinstance(v, Decimal):
+            out[k] = float(v)
+        elif isinstance(v, (datetime, date)):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
 
 
 def _one(rows):
