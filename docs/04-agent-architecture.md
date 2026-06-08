@@ -1,28 +1,50 @@
 # 04 — Agent Architecture
 
-> Agentic AI across both products. Authored in **Google ADK**, deployed to **Vertex AI Agent Engine**
-> (managed sessions, tracing, eval) with Cloud Run as a portable fallback
-> ([ADR-0004](adr/0004-agent-engine-vs-mcp.md)). The multi-agent **loan** system is detailed here and
-> implemented in Increment 4; the **conversational data agent** is implemented in Increment 3.
+> Agentic AI across both products. Authored in **Google ADK** (Gemini via Vertex AI). The
+> conversational agent is **deployed on Cloud Run** for true scale-to-zero (~$0 idle) — Agent Engine
+> was the original target but bills a per-engine baseline, so we use the portable Cloud Run path and
+> keep the Agent Engine deploy as an option ([ADR-0004](adr/0004-agent-engine-vs-mcp.md),
+> [ADR-0010](adr/0010-agents-on-cloud-run.md)). The multi-agent **loan** system is detailed below.
 
-## Conversational data agent (Product 1)
+## Conversational data agent (Product 1) — Cloud Run + tools + RAG
 
 ```mermaid
 flowchart TB
-    U[Customer] --> A["FinChat Banking Assistant<br/>(ADK LlmAgent · Gemini 2.5 Flash)"]
-    A -->|tool call| T1[get_account_balance]
-    A -->|tool call| T2[get_transaction_history]
-    A -->|tool call| T3[get_account_summary]
-    T1 & T2 & T3 --> API["Transactions DaaS API"]
+    U[Customer] --> UI[Web UI SPA]
+    UI -->|/api/agent/chat| BFF["UI BFF (Cloud Run)<br/>Model Armor screen in/out<br/>mints OIDC id-token"]
+    BFF -->|Bearer OIDC| A["Banking Assistant (Cloud Run)<br/>ADK LlmAgent · Gemini 2.5 Flash<br/>scale-to-zero"]
+    A -->|tool| T1[get_account_balance]
+    A -->|tool| T2[get_transaction_history]
+    A -->|tool| T3[get_account_summary]
+    A -->|tool· RAG| T4[search_knowledge_base]
+    T1 & T2 & T3 -->|OIDC| API["Transactions DaaS API"]
     API --> GLD[(BigQuery Gold)]
-    A -.session/trace.-> AE["Agent Engine<br/>sessions · tracing · eval"]
+    T4 --> VEC[("BigQuery vector KB<br/>VECTOR_SEARCH over embeddings")]
 ```
 
-- **Grounding:** every answer derives from tool results over the governed data product; the system instruction forbids fabricating financial data and blocks cross-customer access + advice.
-- **Tools = the DaaS API:** the agent is just another governed consumer (no privileged data path).
+- **Hosting:** Cloud Run, scale-to-zero. Same ADK agent also deployable to Agent Engine (`deploy.py`).
+- **Structured grounding:** balance/history/summary tools call the governed **DaaS API** (the agent is
+  just another consumer; no privileged data path). Tool calls + the BFF→agent hop use **OIDC** to reach
+  private Cloud Run services.
+- **Unstructured grounding (RAG):** `search_knowledge_base` runs **BigQuery `VECTOR_SEARCH`** over an
+  embedded corpus of bank policies/terms/fees/branch info ([ADR-0009](adr/0009-bigquery-vector-rag.md)).
 - **Runtime safety:** the UI BFF runs **Model Armor** on the prompt (in) and response (out) —
   prompt-injection/jailbreak, sensitive-data, malicious-URL, and harmful-content screening
   ([ADR-0008](adr/0008-model-armor-llm-screening.md)).
+- **Guardrails:** the system instruction forbids fabricating financial data and blocks cross-customer
+  access + advice; answers ground only in tool/RAG results.
+
+### RAG pipeline (BigQuery vector)
+
+```mermaid
+flowchart LR
+  DOC[kb/corpus.jsonl<br/>bank docs] --> RAW[(kb_raw)]
+  RAW --> EMB["ML.GENERATE_EMBEDDING<br/>(remote text-embedding model)"]
+  EMB --> CH[("kb_chunks<br/>text + 768-d vector")]
+  Q[user question] --> QE[embed query] --> VS["VECTOR_SEARCH(top_k, COSINE)"]
+  CH --> VS --> G[Gemini grounds answer]
+```
+Connection (CLOUD_RESOURCE) → `aiplatform.user`; the agent SA gets `dataViewer` + `connectionUser`.
 
 ## Loan multi-agent system (Product 2 — Increment 4)
 

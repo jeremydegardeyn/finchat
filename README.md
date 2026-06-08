@@ -133,7 +133,8 @@ This repository is built **incrementally**. Status of each increment:
 - [x] **Increment 5 — UX:** SPA + BFF proxy on Cloud Run; Customer / Employee / Admin views with persona simulation (✅ all 3 views rendered + loan-submit verified in preview).
 - [x] **Increment 6 — Platform:** CI/CD (GitHub Actions: ci/build-deploy/infra), Cloud Build, Workload Identity Federation (keyless), dev→test→prod promotion. Remaining docs filled: 01 logical, 06 security, 09 governance, 10 runbook, 11 roadmap — **all 12 deliverables complete**.
 - [x] **Increment 7 — AgentOps:** eval datasets (txn + labeled loan), offline eval pipeline (✅ runs: grounding 1.0, hallucination 0.0, tool-use 1.0, approval acc 0.875) gated in CI, Vertex eval sketch, reporting/dashboard strategy.
-- [x] **Increment 8 — Model Armor + custom domain:** Model Armor template + BFF prompt/response screening (ADR-0008, ✅ validated + fail-open verified); Cloud Run custom-domain module for `finchat.datadinosaur.com`. **Build complete.**
+- [x] **Increment 8 — Model Armor + custom domain:** Model Armor template + BFF prompt/response screening (ADR-0008); Cloud Run custom-domain module for `finchat.datadinosaur.com`.
+- [x] **Increment 9 — Live deploy & hardening (dev/test/prod):** CI/CD active (WIF), all services deployed; **agents on Cloud Run** (scale-to-zero, [ADR-0010](docs/adr/0010-agents-on-cloud-run.md)); **RAG** knowledge base via BigQuery `VECTOR_SEARCH` ([ADR-0009](docs/adr/0009-bigquery-vector-rag.md)); **BFF OIDC** to private backends; column-level-security serving grant; customer/account **dimension seed**. DaaS API ✅ live (balance/history/summary 200 on real data). **Build complete + running.**
 
 ---
 

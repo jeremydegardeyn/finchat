@@ -58,6 +58,21 @@ Both consume the same topic independently (fan-out) — a core benefit of the ev
 | API | **Least-privilege SA**, `maximum_bytes_billed` cap, private + gateway auth |
 | All access | **Audit logs** → immutable 10y sink |
 
+## Dimension backfill (customer / account)
+
+The streaming generator emits only **transaction facts**, so the `customer`/`account` **dimension**
+tables start empty — and the Gold balance/summary views join `FROM account`. A one-time, idempotent
+**seed** ([`scripts/seed_dimensions.sh`](../scripts/seed_dimensions.sh)) derives a deterministic 1:1
+customer/account per distinct `account_id` observed in `silver.transaction`, so the serving views
+return data. (Enterprise target: a real customer/account master ingested on its own event path.)
+
+## Knowledge retrieval (RAG)
+
+Parallel to the transactional flow, the agent answers policy/fees/branch questions via **RAG**:
+`kb/corpus.jsonl` → `ML.GENERATE_EMBEDDING` → `kb_chunks` (vectors) → `VECTOR_SEARCH`. See
+[04-agent-architecture](04-agent-architecture.md#rag-pipeline-bigquery-vector) and
+[ADR-0009](adr/0009-bigquery-vector-rag.md).
+
 ## Lineage chain
 
 `Pub/Sub message_id` → `Bronze.transaction_event` → `Silver.transaction` (idempotency_key) →

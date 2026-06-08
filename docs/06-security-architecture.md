@@ -46,6 +46,8 @@ flowchart TB
 | **LLM I/O screening** | **Model Armor** template screens agent prompts + responses for prompt injection/jailbreak, sensitive data, malicious URLs, harmful content; enforced in the UI BFF ([ADR-0008](adr/0008-model-armor-llm-screening.md)) |
 | **Encryption** | Google-managed at rest (CMEK-ready: `kms_key` hooks in pipeline/Cloud Run), TLS in transit |
 | **Network exposure** | Cloud Run services private (`--no-allow-unauthenticated`); access only via API Gateway / authorized SAs; UI is the only public surface |
+| **Service-to-service auth** | The UI BFF and the agent mint **OIDC id-tokens** (audience = target service URL) to invoke **private** Cloud Run backends; caller SAs hold `run.invoker`. No keys, no public exposure of the agent/APIs |
+| **Fine-grained CLS access** | Serving SAs that legitimately need a tagged column (DaaS API reads `PII_FINANCIAL`-tagged `amount`) are granted **`categoryFineGrainedReader` on that tag only**; `PII_DIRECT` stays restricted to the privileged group. CLS is enforced even through authorized views |
 | **Auditability** | All `cloudaudit.googleapis.com` logs routed to an immutable 10-year logging bucket; loan decisions are append-only + versioned |
 | **Data lineage** | `ingest_time`, `source_system`, `pipeline_version` columns + Pub/Sub message_id → Bronze → Silver → Gold chain |
 | **Cost-as-control** | `maximum_bytes_billed` caps; budget alerts; scale-to-zero limits blast radius |
