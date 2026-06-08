@@ -14,7 +14,10 @@ flowchart LR
       LOAN[Loan workflow]
       EXT[3rd-party / partner]
     end
-    GW["API Gateway<br/>(OpenAPI, API keys, quotas, JWT)"]
+    subgraph edge["API management (same OpenAPI contract)"]
+      GW["API Gateway<br/>(built — sandbox)<br/>keys · quotas · JWT"]
+      APIGEE["Apigee X<br/>(enterprise target)<br/>+ portal · monetization · mediation · analytics"]
+    end
     subgraph run["Cloud Run (private)"]
       TAPI["txn-api (FastAPI)"]
     end
@@ -25,8 +28,13 @@ flowchart LR
     AGENT -->|tool call| GW
     LOAN -->|cross-product| GW
     GW -->|IAM: run.invoker| TAPI
+    APIGEE -. "drop-in (import same OpenAPI)" .-> TAPI
     TAPI -->|dataViewer, capped bytes| GLD
 ```
+
+> **Apigee X is the enterprise target** for the API-management layer (dashed) — *not deployed* in the
+> sandbox to stay near-zero cost. The **same OpenAPI contract** runs on API Gateway today and imports
+> 1:1 into Apigee as an API proxy; migration is re-hosting the contract, not a redesign ([ADR-0006](adr/0006-api-gateway-vs-apigee.md)).
 
 ## Endpoints (Transactions DaaS)
 

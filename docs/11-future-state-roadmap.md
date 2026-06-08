@@ -22,6 +22,7 @@
 | Batch orchestration | Introduce **Cloud Composer** for nightly reconciliation, regulatory batch, dbt, ML retraining (complements Workflows) |
 | Slots & cost | BigQuery **Editions** with reservations + autoscaling slots; per-product cost attribution |
 | Real bureau data | Replace synthetic credit with a bureau integration behind the Credit Agent's tool contract |
+| Agent tooling | Expose the agent tools via an **MCP server** (standard tool transport) registered with the ADK agents — shareable across teams/agents/vendors (ADR-0004) |
 | More data products | Cards, payments, fraud, KYC as additional mesh products sharing the governance plane |
 | Lineage at scale | Full **Dataplex** lakes/zones + automated lineage + data-quality tasks |
 | Fraud / streaming ML | Real-time scoring in the Beam pipeline; feature store (Vertex) |

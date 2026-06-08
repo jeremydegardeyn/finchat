@@ -16,11 +16,22 @@ flowchart TB
     A -->|tool| T1[get_account_balance]
     A -->|tool| T2[get_transaction_history]
     A -->|tool| T3[get_account_summary]
+    A -->|tool| T5[get_loan_status]
     A -->|tool· RAG| T4[search_knowledge_base]
     T1 & T2 & T3 -->|OIDC| API["Transactions DaaS API"]
+    T5 -->|OIDC| LAPI["Loan API"]
     API --> GLD[(BigQuery Gold)]
+    LAPI --> LOANS[(BigQuery loans)]
     T4 --> VEC[("BigQuery vector KB<br/>VECTOR_SEARCH over embeddings")]
+    MCP["MCP server (enterprise option)<br/>standard tool transport"]
+    MCP -. "tools exposed via MCP,<br/>registered as ADK tools" .- T1 & T2 & T3 & T5
 ```
+
+> **MCP is in the target design as the tool-transport layer** (dashed, *not built*). Today the tools
+> are in-process ADK functions calling the governed APIs directly; at enterprise scale the same tools
+> are exposed by an **MCP server** and registered with the agent — standardizing tool access across
+> teams/agents/vendors without changing the runtime. MCP is *complementary* to the Cloud Run/Agent
+> Engine runtime, not a replacement for it ([ADR-0004](adr/0004-agent-engine-vs-mcp.md)).
 
 - **Hosting:** Cloud Run, scale-to-zero. Same ADK agent also deployable to Agent Engine (`deploy.py`).
 - **Structured grounding:** balance/history/summary tools call the governed **DaaS API** (the agent is
