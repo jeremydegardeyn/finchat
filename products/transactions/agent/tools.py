@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 
 API_BASE = os.getenv("TXN_API_URL", "http://localhost:8080")
+LOAN_BASE = os.getenv("LOAN_API_URL", "")
 _TIMEOUT = 8.0
 
 # RAG knowledge base (BigQuery vector store).
@@ -30,13 +31,14 @@ def _id_token(audience: str):
         return None
 
 
-def _get(path: str):
+def _get(path: str, base: str | None = None):
     import httpx
+    base = base or API_BASE
     headers = {}
-    token = _id_token(API_BASE)
+    token = _id_token(base)
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    resp = httpx.get(f"{API_BASE}{path}", headers=headers, timeout=_TIMEOUT)
+    resp = httpx.get(f"{base}{path}", headers=headers, timeout=_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -79,6 +81,24 @@ def get_transaction_history(account_id: str, limit: int = 10) -> list[dict]:
         return _get(f"/v1/accounts/{account_id}/transactions?limit={limit}")
     except Exception:
         return _fallback_repo().get_transactions(account_id, limit)
+
+
+def get_loan_status(loan_id: str) -> dict:
+    """Get the status of a customer's loan request: current status, risk
+    recommendation, and the decision history (approve/reject/modify/counteroffer).
+
+    Args:
+        loan_id: The loan identifier returned when the request was submitted
+                 (looks like 'loan-...'). Ask the customer for it if unknown.
+    Returns:
+        The loan record (status, amount, term, risk, decisions) or an error.
+    """
+    if not LOAN_BASE:
+        return {"error": "loan service not configured"}
+    try:
+        return _get(f"/v1/loans/{loan_id}", base=LOAN_BASE)
+    except Exception:
+        return {"error": f"loan {loan_id} not found"}
 
 
 def search_knowledge_base(query: str) -> list[dict]:

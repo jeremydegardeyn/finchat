@@ -117,9 +117,12 @@ module "loan_api" {
     GCP_PROJECT  = var.project_id
     GOLD_DATASET = module.bigquery.gold_dataset
   }
-  # UI BFF (txn_api SA) invokes loan-api with an OIDC token (works if private).
-  invokers = ["serviceAccount:${module.foundation.service_account_emails["txn_api"]}"]
-  labels   = local.labels
+  # Invoked (OIDC) by the UI BFF (txn_api SA) and the banking agent (loan-status tool).
+  invokers = [
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+    "serviceAccount:${module.foundation.service_account_emails["agent"]}",
+  ]
+  labels = local.labels
 }
 
 module "agent" {
