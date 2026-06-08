@@ -44,6 +44,31 @@ def config():
     }
 
 
+import time
+
+_token_cache: dict[str, tuple[str, float]] = {}  # audience -> (token, expiry_epoch)
+
+
+def _id_token(audience: str):
+    """Mint (and cache) a Google OIDC id-token so the BFF can call PRIVATE Cloud Run
+    backends. The BFF runs as a service account with run.invoker on the targets.
+    Harmless for public services (they ignore the header). No-op locally (http)."""
+    if not audience.startswith("https://"):
+        return None
+    now = time.time()
+    cached = _token_cache.get(audience)
+    if cached and cached[1] - 60 > now:
+        return cached[0]
+    try:
+        from google.auth.transport.requests import Request as GReq
+        import google.oauth2.id_token as idt
+        tok = idt.fetch_id_token(GReq(), audience)
+        _token_cache[audience] = (tok, now + 3000)  # tokens last ~1h; cache 50m
+        return tok
+    except Exception:
+        return None
+
+
 async def _proxy(base: str, path: str, request: Request) -> Response:
     if not base:
         return JSONResponse({"error": "backend not configured", "demo": True}, status_code=503)
@@ -54,9 +79,12 @@ async def _proxy(base: str, path: str, request: Request) -> Response:
     headers = {"content-type": request.headers.get("content-type", "application/json")}
     if persona == "employee":
         headers["X-Approver"] = request.headers.get("X-Approver", "loan-officer@datadinosaur.com")
+    # OIDC: authenticate to private Cloud Run backends (audience = service base URL).
+    token = _id_token(base)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     body = await request.body()
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        # OIDC auth to private Cloud Run would be added here (id_token); demo calls direct.
+    async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.request(request.method, url, params=request.query_params,
                                  content=body or None, headers=headers)
     return Response(content=r.content, status_code=r.status_code,
