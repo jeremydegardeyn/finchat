@@ -51,8 +51,9 @@ _token_cache: dict[str, tuple[str, float]] = {}  # audience -> (token, expiry_ep
 
 def _id_token(audience: str):
     """Mint (and cache) a Google OIDC id-token so the BFF can call PRIVATE Cloud Run
-    backends. The BFF runs as a service account with run.invoker on the targets.
-    Harmless for public services (they ignore the header). No-op locally (http)."""
+    backends. Uses the metadata server's identity endpoint (canonical + reliable for
+    Cloud Run service-to-service auth). The BFF SA holds run.invoker on the targets.
+    Harmless for public services; no-op locally (no metadata server)."""
     if not audience.startswith("https://"):
         return None
     now = time.time()
@@ -60,13 +61,31 @@ def _id_token(audience: str):
     if cached and cached[1] - 60 > now:
         return cached[0]
     try:
-        from google.auth.transport.requests import Request as GReq
-        import google.oauth2.id_token as idt
-        tok = idt.fetch_id_token(GReq(), audience)
+        tok = _mint_token(audience)
         _token_cache[audience] = (tok, now + 3000)  # tokens last ~1h; cache 50m
         return tok
     except Exception:
         return None
+
+
+def _mint_token(audience: str) -> str:
+    """Mint a Cloud Run id-token for `audience` via the metadata identity endpoint."""
+    from google.auth import compute_engine
+    from google.auth.transport.requests import Request as GReq
+    creds = compute_engine.IDTokenCredentials(
+        GReq(), target_audience=audience, use_metadata_identity_endpoint=True)
+    creds.refresh(GReq())
+    return creds.token
+
+
+@app.get("/debug/token")
+def debug_token():
+    """TEMP: surface whether the BFF can mint an id-token for the agent."""
+    try:
+        t = _mint_token(AGENT_URL)
+        return {"ok": True, "audience": AGENT_URL, "token_len": len(t)}
+    except Exception as e:
+        return {"ok": False, "audience": AGENT_URL, "error": f"{type(e).__name__}: {e}"}
 
 
 async def _proxy(base: str, path: str, request: Request) -> Response:
