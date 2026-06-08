@@ -59,6 +59,12 @@ def healthz():
 
 
 # --- DaaS endpoints ----------------------------------------------------------
+@app.get("/v1/accounts/samples", tags=["accounts"])
+def get_sample_accounts(n: int = Query(5, ge=1, le=20)):
+    """Real account ids with activity (UI prefill; not a customer-facing endpoint)."""
+    return {"account_ids": repo.get_sample_accounts(n)}
+
+
 @app.get("/v1/accounts/{account_id}/balance", response_model=Balance, tags=["accounts"])
 def get_balance(account_id: str):
     row = repo.get_balance(account_id)

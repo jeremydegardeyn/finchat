@@ -49,6 +49,17 @@ class Repository:
         """
         return _one(self._run(sql, account_id))
 
+    def get_sample_accounts(self, n: int = 5) -> list[str]:
+        """A few real account ids that have activity (for UI prefill / demos)."""
+        if self._demo:
+            return list(_demo().accounts.keys())[:n]
+        from google.cloud import bigquery
+        sql = (f"SELECT account_id FROM `{PROJECT}.{GOLD}.account_balance` "
+               f"ORDER BY last_activity_at DESC LIMIT {int(n)}")
+        job = self._client.query(sql, job_config=bigquery.QueryJobConfig(
+            maximum_bytes_billed=2 * 1024**3))
+        return [r["account_id"] for r in job.result()]
+
     def get_summary(self, account_id: str) -> dict | None:
         if self._demo:
             return _demo().get_summary(account_id)

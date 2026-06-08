@@ -112,7 +112,7 @@ function renderCustomer() {
       <label>Full name</label><input id="ln" value="Jeremy D">
       <label>Amount (USD)</label><input id="la" type="number" value="15000">
       <label>Term (months)</label><input id="lt" type="number" value="36">
-      <label>Account id (optional)</label><input id="lacc" value="acct-001">
+      <label>Account id (optional)</label><input id="lacc" value="${(S.sampleAccounts&&S.sampleAccounts[0])||'acct-001'}">
       <div class="row" style="margin-top:12px"><button id="lsub">Submit</button></div>
       <pre id="lres" class="hidden"></pre>
     </div>
@@ -122,7 +122,7 @@ function renderCustomer() {
       <div id="lsout"></div>
     </div>
     <div class="card" style="grid-column:1/-1"><h3>Chat with Banking Assistant</h3>
-      <div class="row"><label style="margin:0">Account&nbsp;</label><input id="cacc" style="width:140px" value="acct-001"></div>
+      <div class="row"><label style="margin:0">Account&nbsp;</label><input id="cacc" style="width:200px" value="${(S.sampleAccounts&&S.sampleAccounts[0])||'acct-001'}"></div>
       <div id="chat" class="chat" style="margin-top:8px"></div>
       <div class="row" style="margin-top:8px"><input id="cmsg" placeholder="e.g. what is my balance?" style="flex:1"><button id="csend">Send</button></div>
     </div>
@@ -169,7 +169,7 @@ async function groundedAnswer(q, acc) {
   const ql=q.toLowerCase();
   if(/balance|how much/.test(ql)){ let b=await api("txn",`v1/accounts/${acc}/balance`);
     if(b.__demo){ const d=DEMO.accounts[acc]; b=d?{balance:d.balance,currency:d.currency}:{error:1}; }
-    return b.error?`I couldn't find account ${acc}.`:`Your balance on ${acc} is ${b.balance} ${b.currency}.`; }
+    return (b.error||b.balance==null)?`I couldn't find a balance for ${acc}.`:`Your balance on ${acc} is ${b.balance} ${b.currency}.`; }
   if(/summary|overview/.test(ql)){ let s=await api("txn",`v1/accounts/${acc}/summary`);
     if(s.__demo){ const d=DEMO.accounts[acc]; s=d?{deposit_count:d.deposit_count,withdrawal_count:d.withdrawal_count,net_balance:d.net_balance}:{error:1}; }
     return s.error?`No data for ${acc}.`:`${acc}: ${s.deposit_count} deposits, ${s.withdrawal_count} withdrawals, net ${s.net_balance}.`; }
@@ -246,6 +246,9 @@ function stat(name, ok){ return `<div class="row" style="justify-content:space-b
   let cfg = {}; try { cfg = await (await fetch("/api/config")).json(); } catch(e){}
   S.live = cfg.live || S.live; S.demo = !(S.live.loan_api||S.live.txn_api||S.live.agent);
   el("demoBadge").classList.toggle("hidden", !S.demo);
+  // Prefill a REAL account id (UUID) from the DaaS API so demos hit live data.
+  try { const s = await (await fetch("/api/txn/v1/accounts/samples?n=6")).json();
+        if (s.account_ids && s.account_ids.length) S.sampleAccounts = s.account_ids; } catch(e){}
   const personas = cfg.personas || [{id:"customer",label:"Customer"},{id:"employee",label:"Loan Officer"},{id:"admin",label:"Platform Admin"}];
   persona.innerHTML = personas.map(p=>`<option value="${p.id}">${p.label}</option>`).join("");
   persona.onchange = ()=>{ S.persona=persona.value; setTabs(); };
