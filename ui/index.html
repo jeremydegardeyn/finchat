@@ -146,12 +146,24 @@ async function checkStatus() {
   el("lsout").innerHTML = `<pre>${JSON.stringify(res,null,2)}</pre>`;
 }
 function pushChat(who,text){ const d=document.createElement("div"); d.className="msg "+(who==="u"?"u":"a");
-  d.innerHTML=`<span class="b"></span>`; d.querySelector(".b").textContent=text; el("chat").appendChild(d); el("chat").scrollTop=1e9; }
+  d.innerHTML=`<span class="b"></span>`; d.querySelector(".b").textContent=text; el("chat").appendChild(d); el("chat").scrollTop=1e9; return d; }
 async function chatSend() {
   const q = el("cmsg").value.trim(); if(!q) return; const acc = el("cacc").value.trim();
   pushChat("u",q); el("cmsg").value="";
-  // Grounded answer: prefer real agent, else compute from txn data (demo).
-  let ans = await groundedAnswer(q, acc); pushChat("a",ans);
+  const thinking = pushChat("a","…");
+  let ans = await agentAnswer(q, acc);
+  thinking.querySelector(".b").textContent = ans;  // replace placeholder
+  el("chat").scrollTop=1e9;
+}
+// Call the real ADK+Gemini agent via the BFF (/api/agent -> OIDC -> private agent).
+// Falls back to client-side grounding if the agent is unavailable (demo mode).
+async function agentAnswer(q, acc) {
+  if (!S.sid) S.sid = "s-" + Date.now();
+  const message = acc ? `(account ${acc}) ${q}` : q;
+  let res = await api("agent","chat",{ method:"POST",
+    body: JSON.stringify({ message, user_id: S.persona, session_id: S.sid }) });
+  if (res.__demo || res.error || !res.response) return await groundedAnswer(q, acc);
+  return res.response;
 }
 async function groundedAnswer(q, acc) {
   const ql=q.toLowerCase();

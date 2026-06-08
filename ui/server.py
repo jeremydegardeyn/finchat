@@ -84,7 +84,7 @@ async def _proxy(base: str, path: str, request: Request) -> Response:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     body = await request.body()
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=90.0) as client:  # agent cold-start + Gemini latency
         r = await client.request(request.method, url, params=request.query_params,
                                  content=body or None, headers=headers)
     return Response(content=r.content, status_code=r.status_code,
