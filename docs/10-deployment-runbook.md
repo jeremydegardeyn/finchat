@@ -99,6 +99,18 @@ deid_template=$DEID,inspect_template=$INSPECT,dlp_sample_rate=0.2
 
 (Or rely solely on the Pub/Sub→BigQuery subscription for raw Bronze; drain the Dataflow job when done.)
 
+### 6b. Seed customer/account dimensions
+
+The generator emits only transaction facts. Backfill the `customer`/`account` dimension
+tables (1:1 per observed account) so the Gold balance/summary views — which join `FROM account` —
+return data:
+
+```bash
+./scripts/seed_dimensions.sh dev      # idempotent; re-run after more data lands
+```
+After this, `GET /v1/accounts/<id>/balance` and `/summary` return 200 for any account id present
+in `silver.transaction`.
+
 ## 7. Deploy agents (Agent Engine)
 
 ```bash
