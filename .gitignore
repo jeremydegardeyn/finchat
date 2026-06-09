@@ -39,3 +39,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# scratch: API discovery dumps
+disc*.json
+car.json
