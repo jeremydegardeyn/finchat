@@ -17,6 +17,10 @@ permissions:
   contents: read
   id-token: write
 
+# Opt JS actions (auth/setup-gcloud) into Node 24 ahead of the 2026-06-16 forced switch.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
@@ -29,7 +33,7 @@ jobs:
       PROJECT: ${{ vars.GCP_PROJECT }}
       REGION: ${{ vars.GCP_REGION }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: auth
         uses: google-github-actions/auth@v2

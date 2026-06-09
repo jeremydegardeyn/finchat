@@ -8,11 +8,15 @@ on:
 permissions:
   contents: read
 
+# Opt JS actions (auth/setup-gcloud) into Node 24 ahead of the 2026-06-16 forced switch.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   python-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -39,7 +43,7 @@ jobs:
   agent-eval:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -57,7 +61,7 @@ jobs:
       matrix:
         env: [dev, test, prod]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.8.5"
@@ -79,6 +83,6 @@ jobs:
           - products/loans/api
           - ui
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build image (no push)
         run: docker build -t finchat-ci-test ${{ matrix.service }}
