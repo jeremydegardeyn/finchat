@@ -20,6 +20,12 @@ import shutil
 import subprocess
 import sys
 
+# Windows consoles default to cp1252 and choke on the ✓/✗ status glyphs; force UTF-8.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 PROJECT = "strongsville-city-schools"
 REGION = "us-central1"
 ENV = sys.argv[1] if len(sys.argv) > 1 else "dev"
@@ -90,6 +96,26 @@ def create_glossary():
     print(f"glossary {gid}: {len(GLOSSARY_TERMS)} terms (409 'already exists' is OK)")
 
 
+def _find_entry(client, scope, fqn):
+    """Locate a BigQuery catalog entry by table name, matching on FQN; fall back
+    to lookup-by-FQN. Returns the full entry (view=ALL) or None."""
+    table = fqn.split(".")[-1]
+    try:
+        for res in client.search_entries(request={
+                "name": scope, "query": table, "page_size": 10}):
+            de = getattr(res, "dataplex_entry", None)
+            efqn = (getattr(de, "fully_qualified_name", "") or res.linked_resource or "")
+            if de and de.name and (fqn in efqn or efqn.endswith(table)):
+                return client.get_entry(request={"name": de.name, "view": "ALL"})
+    except Exception:
+        pass
+    try:
+        return client.lookup_entry(request={
+            "name": scope, "fully_qualified_name": fqn, "view": "ALL"})
+    except Exception:
+        return None
+
+
 def attach_aspects(num: str):
     try:
         from google.cloud import dataplex_v1
@@ -111,26 +137,7 @@ def attach_aspects(num: str):
     scope = f"projects/{PROJECT}/locations/global"
     for p in PRODUCTS:
         try:
-            # Find the BigQuery entry. Search by TABLE NAME (not the product display
-            # name) and match on the fully-qualified name; fall back to lookup-by-FQN.
-            table = p["fqn"].split(".")[-1]
-            entry = None
-            try:
-                for res in client.search_entries(request={
-                        "name": scope, "query": table, "page_size": 10}):
-                    de = getattr(res, "dataplex_entry", None)
-                    fqn = (getattr(de, "fully_qualified_name", "") or res.linked_resource or "")
-                    if de and de.name and (p["fqn"] in fqn or fqn.endswith(table)):
-                        entry = client.get_entry(request={"name": de.name, "view": "ALL"})
-                        break
-            except Exception:
-                pass
-            if entry is None:
-                try:
-                    entry = client.lookup_entry(request={
-                        "name": scope, "fully_qualified_name": p["fqn"], "view": "ALL"})
-                except Exception:
-                    pass
+            entry = _find_entry(client, scope, p["fqn"])
             if entry is None:
                 print(f"  ✗ {p['product']:24s} entry not found ({p['fqn']})")
                 continue
@@ -151,10 +158,73 @@ def attach_aspects(num: str):
             print(f"  ✗ {p['product']:24s} {type(e).__name__}: {e}")
 
 
+def _latest_dq_result(scan_id: str):
+    """Newest SUCCEEDED data-quality job for a scan -> (score, passed, end_time)."""
+    from google.cloud import dataplex_v1
+    ds = dataplex_v1.DataScanServiceClient()
+    parent = f"projects/{PROJECT}/locations/{REGION}/dataScans/{scan_id}"
+    try:
+        jobs = ds.list_data_scan_jobs(request={"parent": parent})  # newest first
+    except Exception as e:
+        print(f"  ✗ list jobs failed for {scan_id}: {type(e).__name__}: {e}")
+        return None
+    for j in jobs:
+        job = ds.get_data_scan_job(request={"name": j.name, "view": "FULL"})
+        if job.state == dataplex_v1.DataScanJob.State.SUCCEEDED:
+            r = job.data_quality_result
+            return (float(r.score), bool(r.passed), job.end_time)
+    return None
+
+
+def publish_dq_scores(num: str):
+    """Write the latest DQ score onto the silver-transaction entry's operational
+    aspect (the only product with datascans today). Run datascans first:
+    `./scripts/run_datascans.sh <env>`."""
+    try:
+        from google.cloud import dataplex_v1
+        from google.protobuf import struct_pb2
+    except ImportError:
+        print("  ✗ run: pip install -U google-cloud-dataplex"); return
+    if not hasattr(dataplex_v1, "DataScanServiceClient"):
+        print("  ✗ google-cloud-dataplex too old for DataScan API."); return
+
+    res = _latest_dq_result(f"{PREFIX}-silver-txn-quality")
+    if res is None:
+        print(f"  ✗ no SUCCEEDED DQ job yet — run ./scripts/run_datascans.sh {ENV}")
+        return
+    score, passed, end_time = res
+
+    client = dataplex_v1.CatalogServiceClient()
+    op_key = f"{num}.global.{PREFIX}-operational"
+    op_type = f"projects/{PROJECT}/locations/global/aspectTypes/{PREFIX}-operational"
+    scope = f"projects/{PROJECT}/locations/global"
+    fqn = f"bigquery:{PROJECT}.finchat_silver_{ENV}.transaction"
+    try:
+        entry = _find_entry(client, scope, fqn)
+        if entry is None:
+            print(f"  ✗ entry not found ({fqn})"); return
+        # 'last_dq_run' is a datetime aspect field — RFC3339 (proto-plus gives a tz-aware datetime).
+        last_run = end_time.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(end_time, "strftime") else str(end_time)
+        op_data = struct_pb2.Struct(); op_data.update({
+            "data_quality_score": f"{score:.1f}% ({'PASS' if passed else 'FAIL'})",
+            "last_dq_run": last_run,
+            "freshness_sla": "<=15m",
+            "pipeline_version": "dataflow-flex"})
+        entry.aspects[op_key] = dataplex_v1.Aspect(aspect_type=op_type, data=op_data)
+        client.update_entry(request={
+            "entry": entry,
+            "update_mask": {"paths": ["aspects"]},
+            "aspect_keys": [op_key]})
+        print(f"  ✓ operational DQ -> transaction: {score:.1f}% {'PASS' if passed else 'FAIL'} @ {last_run}")
+    except Exception as e:
+        print(f"  ✗ operational DQ publish: {type(e).__name__}: {e}")
+
+
 if __name__ == "__main__":
     print(f"== Catalog bootstrap ({ENV}) ==")
     num = project_number()
     print("project number:", num)
     print("-- glossary --"); create_glossary()
     print("-- attach aspects to data products --"); attach_aspects(num)
+    print("-- publish DQ score to operational aspect --"); publish_dq_scores(num)
     print("Done. Search them: gcloud dataplex entries search 'deposit transaction' --project", PROJECT)
