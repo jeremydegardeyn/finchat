@@ -16,6 +16,7 @@ versions. It is idempotent-ish (re-running updates aspects).
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 
@@ -23,6 +24,8 @@ PROJECT = "strongsville-city-schools"
 REGION = "us-central1"
 ENV = sys.argv[1] if len(sys.argv) > 1 else "dev"
 PREFIX = f"finchat-{ENV}"
+# On Windows gcloud is gcloud.cmd; subprocess needs the resolved path (not a bare name).
+GCLOUD = shutil.which("gcloud") or "gcloud"
 
 # --- The 5 data products built today: BQ table -> business metadata ----------
 PRODUCTS = [
@@ -66,18 +69,18 @@ GLOSSARY_TERMS = {
 
 def project_number() -> str:
     return subprocess.check_output(
-        ["gcloud", "projects", "describe", PROJECT, "--format=value(projectNumber)"],
+        [GCLOUD, "projects", "describe", PROJECT, "--format=value(projectNumber)"],
         text=True).strip()
 
 
 def create_glossary():
     """Best-effort glossary + terms via gcloud (API surface is new)."""
     gid = f"{PREFIX}-banking"
-    subprocess.run(["gcloud", "dataplex", "glossaries", "create", gid,
+    subprocess.run([GCLOUD, "dataplex", "glossaries", "create", gid,
                     f"--project={PROJECT}", f"--location={REGION}",
                     "--display-name=FinChat Banking Glossary"], check=False)
     for term, desc in GLOSSARY_TERMS.items():
-        subprocess.run(["gcloud", "dataplex", "glossaries", "terms", "create", term,
+        subprocess.run([GCLOUD, "dataplex", "glossaries", "terms", "create", term,
                         f"--glossary={gid}", f"--project={PROJECT}", f"--location={REGION}",
                         f"--description={desc}"], check=False)
     print(f"glossary {gid}: {len(GLOSSARY_TERMS)} terms (errors above are OK if they already exist)")
