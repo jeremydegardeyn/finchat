@@ -22,6 +22,16 @@ TXN_API_URL = os.getenv("TXN_API_URL", "")
 AGENT_URL = os.getenv("AGENT_URL", "")
 HERE = os.path.dirname(__file__)
 
+# Analyst persona: Knowledge Catalog discovery + Conversational Analytics (Gemini
+# Data Analytics). The UI BFF SA (txn-api) holds geminidataanalytics.locations.chat
+# + BigQuery read/job, so analyst features run under it.
+GCP_PROJECT = os.getenv("GCP_PROJECT", "")
+CA_LOCATION = os.getenv("CA_LOCATION", "global")  # Conversational Analytics location
+SILVER_DATASET = os.getenv("SILVER_DATASET", "")
+GOLD_DATASET = os.getenv("GOLD_DATASET", "")
+LOANS_DATASET = os.getenv("LOANS_DATASET", "")
+ANALYST_READY = bool(GCP_PROJECT and (SILVER_DATASET or GOLD_DATASET or LOANS_DATASET))
+
 app = FastAPI(title="FinChat UI BFF", version="1.0.0")
 
 
@@ -37,10 +47,12 @@ def config():
     return {
         "personas": [
             {"id": "customer", "label": "Customer (Jeremy)", "views": ["customer"]},
-            {"id": "employee", "label": "Loan Officer", "views": ["employee"]},
+            {"id": "employee", "label": "Employee (Loan Officer)", "views": ["employee"]},
+            {"id": "analyst", "label": "Employee (Analyst)", "views": ["analyst"]},
             {"id": "admin", "label": "Platform Admin", "views": ["admin"]},
         ],
-        "live": {"loan_api": bool(LOAN_API_URL), "txn_api": bool(TXN_API_URL), "agent": bool(AGENT_URL)},
+        "live": {"loan_api": bool(LOAN_API_URL), "txn_api": bool(TXN_API_URL),
+                 "agent": bool(AGENT_URL), "analyst": ANALYST_READY},
     }
 
 
@@ -132,6 +144,150 @@ async def agent_proxy(path: str, request: Request):
     except Exception:
         pass
     return resp
+
+
+# ============================= Analyst persona ==============================
+# Catalog discovery + Google Conversational Analytics, for the "Employee (Analyst)"
+# persona only (the SPA exposes these in the Analyst view; the customer agent no
+# longer carries the catalog-discovery tool).
+
+@app.get("/api/catalog/search")
+def catalog_search(q: str = ""):
+    """Discover Dataplex catalog assets by free-text description. Returns matching
+    entries with their governed aspects (data-product, governance, data-contract,
+    operational) so the analyst can see ownership, PII class, contract, and DQ."""
+    q = (q or "").strip()
+    if not q:
+        return {"matches": []}
+    if not GCP_PROJECT:
+        return {"matches": [], "error": "catalog not configured"}
+    try:
+        from google.cloud import dataplex_v1
+        client = dataplex_v1.CatalogServiceClient()
+        scope = f"projects/{GCP_PROJECT}/locations/global"
+        env = SILVER_DATASET.rsplit("_", 1)[-1] if "_" in SILVER_DATASET else ""  # e.g. "prod"
+        matches, seen = [], set()
+        for res in client.search_entries(request={"name": scope, "query": q, "page_size": 25}):
+            entry = getattr(res, "dataplex_entry", None)
+            if not entry:
+                continue
+            name = getattr(entry, "name", "")
+            resource = res.linked_resource or ""
+            etype = (getattr(entry, "entry_type", "") or "").split("/")[-1]
+            # Scope to this env (drop other envs' duplicate tables); keep env-less terms.
+            if env and env not in resource and env not in name and etype != "glossary-term":
+                continue
+            # Search snippets omit aspects — fetch the full entry to read them.
+            aspects = {}
+            try:
+                full = client.get_entry(request={"name": name, "view": "ALL"})
+                for k, asp in dict(full.aspects).items():
+                    short = k.split(".")[-1]
+                    if short.startswith("finchat-"):
+                        # ...finchat-prod-data-contract -> "data-contract".
+                        # asp.data is a proto-plus MapComposite (dict-like), not a
+                        # protobuf Message — dict() it, don't use MessageToDict.
+                        aspects[short.split("-", 2)[-1]] = {kk: str(vv) for kk, vv in dict(asp.data).items()}
+            except Exception:
+                pass
+            src = getattr(entry, "entry_source", None)
+            disp = (getattr(src, "display_name", "") or name.split("/")[-1]) or resource
+            dk = (disp, etype)
+            if dk in seen:
+                continue
+            seen.add(dk)
+            matches.append({"name": disp, "resource": resource, "entry_type": etype, "aspects": aspects})
+            if len(matches) >= 8:
+                break
+        return {"matches": matches}
+    except Exception as e:
+        return {"matches": [], "error": f"{type(e).__name__}: {e}"}
+
+
+def _analyst_tables() -> list[dict]:
+    """BigQuery tables exposed to Conversational Analytics (the analytical products;
+    the KB vector table is excluded)."""
+    t = []
+    if SILVER_DATASET:
+        t += [{"projectId": GCP_PROJECT, "datasetId": SILVER_DATASET, "tableId": "transaction"},
+              {"projectId": GCP_PROJECT, "datasetId": SILVER_DATASET, "tableId": "customer"}]
+    if GOLD_DATASET:
+        t.append({"projectId": GCP_PROJECT, "datasetId": GOLD_DATASET, "tableId": "overdraft_history"})
+    if LOANS_DATASET:
+        t.append({"projectId": GCP_PROJECT, "datasetId": LOANS_DATASET, "tableId": "loan_status"})
+    return t
+
+
+def _access_token() -> str:
+    """OAuth access token for the BFF SA (cloud-platform scope) to call Google APIs."""
+    from google.auth import default
+    from google.auth.transport.requests import Request as GReq
+    creds, _ = default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(GReq())
+    return creds.token
+
+
+def _parse_ca(messages: list) -> dict:
+    """Reduce a Conversational Analytics streamed message array to {answer, sql,
+    columns, rows, followups}."""
+    answer, followups, sql, rows, cols = [], [], None, [], []
+    for m in messages if isinstance(messages, list) else []:
+        sm = m.get("systemMessage", {}) if isinstance(m, dict) else {}
+        if "text" in sm:
+            t = sm["text"]; tt = t.get("textType", "")
+            if tt == "FINAL_RESPONSE":
+                answer.append(" ".join(t.get("parts", [])))
+            elif tt == "FOLLOWUP_QUESTIONS":
+                followups.extend(t.get("parts", []))
+        if "data" in sm:
+            d = sm["data"]
+            if d.get("generatedSql"):
+                sql = d["generatedSql"]
+            if "result" in d:
+                data = d["result"].get("data", []) or []
+                if data:
+                    rows = data[:50]
+                    cols = list(rows[0].keys())
+    return {"answer": "\n\n".join(a for a in answer if a).strip() or "(no answer returned)",
+            "sql": sql, "columns": cols, "rows": rows, "followups": followups[:3]}
+
+
+@app.post("/api/analyst/chat")
+async def analyst_chat(request: Request):
+    """Natural-language analytics over the FinChat data products via Google's
+    Conversational Analytics API (Gemini Data Analytics). Returns a grounded answer,
+    the generated SQL, and the result rows."""
+    body = await request.json()
+    q = (body.get("message") or "").strip()
+    if not q:
+        return JSONResponse({"error": "empty message"}, status_code=400)
+    tables = _analyst_tables()
+    if not (ANALYST_READY and tables):
+        return JSONResponse({"error": "analytics not configured", "demo": True}, status_code=503)
+    try:
+        token = _access_token()
+    except Exception:
+        return JSONResponse({"error": "no credentials", "demo": True}, status_code=503)
+    import httpx
+    url = (f"https://geminidataanalytics.googleapis.com/v1beta/projects/{GCP_PROJECT}"
+           f"/locations/{CA_LOCATION}:chat")
+    payload = {
+        "parent": f"projects/{GCP_PROJECT}/locations/{CA_LOCATION}",
+        "messages": [{"userMessage": {"text": q}}],
+        "inline_context": {"datasource_references": {"bq": {"table_references": tables}}},
+    }
+    async with httpx.AsyncClient(timeout=150.0) as client:
+        r = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
+    if r.status_code >= 400:
+        return JSONResponse({"error": f"analytics error {r.status_code}",
+                             "detail": r.text[:400]}, status_code=502)
+    try:
+        import json as _json
+        msgs = r.json() if r.text.lstrip().startswith("[") else \
+            [_json.loads(li) for li in r.text.splitlines() if li.strip()]
+    except Exception:
+        return JSONResponse({"error": "could not parse analytics response"}, status_code=502)
+    return _parse_ca(msgs)
 
 
 @app.get("/")

@@ -105,6 +105,10 @@ def discover_data_product(concept: str) -> dict:
     """Resolve a BUSINESS CONCEPT to a governed data product using the enterprise
     Knowledge Catalog (Dataplex), instead of needing physical table names.
 
+    NOTE: catalog discovery now lives in the Analyst persona's BFF endpoint
+    (ui/server.py `/api/catalog/search`); this tool is retained as a reusable
+    catalog-resolution helper but is no longer wired into the customer agent.
+
     Use this when the user refers to data by concept — e.g. 'authoritative customer
     record', 'customer demographics', 'fraud transaction history', 'credit exposure',
     'overdraft history'. Returns matching data products with their catalog metadata
@@ -121,7 +125,6 @@ def discover_data_product(concept: str) -> dict:
         return {"error": "catalog not configured"}
     try:
         from google.cloud import dataplex_v1
-        from google.protobuf.json_format import MessageToDict
         client = dataplex_v1.CatalogServiceClient()
         scope = f"projects/{PROJECT}/locations/global"
         pager = client.search_entries(request={"name": scope, "query": concept, "page_size": 3})
@@ -131,9 +134,11 @@ def discover_data_product(concept: str) -> dict:
             src = getattr(entry, "entry_source", None) if entry else None
             aspects = {}
             if entry:
+                # asp.data is a proto-plus MapComposite (dict-like), not a protobuf
+                # Message — dict() it directly (MessageToDict raises on MapComposite).
                 for key, asp in dict(entry.aspects).items():
                     try:
-                        aspects[key.split(".")[-1]] = MessageToDict(asp.data)
+                        aspects[key.split(".")[-1]] = {k: str(v) for k, v in dict(asp.data).items()}
                     except Exception:
                         pass
             matches.append({

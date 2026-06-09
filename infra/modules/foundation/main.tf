@@ -21,7 +21,9 @@ locals {
     txn_api = { display = "Transactions DaaS API + UI BFF (Cloud Run)", roles = [
       "roles/bigquery.dataViewer",
       "roles/bigquery.jobUser",
-      "roles/modelarmor.user", # UI BFF runs as this SA and screens agent I/O
+      "roles/modelarmor.user",                            # UI BFF screens agent I/O
+      "roles/dataplex.catalogViewer",                      # Analyst: catalog discovery search
+      "roles/geminidataanalytics.dataAgentStatelessUser",  # Analyst: Conversational Analytics chat
     ] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [
       "roles/bigquery.dataEditor",

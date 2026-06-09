@@ -87,10 +87,11 @@ async function api(kind, path, opts={}) {
 // ---------- views ----------
 const VIEWS = {
   customer: { label:"Customer", render: renderCustomer },
-  employee: { label:"Employee", render: renderEmployee },
+  employee: { label:"Loan Officer", render: renderEmployee },
+  analyst:  { label:"Analyst", render: renderAnalyst },
   admin:    { label:"Admin",    render: renderAdmin },
 };
-function viewsFor(p){ return p==="customer"?["customer"]:p==="employee"?["employee"]:["admin"]; }
+function viewsFor(p){ return p==="customer"?["customer"]:p==="employee"?["employee"]:p==="analyst"?["analyst"]:["admin"]; }
 let activeTab = "customer";
 
 function setTabs() {
@@ -219,6 +220,82 @@ async function showAudit(id) {
     : `<span class="mut">No audit entries for ${id}.</span>`;
 }
 
+// ===== ANALYST (Employee) =====
+function escapeHtml(s){ return String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function fmtCell(v){ if(v===null||v===undefined) return ""; if(typeof v==="number") return v.toLocaleString();
+  return escapeHtml(typeof v==="object"?JSON.stringify(v):v); }
+function pushAChat(who,text){ const d=document.createElement("div"); d.className="msg "+(who==="u"?"u":"a");
+  d.innerHTML=`<span class="b"></span>`; d.querySelector(".b").textContent=text; el("achat").appendChild(d); el("achat").scrollTop=1e9; return d; }
+
+function renderAnalyst(){
+  view.innerHTML = `
+  <div class="grid">
+    <div class="card" style="grid-column:1/-1"><h3>Knowledge Catalog — discover data products by description</h3>
+      <div class="row"><input id="catq" style="flex:1" placeholder="e.g. overdraft history, authoritative customer record, credit exposure, knowledge base">
+        <button id="catbtn">Search</button></div>
+      <div id="catout" class="mut" style="margin-top:10px">Search the Dataplex Universal Catalog by business concept — returns governed assets with owner, PII class, contract, and data-quality.</div>
+    </div>
+    <div class="card" style="grid-column:1/-1"><h3>Conversational Analytics — ask the data products <span class="pill">Gemini Data Analytics</span></h3>
+      <div id="achat" class="chat" style="height:240px"></div>
+      <div class="row" style="margin-top:8px"><input id="amsg" style="flex:1" placeholder="e.g. how many customers per segment?  ·  average loan risk by status?  ·  worst overdraft accounts">
+        <button id="asend">Ask</button></div>
+      <div id="asql" style="margin-top:10px"></div>
+    </div>
+  </div>`;
+  el("catbtn").onclick = catalogSearch;
+  el("catq").addEventListener("keydown",e=>{ if(e.key==="Enter") catalogSearch(); });
+  el("asend").onclick = analystAsk;
+  el("amsg").addEventListener("keydown",e=>{ if(e.key==="Enter") analystAsk(); });
+  pushAChat("a","Ask a question and I'll query the governed BigQuery data products, then answer with the SQL and results. Discover assets with the catalog search above.");
+}
+
+async function catalogSearch(){
+  const q = el("catq").value.trim(); if(!q) return;
+  el("catout").innerHTML = "Searching the catalog…";
+  const r = await api("catalog", `search?q=${encodeURIComponent(q)}`);
+  if (r.__demo) { el("catout").innerHTML = `<span class="mut">Catalog is unavailable in demo mode (needs the Dataplex catalog + enable_catalog).</span>`; return; }
+  if (r.error && !(r.matches&&r.matches.length)) { el("catout").innerHTML = `<span class="mut">Catalog error: ${escapeHtml(r.error)}</span>`; return; }
+  const ms = r.matches || [];
+  if (!ms.length) { el("catout").innerHTML = `<span class="mut">No catalog assets matched “${escapeHtml(q)}”.</span>`; return; }
+  el("catout").innerHTML = ms.map(m=>{
+    const a=m.aspects||{}, dp=a["data-product"]||{}, gov=a["governance"]||{}, dc=a["data-contract"]||{}, op=a["operational"]||{};
+    const bits=[];
+    if(dp.business_domain) bits.push(`domain <b>${escapeHtml(dp.business_domain)}</b>`);
+    if(dp.criticality) bits.push(`criticality ${escapeHtml(dp.criticality)}`);
+    if(dp.certification_status) bits.push(`<span class="pill ${dp.certification_status==='CERTIFIED'?'ok':'warn'}">${escapeHtml(dp.certification_status)}</span>`);
+    if(gov.pii_classification) bits.push(`PII ${escapeHtml(gov.pii_classification)}`);
+    if(dc.contract_version) bits.push(`contract v${escapeHtml(dc.contract_version)}`);
+    if(op.data_quality_score) bits.push(`DQ ${escapeHtml(op.data_quality_score)}`);
+    if(dp.product_owner) bits.push(`owner ${escapeHtml(dp.product_owner)}`);
+    return `<div class="card" style="margin:8px 0">
+      <div class="row" style="justify-content:space-between"><b>${escapeHtml(m.name)}</b>
+        <span class="pill">${escapeHtml(m.entry_type||'entry')}</span></div>
+      <div class="mut" style="font-size:12px;margin-top:4px">${escapeHtml(m.resource||'')}</div>
+      ${bits.length?`<div style="margin-top:6px">${bits.join(" &middot; ")}</div>`:`<div class="mut" style="margin-top:6px">No FinChat aspects on this entry.</div>`}
+    </div>`;
+  }).join("");
+}
+
+async function analystAsk(){
+  const q = el("amsg").value.trim(); if(!q) return;
+  pushAChat("u", q); el("amsg").value=""; el("asql").innerHTML="";
+  const t = pushAChat("a","Analyzing the data products… (this can take ~15s)");
+  const r = await api("analyst","chat",{ method:"POST", body:JSON.stringify({ message:q }) });
+  if (r.__demo) { t.querySelector(".b").textContent = "Conversational Analytics isn't available in demo mode (needs the Gemini Data Analytics API + BigQuery access)."; return; }
+  if (r.error) { t.querySelector(".b").textContent = "Analytics error: " + escapeHtml(r.error) + (r.detail?` — ${escapeHtml(r.detail)}`:""); return; }
+  t.querySelector(".b").textContent = r.answer || "(no answer)";
+  let html="";
+  if (r.sql) html += `<label>Generated SQL</label><pre>${escapeHtml(r.sql)}</pre>`;
+  if (r.rows && r.rows.length){ const cols = r.columns && r.columns.length ? r.columns : Object.keys(r.rows[0]);
+    html += `<label>Result (${r.rows.length} rows)</label><table><thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join("")}</tr></thead><tbody>${
+      r.rows.slice(0,20).map(row=>`<tr>${cols.map(c=>`<td>${fmtCell(row[c])}</td>`).join("")}</tr>`).join("")}</tbody></table>`; }
+  if (r.followups && r.followups.length) html += `<label>Suggested questions</label><div class="row">${
+    r.followups.map(f=>`<button class="ghost fq">${escapeHtml(f)}</button>`).join("")}</div>`;
+  el("asql").innerHTML = html;
+  el("asql").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("amsg").value=b.textContent; analystAsk(); });
+  el("achat").scrollTop=1e9;
+}
+
 // ===== ADMIN =====
 async function renderAdmin() {
   const h = await (await fetch("/healthz").catch(()=>({json:()=>({})}))).json().catch(()=>({}));
@@ -249,7 +326,7 @@ function stat(name, ok){ return `<div class="row" style="justify-content:space-b
   // Prefill a REAL account id (UUID) from the DaaS API so demos hit live data.
   try { const s = await (await fetch("/api/txn/v1/accounts/samples?n=6")).json();
         if (s.account_ids && s.account_ids.length) S.sampleAccounts = s.account_ids; } catch(e){}
-  const personas = cfg.personas || [{id:"customer",label:"Customer"},{id:"employee",label:"Loan Officer"},{id:"admin",label:"Platform Admin"}];
+  const personas = cfg.personas || [{id:"customer",label:"Customer"},{id:"employee",label:"Employee (Loan Officer)"},{id:"analyst",label:"Employee (Analyst)"},{id:"admin",label:"Platform Admin"}];
   persona.innerHTML = personas.map(p=>`<option value="${p.id}">${p.label}</option>`).join("");
   persona.onchange = ()=>{ S.persona=persona.value; setTabs(); };
   S.persona = personas[0].id; setTabs();
