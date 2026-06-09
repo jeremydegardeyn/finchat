@@ -22,8 +22,8 @@ locals {
       "roles/bigquery.dataViewer",
       "roles/bigquery.jobUser",
       "roles/modelarmor.user",                            # UI BFF screens agent I/O
-      "roles/dataplex.catalogViewer",                      # Analyst: catalog discovery search
-      "roles/geminidataanalytics.dataAgentStatelessUser",  # Analyst: Conversational Analytics chat
+      "roles/dataplex.catalogViewer",                     # Analyst: catalog discovery search
+      "roles/geminidataanalytics.dataAgentStatelessUser", # Analyst: Conversational Analytics chat
     ] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [
       "roles/bigquery.dataEditor",
