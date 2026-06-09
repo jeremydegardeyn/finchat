@@ -204,7 +204,9 @@ module "catalog" {
   env            = var.env
   name_prefix    = var.name_prefix
   silver_dataset = module.bigquery.silver_dataset
-  labels         = local.labels
+  # Lets the Dataplex scan service agent read PII_FINANCIAL columns it profiles.
+  financial_policy_tag_id = module.bigquery.policy_tag_ids["pii_financial"]
+  labels                  = local.labels
 }
 
 # --- Model Armor (agent prompt/response screening) ---------------------------

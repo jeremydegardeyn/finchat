@@ -59,6 +59,21 @@ locals {
   }
 }
 
+# Dataplex runs scans as its per-project service agent. To profile/quality-scan
+# the silver transaction table it must read the PII_FINANCIAL-tagged columns
+# (`amount`, `counterparty_account`), so grant that agent fine-grained reader on
+# the tag — same CLS pattern as the DaaS API SA.
+data "google_project" "this" {
+  project_id = var.project_id
+}
+
+resource "google_data_catalog_policy_tag_iam_member" "scan_financial_reader" {
+  count      = var.financial_policy_tag_id == "" ? 0 : 1
+  policy_tag = var.financial_policy_tag_id
+  role       = "roles/datacatalog.categoryFineGrainedReader"
+  member     = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-dataplex.iam.gserviceaccount.com"
+}
+
 resource "google_dataplex_aspect_type" "types" {
   for_each = local.aspect_types
   project  = var.project_id
@@ -93,6 +108,7 @@ resource "google_dataplex_datascan" "silver_txn_profile" {
   location     = var.region
   data_scan_id = "${local.prefix}-silver-txn-profile"
   labels       = var.labels
+  depends_on   = [google_data_catalog_policy_tag_iam_member.scan_financial_reader]
   data {
     resource = "//bigquery.googleapis.com/projects/${var.project_id}/datasets/${var.silver_dataset}/tables/transaction"
   }
@@ -109,6 +125,7 @@ resource "google_dataplex_datascan" "silver_txn_quality" {
   location     = var.region
   data_scan_id = "${local.prefix}-silver-txn-quality"
   labels       = var.labels
+  depends_on   = [google_data_catalog_policy_tag_iam_member.scan_financial_reader]
   data {
     resource = "//bigquery.googleapis.com/projects/${var.project_id}/datasets/${var.silver_dataset}/tables/transaction"
   }
