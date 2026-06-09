@@ -79,11 +79,14 @@ def create_glossary():
     subprocess.run([GCLOUD, "dataplex", "glossaries", "create", gid,
                     f"--project={PROJECT}", f"--location={REGION}",
                     "--display-name=FinChat Banking Glossary"], check=False)
+    parent = f"projects/{PROJECT}/locations/{REGION}/glossaries/{gid}"
     for term, desc in GLOSSARY_TERMS.items():
-        # Fully-qualified term name resolves project/location/glossary in one arg.
-        term_name = f"projects/{PROJECT}/locations/{REGION}/glossaries/{gid}/terms/{term}"
-        subprocess.run([GCLOUD, "dataplex", "glossaries", "terms", "create", term_name,
-                        f"--display-name={term}", f"--description={desc}"], check=False)
+        # gcloud needs the term-id positional AND --glossary/--location/--project to
+        # resolve the term resource, AND --parent (the glossary) separately.
+        subprocess.run([GCLOUD, "dataplex", "glossaries", "terms", "create", term,
+                        f"--glossary={gid}", f"--location={REGION}", f"--project={PROJECT}",
+                        f"--parent={parent}", f"--display-name={term}",
+                        f"--description={desc}"], check=False)
     print(f"glossary {gid}: {len(GLOSSARY_TERMS)} terms (409 'already exists' is OK)")
 
 
