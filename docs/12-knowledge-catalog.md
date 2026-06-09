@@ -288,7 +288,7 @@ consumable package shown on the console **Data products** page. A data product i
 
 ```mermaid
 flowchart TB
-  subgraph DP["Dataplex Data Product · e.g. &quot;Deposit Transactions&quot;"]
+  subgraph DP["Dataplex Data Product · e.g. Deposit Transactions"]
     META[displayName · owner emails · domain · criticality labels]
     AST[Data assets<br/>BQ table: silver.transaction]
     CON[Data contract<br/>contracts/deposit-transactions.yaml<br/>→ data-contract aspect]
