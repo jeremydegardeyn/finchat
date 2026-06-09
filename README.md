@@ -118,6 +118,7 @@ finchat/
 | 12 | Future-State Enterprise Roadmap | [`docs/11`](docs/11-future-state-roadmap.md) |
 | — | Data Model | [`docs/data-model.md`](docs/data-model.md) |
 | — | Data Governance Strategy | [`docs/09`](docs/09-data-governance.md) |
+| — | Knowledge Catalog (Dataplex) enhancement | [`docs/12`](docs/12-knowledge-catalog.md) |
 | — | Architecture Decision Records | [`docs/adr/`](docs/adr/) |
 
 ---

@@ -74,6 +74,13 @@ variable "enable_model_armor_floor" {
   default     = false
 }
 
+# --- Knowledge Catalog (Dataplex Universal Catalog) — ADR-0010 ---------------
+variable "enable_catalog" {
+  type        = bool
+  description = "Deploy the Dataplex catalog overlay (aspect types, domain entry groups, DQ scans)."
+  default     = false
+}
+
 # --- Custom domain -----------------------------------------------------------
 variable "custom_domain" {
   type        = string

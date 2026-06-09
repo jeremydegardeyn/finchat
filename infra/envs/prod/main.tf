@@ -195,6 +195,18 @@ module "rag" {
   labels = local.labels
 }
 
+# --- Knowledge Catalog overlay (Dataplex Universal Catalog) ------------------
+module "catalog" {
+  count          = var.enable_catalog ? 1 : 0
+  source         = "../../modules/catalog"
+  project_id     = var.project_id
+  region         = var.region
+  env            = var.env
+  name_prefix    = var.name_prefix
+  silver_dataset = module.bigquery.silver_dataset
+  labels         = local.labels
+}
+
 # --- Model Armor (agent prompt/response screening) ---------------------------
 module "model_armor" {
   count                = var.enable_model_armor ? 1 : 0

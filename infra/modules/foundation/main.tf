@@ -73,6 +73,8 @@ locals {
     "modelarmor.googleapis.com",
     "dlp.googleapis.com",
     "datacatalog.googleapis.com",
+    "dataplex.googleapis.com",
+    "datalineage.googleapis.com",
     "secretmanager.googleapis.com",
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
