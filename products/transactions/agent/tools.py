@@ -101,6 +101,53 @@ def get_loan_status(loan_id: str) -> dict:
         return {"error": f"loan {loan_id} not found"}
 
 
+def discover_data_product(concept: str) -> dict:
+    """Resolve a BUSINESS CONCEPT to a governed data product using the enterprise
+    Knowledge Catalog (Dataplex), instead of needing physical table names.
+
+    Use this when the user refers to data by concept — e.g. 'authoritative customer
+    record', 'customer demographics', 'fraud transaction history', 'credit exposure',
+    'overdraft history'. Returns matching data products with their catalog metadata
+    (business name, domain, owner, PII classification, certification status, data-
+    quality score, and the output port to use). Prefer CERTIFIED products; tell the
+    user if a product is not certified or has a low DQ score.
+
+    Args:
+        concept: A natural-language business concept or data-product name.
+    Returns:
+        {"matches": [{name, resource, aspects:{...}}]} or {"error": ...}.
+    """
+    if not PROJECT:
+        return {"error": "catalog not configured"}
+    try:
+        from google.cloud import dataplex_v1
+        from google.protobuf.json_format import MessageToDict
+        client = dataplex_v1.CatalogServiceClient()
+        scope = f"projects/{PROJECT}/locations/global"
+        pager = client.search_entries(request={"name": scope, "query": concept, "page_size": 3})
+        matches = []
+        for res in pager:
+            entry = getattr(res, "dataplex_entry", None)
+            src = getattr(entry, "entry_source", None) if entry else None
+            aspects = {}
+            if entry:
+                for key, asp in dict(entry.aspects).items():
+                    try:
+                        aspects[key.split(".")[-1]] = MessageToDict(asp.data)
+                    except Exception:
+                        pass
+            matches.append({
+                "name": (getattr(src, "display_name", "") or getattr(entry, "name", "")) if entry else res.linked_resource,
+                "resource": res.linked_resource,
+                "aspects": aspects,
+            })
+            if len(matches) >= 3:
+                break
+        return {"matches": matches} if matches else {"error": f"no data product found for '{concept}'"}
+    except Exception as e:
+        return {"error": f"catalog unavailable: {type(e).__name__}"}
+
+
 def search_knowledge_base(query: str) -> list[dict]:
     """Search FinChat Bank's knowledge base for policies, terms & conditions, fees,
     branch locations & hours, and lending info. Use this for general bank questions

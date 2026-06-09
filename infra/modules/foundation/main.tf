@@ -33,6 +33,7 @@ locals {
       "roles/bigquery.dataViewer",
       "roles/bigquery.jobUser",
       "roles/run.invoker",
+      "roles/dataplex.catalogViewer", # discover_data_product: search the catalog
     ] }
     workflow = { display = "Loan Cloud Workflows orchestrator", roles = [
       "roles/run.invoker",
