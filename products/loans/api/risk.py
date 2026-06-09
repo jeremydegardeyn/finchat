@@ -48,62 +48,88 @@ def synthesize_credit_profile(loan_id: str, amount: float, term_months: int) -> 
     return CreditProfile(loan_id, credit_score, annual_income, existing_debt, dti_ratio)
 
 
+def _factor(code: str, label: str, value, points: int, max_points: int, note: str) -> dict:
+    """One explainable scorecard factor. `points` is the risk contributed
+    (0 = favorable, up to max_points = worst); higher total = higher risk."""
+    return {"code": code, "label": label, "value": str(value),
+            "points": points, "max_points": max_points, "note": note,
+            "impact": "increases risk" if points > 0 else "favorable"}
+
+
 @dataclass
 class RiskResult:
     risk_score: int
     recommendation: str
     reasons: list[str]
+    factors: list[dict]                 # structured per-factor attribution (explainability)
     model_version: str = MODEL_VERSION
 
     def to_row(self) -> dict:
         d = asdict(self)
         d["reasons"] = json.dumps(self.reasons)
+        d["factors"] = json.dumps(self.factors)
         return d
+
+    @property
+    def principal_reasons(self) -> list[str]:
+        """Adverse-action style: the factors driving risk most, highest first
+        (ECOA/Reg B 'principal reasons'). Empty when nothing increased risk."""
+        ranked = sorted([f for f in self.factors if f["points"] > 0],
+                        key=lambda f: -f["points"])
+        return [f"{f['code']}: {f['note']}" for f in ranked[:4]]
 
 
 def score_risk(profile: CreditProfile, amount: float, overdraft_events: int = 0,
                overdraft_ratio: float = 0.0) -> RiskResult:
-    """Combine credit score, DTI, overdraft history, and loan size into a risk score."""
-    reasons: list[str] = []
-    score = 0
+    """Transparent additive scorecard over four factors. Each factor's point
+    contribution is captured so the decision is fully explainable (reason codes
+    for adverse-action notices; SR 11-7 model transparency)."""
+    factors: list[dict] = []
 
-    # Credit score component (0-40).
-    if profile.credit_score >= 760:
-        score += 0; reasons.append(f"excellent credit ({profile.credit_score})")
-    elif profile.credit_score >= 700:
-        score += 10; reasons.append(f"good credit ({profile.credit_score})")
-    elif profile.credit_score >= 640:
-        score += 22; reasons.append(f"fair credit ({profile.credit_score})")
+    # Credit score factor (0-40).
+    cs = profile.credit_score
+    if cs >= 760:
+        factors.append(_factor("CREDIT", "Credit score", cs, 0, 40, f"excellent credit ({cs})"))
+    elif cs >= 700:
+        factors.append(_factor("CREDIT", "Credit score", cs, 10, 40, f"good credit ({cs})"))
+    elif cs >= 640:
+        factors.append(_factor("CREDIT", "Credit score", cs, 22, 40, f"fair credit ({cs})"))
     else:
-        score += 40; reasons.append(f"poor credit ({profile.credit_score})")
+        factors.append(_factor("CREDIT", "Credit score", cs, 40, 40, f"poor credit ({cs})"))
 
-    # DTI component (0-30).
-    if profile.dti_ratio <= 0.28:
-        score += 0; reasons.append(f"healthy DTI ({profile.dti_ratio})")
-    elif profile.dti_ratio <= 0.43:
-        score += 15; reasons.append(f"elevated DTI ({profile.dti_ratio})")
+    # Debt-to-income factor (0-30).
+    dti = profile.dti_ratio
+    if dti <= 0.28:
+        factors.append(_factor("DTI", "Debt-to-income", dti, 0, 30, f"healthy DTI ({dti})"))
+    elif dti <= 0.43:
+        factors.append(_factor("DTI", "Debt-to-income", dti, 15, 30, f"elevated DTI ({dti})"))
     else:
-        score += 30; reasons.append(f"high DTI ({profile.dti_ratio})")
+        factors.append(_factor("DTI", "Debt-to-income", dti, 30, 30, f"high DTI ({dti})"))
 
-    # Overdraft history component (0-20) — sourced from the Transactions product.
+    # Overdraft history factor (0-20) — sourced from the Transactions product.
     if overdraft_events == 0:
-        reasons.append("no overdraft history")
+        factors.append(_factor("OVERDRAFT", "Overdraft history", 0, 0, 20, "no overdraft history"))
     elif overdraft_events <= 2:
-        score += 10; reasons.append(f"{overdraft_events} overdraft event(s)")
+        factors.append(_factor("OVERDRAFT", "Overdraft history", overdraft_events, 10, 20,
+                               f"{overdraft_events} overdraft event(s)"))
     else:
-        score += 20; reasons.append(f"frequent overdrafts ({overdraft_events})")
+        factors.append(_factor("OVERDRAFT", "Overdraft history", overdraft_events, 20, 20,
+                               f"frequent overdrafts ({overdraft_events})"))
 
-    # Loan size component (0-10).
+    # Loan size factor (0-10).
     if amount > 50_000:
-        score += 10; reasons.append("large loan amount")
+        factors.append(_factor("LOAN_SIZE", "Loan amount", amount, 10, 10, "large loan amount"))
     elif amount > 20_000:
-        score += 5; reasons.append("moderate loan amount")
+        factors.append(_factor("LOAN_SIZE", "Loan amount", amount, 5, 10, "moderate loan amount"))
+    else:
+        factors.append(_factor("LOAN_SIZE", "Loan amount", amount, 0, 10, "modest loan amount"))
 
-    score = max(0, min(100, score))
+    score = max(0, min(100, sum(f["points"] for f in factors)))
+    reasons = [f["note"] for f in factors]  # prose, kept for backward compatibility
     if score <= APPROVE_MAX:
         rec = "APPROVE"
     elif score >= DECLINE_MIN:
         rec = "DECLINE"
     else:
         rec = "REVIEW"
-    return RiskResult(risk_score=score, recommendation=rec, reasons=reasons)
+    return RiskResult(risk_score=score, recommendation=rec, reasons=reasons, factors=factors)

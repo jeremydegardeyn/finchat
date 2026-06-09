@@ -82,7 +82,10 @@ def submit_loan(sub: LoanSubmission):
     store.set_status(lid, "PENDING_APPROVAL")
     return {"loan_id": lid, "status": "PENDING_APPROVAL",
             "risk_score": result.risk_score, "recommendation": result.recommendation,
-            "reasons": result.reasons}
+            "reasons": result.reasons,
+            # Explainability: structured factor attribution + adverse-action reasons.
+            "factors": result.factors, "principal_reasons": result.principal_reasons,
+            "model_version": result.model_version}
 
 
 @app.get("/v1/loans/{loan_id}", tags=["customer"])

@@ -45,12 +45,15 @@ CREATE TABLE IF NOT EXISTS `${PROJECT}.finchat_loans_${ENV}.risk_assessment`
   risk_score        INT64 NOT NULL,               -- 0(best)-100(worst)
   recommendation    STRING NOT NULL,             -- APPROVE|REVIEW|DECLINE
   overdraft_events  INT64,
-  reasons           STRING,                       -- JSON array of factor strings
+  reasons           STRING,                       -- JSON array of factor strings (prose)
+  factors           STRING,                       -- JSON array of structured factor attributions (explainability)
   model_version     STRING,
   created_at        TIMESTAMP NOT NULL
 )
 PARTITION BY DATE(created_at)
 CLUSTER BY loan_id;
+-- Idempotent: add explainability column to pre-existing tables.
+ALTER TABLE `${PROJECT}.finchat_loans_${ENV}.risk_assessment` ADD COLUMN IF NOT EXISTS factors STRING;
 
 -- ---------- Approval decision (APPEND-ONLY, versioned) ----------------------
 CREATE TABLE IF NOT EXISTS `${PROJECT}.finchat_loans_${ENV}.approval_decision`
@@ -89,14 +92,14 @@ WITH latest_decision AS (
   FROM `${PROJECT}.finchat_loans_${ENV}.approval_decision`
 ),
 latest_risk AS (
-  SELECT loan_id, risk_score, recommendation,
+  SELECT loan_id, risk_score, recommendation, reasons, factors,
          ROW_NUMBER() OVER (PARTITION BY loan_id ORDER BY version DESC) AS rn
   FROM `${PROJECT}.finchat_loans_${ENV}.risk_assessment`
 )
 SELECT
   r.loan_id, r.customer_name, r.amount, r.term_months, r.status,
   r.submitted_at, r.updated_at,
-  lr.risk_score, lr.recommendation,
+  lr.risk_score, lr.recommendation, lr.reasons, lr.factors,
   ld.decision AS final_decision, ld.counteroffer_amount, ld.approver, ld.decided_at
 FROM `${PROJECT}.finchat_loans_${ENV}.loan_request` r
 LEFT JOIN latest_risk     lr ON r.loan_id = lr.loan_id AND lr.rn = 1

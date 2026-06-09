@@ -105,6 +105,29 @@ function setTabs() {
 function draw(){ VIEWS[activeTab].render(); }
 const el = id => document.getElementById(id);
 
+// ---------- explainability: render the loan risk scorecard ----------
+function parseFactors(x){ if(!x) return []; if(Array.isArray(x)) return x; try{ return JSON.parse(x); }catch(e){ return []; } }
+function loanRisk(l){ return {
+  risk_score:(l.risk&&l.risk.risk_score)??l.risk_score,
+  recommendation:(l.risk&&l.risk.recommendation)||l.final_decision||l.recommendation,
+  factors:l.factors, principal_reasons:l.principal_reasons, model_version:l.model_version }; }
+function riskExplainHtml(o){
+  const rec=o.recommendation||"-";
+  const factors=parseFactors(o.factors), pr=o.principal_reasons||[];
+  let h=`<div class="row" style="justify-content:space-between"><div><span class="metric small">${o.risk_score==null?'–':o.risk_score}</span> <span class="mut">/100 risk</span></div><span class="pill ${rec}">${rec}</span></div>`;
+  if(factors.length){
+    h+=`<table style="margin-top:8px"><thead><tr><th>Factor</th><th>Value</th><th class="right">Contribution</th><th>Reason</th></tr></thead><tbody>${
+      factors.map(f=>`<tr><td>${escapeHtml(f.label||f.code)}</td><td class="mut">${escapeHtml(f.value)}</td>
+        <td class="right"><span class="pill ${f.points>0?'warn':'ok'}">+${f.points}/${f.max_points}</span></td>
+        <td class="mut">${escapeHtml(f.note||'')}</td></tr>`).join("")}</tbody></table>`;
+    h+= pr.length
+      ? `<div style="margin-top:8px"><b>Principal reasons</b> <span class="mut">(adverse-action / Reg B)</span>: ${pr.map(escapeHtml).join("; ")}</div>`
+      : `<div class="mut" style="margin-top:8px">No risk-increasing factors — all favorable.</div>`;
+  } else { h+=`<div class="mut" style="margin-top:6px">${(o.reasons||[]).join("; ")||"No factor breakdown available."}</div>`; }
+  h+=`<div class="mut" style="font-size:11px;margin-top:6px">Model ${escapeHtml(o.model_version||'risk-1.0.0')} · transparent additive scorecard · fully auditable</div>`;
+  return h;
+}
+
 // ===== CUSTOMER =====
 function renderCustomer() {
   view.innerHTML = `
@@ -115,7 +138,7 @@ function renderCustomer() {
       <label>Term (months)</label><input id="lt" type="number" value="36">
       <label>Account id (optional)</label><input id="lacc" value="${(S.sampleAccounts&&S.sampleAccounts[0])||'acct-001'}">
       <div class="row" style="margin-top:12px"><button id="lsub">Submit</button></div>
-      <pre id="lres" class="hidden"></pre>
+      <div id="lres" class="hidden" style="margin-top:10px"></div>
     </div>
     <div class="card"><h3>View Loan Status</h3>
       <label>Loan id</label><input id="lsid" placeholder="loan-...">
@@ -138,7 +161,8 @@ async function submitLoan() {
   if (res.__demo) { const score = body.amount>40000?72:47; res = { loan_id:"loan-demo-"+Math.floor(Math.random()*9000),
     status:"PENDING_APPROVAL", risk_score:score, recommendation:score>=65?"DECLINE":score<=35?"APPROVE":"REVIEW", reasons:["demo scoring"] }; }
   const p = el("lres"); p.classList.remove("hidden");
-  p.textContent = `Loan ${res.loan_id}\nStatus: ${res.status}\nRisk score: ${res.risk_score}  ->  ${res.recommendation}\n${(res.reasons||[]).join("; ")}`;
+  p.innerHTML = `<div class="mut" style="font-size:12px">Loan ${res.loan_id||''} · ${res.status||''}</div>`
+              + `<h3 style="margin:6px 0 4px">Why this decision</h3>` + riskExplainHtml(res);
 }
 async function checkStatus() {
   const id = el("lsid").value.trim(); if(!id) return;
@@ -184,9 +208,11 @@ async function groundedAnswer(q, acc) {
 // ===== EMPLOYEE =====
 async function renderEmployee() {
   view.innerHTML = `<div class="card"><h3>Loan Requests — Review Queue</h3><div id="lq">Loading…</div></div>
+    <div class="card" style="margin-top:16px"><h3>Decision Explanation</h3><div id="whybox" class="mut">Select <b>Why</b> on a loan to see the risk scorecard and the principal (adverse-action) reasons.</div></div>
     <div class="card" style="margin-top:16px"><h3>Audit Trail</h3><div id="auditbox" class="mut">Select a loan to view its immutable audit trail.</div></div>`;
   let loans = await api("loan","v1/loans");
   if (loans.__demo || !Array.isArray(loans)) { loans = DEMO.loans; }
+  S.empLoans = loans;
   el("lq").innerHTML = `<table><thead><tr><th>Loan</th><th>Customer</th><th class="right">Amount</th><th>Term</th><th>Risk</th><th>Status</th><th>Actions</th></tr></thead><tbody>${
     loans.map(l=>{ const rec=(l.risk&&l.risk.recommendation)||l.recommendation||"-"; const rs=(l.risk&&l.risk.risk_score)??l.risk_score??"-";
     return `<tr>
@@ -198,10 +224,17 @@ async function renderEmployee() {
         <button class="bad" data-d="REJECT" data-id="${l.loan_id}">Reject</button>
         <button class="warn" data-d="REQUEST_MODIFICATION" data-id="${l.loan_id}">Modify</button>
         <button class="ghost" data-d="COUNTEROFFER" data-id="${l.loan_id}">Counter</button>
+        <button class="ghost" data-w="${l.loan_id}">Why</button>
         <button class="ghost" data-a="${l.loan_id}">Audit</button>
       </td></tr>`; }).join("")}</tbody></table>`;
   el("lq").querySelectorAll("button[data-d]").forEach(b=>b.onclick=()=>decide(b.dataset.id,b.dataset.d));
+  el("lq").querySelectorAll("button[data-w]").forEach(b=>b.onclick=()=>showWhy(b.dataset.w));
   el("lq").querySelectorAll("button[data-a]").forEach(b=>b.onclick=()=>showAudit(b.dataset.a));
+}
+function showWhy(id){
+  const l=(S.empLoans||[]).find(x=>x.loan_id===id); if(!l) return;
+  el("whybox").classList.remove("mut");
+  el("whybox").innerHTML = `<div class="mut" style="font-size:12px;margin-bottom:6px">${l.customer_name||''} · ${l.loan_id}</div>` + riskExplainHtml(loanRisk(l));
 }
 async function decide(id, decision) {
   let body = { decision, rationale: "reviewed in console" };
