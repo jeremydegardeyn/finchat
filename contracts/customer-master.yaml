@@ -1,0 +1,57 @@
+# FinChat Data Contract — Customer Master
+apiVersion: finchat.datacontract/v1
+id: customer-master
+version: 2.0.0
+status: active
+displayName: Customer Master
+domain: customer
+dataProduct: Customer Master
+asset: bigquery:strongsville-city-schools.finchat_silver_<env>.customer
+
+owner:
+  product: customer-product@datadinosaur.com
+  steward: data-steward@datadinosaur.com
+classification: PII_DIRECT                  # name/email behind policy tags
+
+description: >
+  Authoritative single source of truth for customer identity and demographics.
+  CRITICAL master data; direct PII is column-level protected and masked for
+  non-privileged readers.
+
+schema:
+  primaryKey: [customer_id]
+  naturalKey: [customer_natural_key]
+  columns:
+    - {name: customer_id,          type: STRING, required: true,  description: "PK (UUID)"}
+    - {name: customer_natural_key, type: STRING, required: true,  description: "Gov-ID hash (NK)"}
+    - {name: full_name,            type: STRING, required: false, classification: PII_DIRECT}
+    - {name: email,                type: STRING, required: false, classification: PII_DIRECT}
+    - {name: segment,              type: STRING, required: false}
+    - {name: created_at,           type: TIMESTAMP, required: true}
+    - {name: ingest_time,          type: TIMESTAMP, required: true}
+
+quality:
+  - {column: customer_id,          dimension: UNIQUENESS, rule: unique}
+  - {column: customer_natural_key, dimension: VALIDITY,   rule: non_null}
+
+sla:
+  freshness: "<=24h"
+  availability: "99.95%"
+  maxQueryLatencyP95: "2s"
+
+guarantees:
+  - customer_id is stable and never reused.
+  - full_name/email returned only to fine-grained readers; masked otherwise.
+
+access:
+  approval:
+    approvers: [customer-product@datadinosaur.com]
+  groups:
+    - {id: crm,          group: crm-team@datadinosaur.com,     roles: [roles/bigquery.dataViewer]}
+    - {id: data-science, group: data-science@datadinosaur.com, roles: [roles/bigquery.dataViewer]}
+
+lineage:
+  upstream: [dataflow:txn-pipeline, seed:dimensions]
+  downstream: [gold.account_summary, daas-api, finchat-agent]
+
+deprecationPolicy: "180-day notice (critical master data)."

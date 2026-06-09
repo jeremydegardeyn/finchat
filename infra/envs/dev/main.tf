@@ -204,9 +204,17 @@ module "catalog" {
   env            = var.env
   name_prefix    = var.name_prefix
   silver_dataset = module.bigquery.silver_dataset
-  # Lets the Dataplex scan service agent read PII_FINANCIAL columns it profiles.
-  financial_policy_tag_id = module.bigquery.policy_tag_ids["pii_financial"]
-  labels                  = local.labels
+  # Lets the Dataplex scan service agent read policy-tag-protected columns it profiles.
+  policy_tag_ids = module.bigquery.policy_tag_ids
+  # Insights: one data-profile scan per product.
+  profile_targets = [
+    { id = "deposit-transactions", dataset = module.bigquery.silver_dataset, table = "transaction" },
+    { id = "customer-master", dataset = module.bigquery.silver_dataset, table = "customer" },
+    { id = "overdraft-history", dataset = module.bigquery.gold_dataset, table = "overdraft_history" },
+    { id = "loan-master", dataset = module.bigquery.loans_dataset, table = "loan_status" },
+    { id = "bank-knowledge-base", dataset = "${var.name_prefix}_kb_${var.env}", table = "kb_chunks" },
+  ]
+  labels = local.labels
 }
 
 # --- Model Armor (agent prompt/response screening) ---------------------------

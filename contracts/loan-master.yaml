@@ -1,0 +1,57 @@
+# FinChat Data Contract — Loan Master
+apiVersion: finchat.datacontract/v1
+id: loan-master
+version: 0.9.0
+status: candidate          # not yet frozen — contract may still change
+displayName: Loan Master
+domain: lending
+dataProduct: Loan Master
+asset: bigquery:strongsville-city-schools.finchat_loans_<env>.loan_status
+
+owner:
+  product: lending-product@datadinosaur.com
+  steward: data-steward@datadinosaur.com
+classification: PII_FINANCIAL
+
+description: >
+  Loan applications, computed risk scores and current approval status. The
+  loan_status view projects the latest decision over an append-only audit trail
+  (loan_request / credit_profile / risk_assessment / approval_decision /
+  loan_audit_log) for full lineage and reproducibility.
+
+schema:
+  primaryKey: [loan_id]
+  columns:
+    - {name: loan_id,       type: STRING,    required: true,  description: "PK"}
+    - {name: customer_name, type: STRING,    required: true}
+    - {name: amount,        type: NUMERIC,   required: true,  classification: PII_FINANCIAL}
+    - {name: term_months,   type: INT64,     required: true}
+    - {name: risk_score,    type: INT64,     required: false, description: "0-1000"}
+    - {name: decision,      type: STRING,    required: false, allowed: [APPROVE, DECLINE, REVIEW]}
+    - {name: status,        type: STRING,    required: true,  description: "Latest status"}
+    - {name: updated_at,    type: TIMESTAMP, required: true}
+
+quality:
+  - {column: loan_id,    dimension: UNIQUENESS, rule: unique}
+  - {column: risk_score, dimension: VALIDITY,   rule: range, min: 0, max: 1000}
+
+sla:
+  freshness: "near-real-time"     # updated on each decision
+  availability: "99.9%"
+
+guarantees:
+  - status always reflects the most recent approval_decision row.
+  - Every state change is recorded in loan_audit_log (immutable).
+
+access:
+  approval:
+    approvers: [lending-product@datadinosaur.com]
+  groups:
+    - {id: underwriting,  group: underwriting-team@datadinosaur.com, roles: [roles/bigquery.dataViewer]}
+    - {id: risk-analysts, group: risk-analysts@datadinosaur.com,     roles: [roles/bigquery.dataViewer]}
+
+lineage:
+  upstream: [loan-api, gold.account_summary]
+  downstream: [finchat-agent, risk-models]
+
+deprecationPolicy: "Candidate — contract not frozen; breaking changes possible pre-1.0."

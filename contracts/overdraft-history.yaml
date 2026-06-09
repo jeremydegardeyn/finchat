@@ -1,0 +1,53 @@
+# FinChat Data Contract — Overdraft History
+apiVersion: finchat.datacontract/v1
+id: overdraft-history
+version: 1.0.1
+status: active
+displayName: Overdraft History
+domain: risk
+dataProduct: Overdraft History
+asset: bigquery:strongsville-city-schools.finchat_gold_<env>.overdraft_history
+
+owner:
+  product: risk-product@datadinosaur.com
+  steward: data-steward@datadinosaur.com
+classification: PII_FINANCIAL
+
+description: >
+  Negative-balance (overdraft) events aggregated from certified silver
+  transactions, used for credit and liquidity risk decisioning (gold layer).
+
+schema:
+  primaryKey: [overdraft_id]
+  columns:
+    - {name: overdraft_id, type: STRING,    required: true,  description: "PK"}
+    - {name: account_id,   type: STRING,    required: true,  description: "FK -> account"}
+    - {name: customer_id,  type: STRING,    required: true,  description: "FK -> customer"}
+    - {name: amount,       type: NUMERIC,   required: true,  classification: PII_FINANCIAL}
+    - {name: occurred_at,  type: TIMESTAMP, required: true}
+    - {name: resolved_at,  type: TIMESTAMP, required: false}
+
+quality:
+  - {column: overdraft_id, dimension: UNIQUENESS, rule: unique}
+  - {column: amount,       dimension: VALIDITY,   rule: non_null}
+
+sla:
+  freshness: "<=24h"
+  availability: "99.9%"
+
+guarantees:
+  - One row per overdraft event; derived only from CERTIFIED silver transactions.
+  - resolved_at null => overdraft still open.
+
+access:
+  approval:
+    approvers: [risk-product@datadinosaur.com]
+  groups:
+    - {id: risk-analysts, group: risk-analysts@datadinosaur.com,   roles: [roles/bigquery.dataViewer]}
+    - {id: collections,   group: collections-team@datadinosaur.com, roles: [roles/bigquery.dataViewer]}
+
+lineage:
+  upstream: [silver.transaction]
+  downstream: [risk-models, finchat-agent]
+
+deprecationPolicy: "90-day notice."

@@ -1,0 +1,55 @@
+# FinChat Data Contract — Bank Knowledge Base
+apiVersion: finchat.datacontract/v1
+id: bank-knowledge-base
+version: 1.1.0
+status: active
+displayName: Bank Knowledge Base
+domain: marketing
+dataProduct: Bank Knowledge Base
+asset: bigquery:strongsville-city-schools.finchat_kb_<env>.kb_chunks
+
+owner:
+  product: ai-platform@datadinosaur.com
+  steward: data-steward@datadinosaur.com
+classification: PUBLIC
+
+description: >
+  Chunked, embedded policy/product documents that ground the FinChat agent.
+  Vectors are produced by BigQuery ML.GENERATE_EMBEDDING and retrieved via
+  VECTOR_SEARCH for retrieval-augmented generation (RAG).
+
+schema:
+  primaryKey: [chunk_id]
+  columns:
+    - {name: chunk_id,   type: STRING,           required: true,  description: "PK"}
+    - {name: source_doc, type: STRING,           required: true,  description: "Citation source"}
+    - {name: section,    type: STRING,           required: false}
+    - {name: content,    type: STRING,           required: true,  description: "Chunk text"}
+    - {name: embedding,  type: ARRAY<FLOAT64>,   required: true,  description: "768-dim vector"}
+    - {name: ingest_time, type: TIMESTAMP,       required: true}
+
+quality:
+  - {column: chunk_id, dimension: UNIQUENESS, rule: unique}
+  - {column: content,  dimension: VALIDITY,   rule: non_null}
+
+sla:
+  freshness: "on-publish"
+  availability: "99.5%"
+
+guarantees:
+  - embedding dimensionality is 768 (text-embedding model).
+  - source_doc + section retained for every chunk to support citations.
+  - Re-embedded whenever the embedding model version changes.
+
+access:
+  approval:
+    approvers: [ai-platform@datadinosaur.com]
+  groups:
+    - {id: ai-platform, group: ai-platform@datadinosaur.com,    roles: [roles/bigquery.dataViewer]}
+    - {id: support,     group: support-agents@datadinosaur.com, roles: [roles/bigquery.dataViewer]}
+
+lineage:
+  upstream: [gcs:kb-source-docs, bq:ML.GENERATE_EMBEDDING]
+  downstream: [finchat-agent (VECTOR_SEARCH)]
+
+deprecationPolicy: "30-day notice; re-embed on model change."

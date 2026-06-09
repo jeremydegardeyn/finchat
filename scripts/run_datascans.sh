@@ -9,7 +9,10 @@ REGION="us-central1"
 ENV="${1:-dev}"
 PREFIX="finchat-${ENV}"
 
-for scan in silver-txn-profile silver-txn-quality; do
+# Per-product profile scans (Insights) + the flagship transaction quality scan.
+SCANS="deposit-transactions-profile customer-master-profile overdraft-history-profile \
+loan-master-profile bank-knowledge-base-profile silver-txn-quality"
+for scan in $SCANS; do
   id="${PREFIX}-${scan}"
   echo "→ running datascan ${id}"
   if out=$(gcloud dataplex datascans run "$id" --project="$PROJECT" --location="$REGION" 2>&1); then

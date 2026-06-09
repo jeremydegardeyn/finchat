@@ -14,14 +14,25 @@ variable "silver_dataset" {
   description = "Silver dataset id (for DQ scan targets)."
 }
 
-variable "financial_policy_tag_id" {
-  type        = string
-  default     = ""
+variable "policy_tag_ids" {
+  type        = map(string)
+  default     = {}
   description = <<-EOT
-    Resource id of the PII_FINANCIAL policy tag. The DQ/profile scans read the
-    tagged `amount`/`counterparty_account` columns, so the Dataplex scan service
-    agent must be a fine-grained reader on this tag. Leave "" to skip the grant.
+    Map of classification -> policy tag id (from the bigquery module). The DQ/
+    profile scans read policy-tag-protected columns across the products, so the
+    Dataplex scan service agent is granted fine-grained reader on each. Empty to
+    skip the grants.
   EOT
+}
+
+variable "profile_targets" {
+  type = list(object({
+    id      = string
+    dataset = string
+    table   = string
+  }))
+  default     = []
+  description = "Products to data-profile (Insights). One profile datascan per entry."
 }
 
 variable "domains" {

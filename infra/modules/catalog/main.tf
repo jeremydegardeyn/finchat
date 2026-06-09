@@ -56,20 +56,34 @@ locals {
         { name = "last_eval_scores", type = "string", index = 4 },
       ]
     }
+    "data-contract" = {
+      display = "FinChat Data Contract"
+      fields = [
+        { name = "contract_version", type = "string", index = 1 },
+        { name = "status", type = "enum", index = 2, enumValues = [
+          { name = "ACTIVE", index = 1 }, { name = "CANDIDATE", index = 2 },
+        { name = "DEPRECATED", index = 3 }] },
+        { name = "freshness_sla", type = "string", index = 3 },
+        { name = "availability_sla", type = "string", index = 4 },
+        { name = "guarantees", type = "string", index = 5 },
+        { name = "deprecation_policy", type = "string", index = 6 },
+        { name = "contract_ref", type = "string", index = 7 },
+      ]
+    }
   }
 }
 
 # Dataplex runs scans as its per-project service agent. To profile/quality-scan
-# the silver transaction table it must read the PII_FINANCIAL-tagged columns
-# (`amount`, `counterparty_account`), so grant that agent fine-grained reader on
-# the tag — same CLS pattern as the DaaS API SA.
+# the policy-tag-protected columns across the products (PII_FINANCIAL on amounts,
+# PII_DIRECT on customer name/email, etc.) it must be a fine-grained reader on
+# every tag — same CLS pattern as the DaaS API SA.
 data "google_project" "this" {
   project_id = var.project_id
 }
 
-resource "google_data_catalog_policy_tag_iam_member" "scan_financial_reader" {
-  count      = var.financial_policy_tag_id == "" ? 0 : 1
-  policy_tag = var.financial_policy_tag_id
+resource "google_data_catalog_policy_tag_iam_member" "scan_reader" {
+  for_each   = var.policy_tag_ids
+  policy_tag = each.value
   role       = "roles/datacatalog.categoryFineGrainedReader"
   member     = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-dataplex.iam.gserviceaccount.com"
 }
@@ -102,15 +116,20 @@ resource "google_dataplex_entry_group" "domains" {
   labels         = var.labels
 }
 
-# --- Data Quality + Profile scans (publish DQ scores to the catalog) ---------
-resource "google_dataplex_datascan" "silver_txn_profile" {
+# --- Insights: Data Profile scans (one per product) --------------------------
+# Profile scans are schema-agnostic and feed the "Insights" surface (row counts,
+# null ratios, distributions) which catalog_bootstrap.py publishes to each entry's
+# operational aspect. Data-driven from var.profile_targets so all 5 products are
+# covered uniformly.
+resource "google_dataplex_datascan" "product_profile" {
+  for_each     = { for t in var.profile_targets : t.id => t }
   project      = var.project_id
   location     = var.region
-  data_scan_id = "${local.prefix}-silver-txn-profile"
+  data_scan_id = "${local.prefix}-${each.value.id}-profile"
   labels       = var.labels
-  depends_on   = [google_data_catalog_policy_tag_iam_member.scan_financial_reader]
+  depends_on   = [google_data_catalog_policy_tag_iam_member.scan_reader]
   data {
-    resource = "//bigquery.googleapis.com/projects/${var.project_id}/datasets/${var.silver_dataset}/tables/transaction"
+    resource = "//bigquery.googleapis.com/projects/${var.project_id}/datasets/${each.value.dataset}/tables/${each.value.table}"
   }
   execution_spec {
     trigger {
@@ -120,12 +139,13 @@ resource "google_dataplex_datascan" "silver_txn_profile" {
   data_profile_spec {}
 }
 
+# --- Detailed Data Quality scan for the flagship product (DQ score + rules) ---
 resource "google_dataplex_datascan" "silver_txn_quality" {
   project      = var.project_id
   location     = var.region
   data_scan_id = "${local.prefix}-silver-txn-quality"
   labels       = var.labels
-  depends_on   = [google_data_catalog_policy_tag_iam_member.scan_financial_reader]
+  depends_on   = [google_data_catalog_policy_tag_iam_member.scan_reader]
   data {
     resource = "//bigquery.googleapis.com/projects/${var.project_id}/datasets/${var.silver_dataset}/tables/transaction"
   }

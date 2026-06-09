@@ -1,0 +1,60 @@
+# FinChat Data Contract — Deposit Transactions
+# Schema/quality clauses mirror infra/modules/bigquery (silver.transaction).
+apiVersion: finchat.datacontract/v1
+id: deposit-transactions
+version: 1.2.0
+status: active            # active | candidate | deprecated
+displayName: Deposit Transactions
+domain: deposits
+dataProduct: Deposit Transactions          # Dataplex Data Product display name
+asset: bigquery:strongsville-city-schools.finchat_silver_<env>.transaction
+
+owner:
+  product: deposits-product@datadinosaur.com
+  steward: data-steward@datadinosaur.com
+classification: PII_FINANCIAL              # column-level policy tags enforce CLS
+
+description: >
+  Posted deposit / withdrawal / transfer / fee events on deposit accounts.
+  Cleansed, conformed and de-identified in the silver layer; the canonical
+  transaction record consumed by the DaaS API and the FinChat agent.
+
+schema:
+  primaryKey: [idempotency_key]
+  columns:
+    - {name: idempotency_key, type: STRING,  required: true,  description: "Natural key for MERGE dedup"}
+    - {name: account_id,      type: STRING,  required: true,  description: "FK -> account"}
+    - {name: txn_type,        type: STRING,  required: true,  allowed: [DEPOSIT, WITHDRAWAL, TRANSFER, FEE]}
+    - {name: amount,          type: NUMERIC, required: true,  classification: PII_FINANCIAL}
+    - {name: currency,        type: STRING,  required: true}
+    - {name: counterparty_account, type: STRING, required: false, classification: PII_FINANCIAL}
+    - {name: status,          type: STRING,  required: true}
+    - {name: event_time,      type: TIMESTAMP, required: true, description: "Partition column"}
+    - {name: ingest_time,     type: TIMESTAMP, required: true}
+
+quality:                                   # enforced by Dataplex DQ datascan
+  - {column: amount,          dimension: VALIDITY,   rule: non_null}
+  - {column: txn_type,        dimension: VALIDITY,   rule: set, values: [DEPOSIT, WITHDRAWAL, TRANSFER, FEE]}
+  - {column: idempotency_key, dimension: UNIQUENESS, rule: unique}
+
+sla:
+  freshness: "<=15m"        # silver lag from event_time
+  availability: "99.9%"
+  maxQueryLatencyP95: "2s"
+
+guarantees:
+  - Append-only; no in-place mutation of posted transactions.
+  - amount/counterparty_account masked unless caller is a fine-grained reader.
+
+access:
+  approval:
+    approvers: [deposits-product@datadinosaur.com]
+  groups:                                  # consumers that may request access
+    - {id: analysts,     group: deposit-analysts@datadinosaur.com, roles: [roles/bigquery.dataViewer]}
+    - {id: data-science, group: data-science@datadinosaur.com,     roles: [roles/bigquery.dataViewer]}
+
+lineage:
+  upstream: [pubsub:transactions-events, dataflow:txn-pipeline]
+  downstream: [gold.account_summary, gold.overdraft_history, daas-api, finchat-agent]
+
+deprecationPolicy: "90-day notice; n-1 schema version supported in parallel."
