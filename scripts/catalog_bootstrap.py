@@ -79,11 +79,11 @@ def create_glossary():
     subprocess.run([GCLOUD, "dataplex", "glossaries", "create", gid,
                     f"--project={PROJECT}", f"--location={REGION}",
                     "--display-name=FinChat Banking Glossary"], check=False)
-    parent = f"projects/{PROJECT}/locations/{REGION}/glossaries/{gid}"
     for term, desc in GLOSSARY_TERMS.items():
-        subprocess.run([GCLOUD, "dataplex", "glossaries", "terms", "create", term,
-                        f"--parent={parent}", f"--display-name={term}",
-                        f"--description={desc}"], check=False)
+        # Fully-qualified term name resolves project/location/glossary in one arg.
+        term_name = f"projects/{PROJECT}/locations/{REGION}/glossaries/{gid}/terms/{term}"
+        subprocess.run([GCLOUD, "dataplex", "glossaries", "terms", "create", term_name,
+                        f"--display-name={term}", f"--description={desc}"], check=False)
     print(f"glossary {gid}: {len(GLOSSARY_TERMS)} terms (409 'already exists' is OK)")
 
 
@@ -99,28 +99,37 @@ def attach_aspects(num: str):
         print("    run: pip install -U google-cloud-dataplex   (need CatalogServiceClient)")
         return
     client = dataplex_v1.CatalogServiceClient()
-    dp_key = f"{num}.{REGION}.{PREFIX}-data-product"
-    gov_key = f"{num}.{REGION}.{PREFIX}-governance"
-    dp_type = f"projects/{PROJECT}/locations/{REGION}/aspectTypes/{PREFIX}-data-product"
-    gov_type = f"projects/{PROJECT}/locations/{REGION}/aspectTypes/{PREFIX}-governance"
+    # Aspect types are GLOBAL (see catalog module) so they're usable by BQ entries.
+    dp_key = f"{num}.global.{PREFIX}-data-product"
+    gov_key = f"{num}.global.{PREFIX}-governance"
+    dp_type = f"projects/{PROJECT}/locations/global/aspectTypes/{PREFIX}-data-product"
+    gov_type = f"projects/{PROJECT}/locations/global/aspectTypes/{PREFIX}-governance"
 
     scope = f"projects/{PROJECT}/locations/global"
     for p in PRODUCTS:
         try:
-            # Find the BigQuery entry: try lookup-by-FQN, else fall back to search.
+            # Find the BigQuery entry. Search by TABLE NAME (not the product display
+            # name) and match on the fully-qualified name; fall back to lookup-by-FQN.
+            table = p["fqn"].split(".")[-1]
             entry = None
             try:
-                entry = client.lookup_entry(request={
-                    "name": scope, "fully_qualified_name": p["fqn"], "view": "ALL"})
-            except Exception:
                 for res in client.search_entries(request={
-                        "name": scope, "query": p["product"], "page_size": 1}):
+                        "name": scope, "query": table, "page_size": 10}):
                     de = getattr(res, "dataplex_entry", None)
-                    if de and de.name:
+                    fqn = (getattr(de, "fully_qualified_name", "") or res.linked_resource or "")
+                    if de and de.name and (p["fqn"] in fqn or fqn.endswith(table)):
                         entry = client.get_entry(request={"name": de.name, "view": "ALL"})
-                    break
+                        break
+            except Exception:
+                pass
             if entry is None:
-                print(f"  ✗ {p['product']:24s} entry not found in catalog")
+                try:
+                    entry = client.lookup_entry(request={
+                        "name": scope, "fully_qualified_name": p["fqn"], "view": "ALL"})
+                except Exception:
+                    pass
+            if entry is None:
+                print(f"  ✗ {p['product']:24s} entry not found ({p['fqn']})")
                 continue
             dp_data = struct_pb2.Struct(); dp_data.update({
                 "business_domain": p["domain"], "product_owner": p["owner"],

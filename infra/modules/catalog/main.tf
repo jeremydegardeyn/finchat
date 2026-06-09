@@ -60,9 +60,12 @@ locals {
 }
 
 resource "google_dataplex_aspect_type" "types" {
-  for_each       = local.aspect_types
-  project        = var.project_id
-  location       = var.region
+  for_each = local.aspect_types
+  project  = var.project_id
+  # GLOBAL so the aspect types are usable by BigQuery catalog entries regardless of
+  # region (BQ entries land in the 'us' multi-region; a us-central1 aspect type is
+  # rejected as "not usable by entries in region 'us'").
+  location       = "global"
   aspect_type_id = "${local.prefix}-${each.key}"
   display_name   = each.value.display
   labels         = var.labels
