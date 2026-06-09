@@ -1,21 +1,36 @@
-# PROD — illustrates promotion to the enterprise cost profile.
-# Even here we keep defaults conservative; flip toggles deliberately.
+# prod — copy to terraform.tfvars and fill real values. terraform.tfvars is GITIGNORED.
+# Every configurable variable is listed so all knobs are discoverable.
+
+# --- Identity ---
 project_id  = "strongsville-city-schools"
 region      = "us-central1"
 env         = "prod"
 name_prefix = "finchat"
 
-privileged_group   = "group:fraud-ops@datadinosaur.com"
-notification_email = "alerts@datadinosaur.com"
+# --- Governance ---
+privileged_group   = ""   # e.g. "user:you@datadinosaur.com" — fine-grained PII reader
+notification_email = ""   # ops alerts + budget notifications
 
-# Cost guardrails (always on in prod)
-enable_budget     = true
-billing_account   = "XXXXXX-XXXXXX-XXXXXX"
-budget_amount_usd = 50
+# --- Cost guardrails ---
+enable_budget     = false # true + billing_account to create budget alerts
+billing_account   = ""    # "XXXXXX-XXXXXX-XXXXXX"
+budget_amount_usd = 25
 
-# Enterprise toggles — turn on as the business requires latency/throughput SLOs.
-# (Each one increases cost; see docs/08-cost-estimate.md.)
-enable_streaming_job = false # -> true for 24/7 Dataflow (real cost)
-run_min_instances    = 0     # -> 1+ for warm Cloud Run (no cold start)
-enable_api_gateway   = true  # OpenAPI present after Increment 3
-enable_workflows     = true  # workflow source present after Increment 4
+# --- Enterprise toggles (default OFF -> near-zero cost) ---
+enable_streaming_job = false # 24/7 Dataflow (REAL cost) vs on-demand drain
+run_min_instances    = 0     # warm Cloud Run (REAL cost) vs scale-to-zero
+enable_api_gateway   = false # API Gateway in front of DaaS (~free)
+enable_workflows     = false # loan Cloud Workflow (~free)
+
+# --- Security ---
+enable_model_armor       = true  # Model Armor LLM screening template
+enable_model_armor_floor = false # org/project-wide MA enforcement (needs elevated perms)
+
+# --- Knowledge Catalog (Dataplex Universal Catalog) ---
+enable_catalog = false # aspect types + domain entry groups + DQ scans (docs/12)
+
+# --- Custom domain (verify ownership first; one host -> one UI service) ---
+custom_domain = "" # e.g. "finchat-prod.datadinosaur.com"
+
+# --- Labels ---
+labels = { app = "finchat", managed_by = "terraform" }

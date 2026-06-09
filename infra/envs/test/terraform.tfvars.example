@@ -1,20 +1,36 @@
-# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored.
+# test — copy to terraform.tfvars and fill real values. terraform.tfvars is GITIGNORED.
+# Every configurable variable is listed so all knobs are discoverable.
+
+# --- Identity ---
 project_id  = "strongsville-city-schools"
 region      = "us-central1"
 env         = "test"
 name_prefix = "finchat"
 
-# Governance
-privileged_group   = "" # e.g. "group:fraud-ops@datadinosaur.com"
-notification_email = "" # e.g. "alerts@datadinosaur.com"
+# --- Governance ---
+privileged_group   = ""   # e.g. "user:you@datadinosaur.com" — fine-grained PII reader
+notification_email = ""   # ops alerts + budget notifications
 
-# Cost guardrails
-enable_budget     = false # set true + billing_account to create a budget alert
+# --- Cost guardrails ---
+enable_budget     = false # true + billing_account to create budget alerts
 billing_account   = ""    # "XXXXXX-XXXXXX-XXXXXX"
 budget_amount_usd = 25
 
-# Enterprise toggles (keep OFF for near-zero cost)
-enable_streaming_job = false # true = 24/7 Dataflow streaming
-run_min_instances    = 0     # >0 = warm Cloud Run
-enable_api_gateway   = false # true after Increment 3 (OpenAPI spec)
-enable_workflows     = false # true after Increment 4 (workflow source)
+# --- Enterprise toggles (default OFF -> near-zero cost) ---
+enable_streaming_job = false # 24/7 Dataflow (REAL cost) vs on-demand drain
+run_min_instances    = 0     # warm Cloud Run (REAL cost) vs scale-to-zero
+enable_api_gateway   = false # API Gateway in front of DaaS (~free)
+enable_workflows     = false # loan Cloud Workflow (~free)
+
+# --- Security ---
+enable_model_armor       = true  # Model Armor LLM screening template
+enable_model_armor_floor = false # org/project-wide MA enforcement (needs elevated perms)
+
+# --- Knowledge Catalog (Dataplex Universal Catalog) ---
+enable_catalog = false # aspect types + domain entry groups + DQ scans (docs/12)
+
+# --- Custom domain (verify ownership first; one host -> one UI service) ---
+custom_domain = "" # e.g. "finchat-test.datadinosaur.com"
+
+# --- Labels ---
+labels = { app = "finchat", managed_by = "terraform" }
