@@ -1,4 +1,4 @@
-# ADR-0010 — Dataplex Universal Catalog as the enterprise discovery / metadata / AI-context layer
+# ADR-0011 — Dataplex Universal Catalog as the enterprise discovery / metadata / AI-context layer
 
 - **Status:** Accepted
 - **Date:** 2026-06-08

@@ -288,5 +288,5 @@ agent-to-product reads — giving regulators end-to-end provenance for any figur
 pipelines, the serving APIs, or the agents' runtime. Discoverability, governance visibility, and AI
 readiness improve while the proven architecture stays intact.
 
-See [ADR-0010](adr/0010-dataplex-universal-catalog.md) and the Terraform module
+See [ADR-0011](adr/0011-dataplex-universal-catalog.md) and the Terraform module
 [`infra/modules/catalog`](../infra/modules/catalog/).

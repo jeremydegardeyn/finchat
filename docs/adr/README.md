@@ -13,9 +13,8 @@ Lightweight ADRs capturing significant, hard-to-reverse decisions and their rati
 | [0007](0007-cloud-run-vs-gke.md) | Cloud Run over GKE for service hosting | Accepted |
 | [0008](0008-model-armor-llm-screening.md) | Model Armor for runtime LLM I/O screening | Accepted |
 | [0009](0009-bigquery-vector-rag.md) | BigQuery-vector RAG for the conversational agent | Accepted |
-| [0010](0010-dataplex-universal-catalog.md) | Dataplex Universal Catalog as discovery/metadata/AI-context layer | Accepted |
-| [0009](0009-bigquery-vector-rag.md) | RAG via BigQuery vector search | Accepted |
 | [0010](0010-agents-on-cloud-run.md) | Agents on Cloud Run (scale-to-zero) over Agent Engine | Accepted |
+| [0011](0011-dataplex-universal-catalog.md) | Dataplex Universal Catalog as discovery/metadata/AI-context layer | Accepted |
 
 _Future ADRs (planned): row/column-level security model, idempotency & exactly-once strategy,
 multi-agent state management, environment promotion gating._

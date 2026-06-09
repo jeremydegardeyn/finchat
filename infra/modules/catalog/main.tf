@@ -1,5 +1,5 @@
 ###############################################################################
-# Knowledge Catalog (Dataplex Universal Catalog) module — ADR-0010 / docs/12.
+# Knowledge Catalog (Dataplex Universal Catalog) module — ADR-0011 / docs/12.
 # Overlay only: aspect types (metadata model), business-domain entry groups,
 # and data-quality/profile scans that publish DQ scores back to the catalog.
 # No change to BigQuery storage, pipelines, or serving.
