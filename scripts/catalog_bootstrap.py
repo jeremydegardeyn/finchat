@@ -197,11 +197,100 @@ def publish_insights(num: str):
             print(f"  ✗ {p['display']:24s} {type(e).__name__}: {e}")
 
 
+def enrich_data_products(num: str):
+    """Attach the FinChat aspects (+ a rich overview) to each **data-product
+    entry** (entryGroup @dataplex, regional) so they show on the Data Products
+    page's *Aspects* tab. Run data_products.py first (creates the entries).
+
+    The page's *Contract* and *Insights→Query-recommendations* tabs use Google's
+    gated system aspect types ('contract', 'query-recommendations') that aren't
+    usable via the public API — add those via the console '+ Add'/'Edit' (the
+    same guarantees live in the data-contract aspect + contracts/<id>.yaml)."""
+    try:
+        from google.cloud import dataplex_v1
+        from google.protobuf import struct_pb2
+        from google.api_core.exceptions import NotFound
+    except ImportError:
+        print("  ✗ run: pip install -U google-cloud-dataplex"); return
+    client = dataplex_v1.CatalogServiceClient()
+
+    def key(k):
+        return f"{num}.global.{PREFIX}-{k}"
+
+    def at(k):
+        return f"projects/{PROJECT}/locations/global/aspectTypes/{PREFIX}-{k}"
+
+    def aspect(atype, fields):
+        s = struct_pb2.Struct(); s.update(fields)
+        return dataplex_v1.Aspect(aspect_type=atype, data=s)
+
+    for p in PRODUCTS:
+        dp_id = f"finchat-{ENV}-{p['id']}"
+        name = (f"projects/{num}/locations/{REGION}/entryGroups/@dataplex/entries/"
+                f"projects/{num}/locations/{REGION}/dataProducts/{dp_id}")
+        try:
+            entry = client.get_entry(request={"name": name, "view": "ALL"})
+        except NotFound:
+            print(f"  ✗ {p['display']:24s} data-product entry not found (run data_products.py first)")
+            continue
+        except Exception as e:
+            print(f"  ✗ {p['display']:24s} {type(e).__name__}: {e}"); continue
+        c = p["contract"]
+        asp = {
+            key("data-product"): aspect(at("data-product"), {
+                "business_domain": p["domain"], "product_owner": p["owner"],
+                "steward": p["steward"], "criticality": p["criticality"],
+                "certification_status": p["certification"], "sla": p["sla"],
+                "cost_center": p["cost_center"]}),
+            key("governance"): aspect(at("governance"), {"pii_classification": p["pii"]}),
+            key("data-contract"): aspect(at("data-contract"), {
+                "contract_version": c["version"],
+                "status": "CANDIDATE" if p["certification"] == "CANDIDATE" else "ACTIVE",
+                "freshness_sla": c["freshness"], "availability_sla": c["availability"],
+                "guarantees": c["guarantees"], "deprecation_policy": c["deprecation_policy"],
+                "contract_ref": f"contracts/{p['id']}.yaml"}),
+        }
+        # Insight (latest scan) -> operational aspect.
+        job = (_latest_job(f"{PREFIX}-silver-txn-quality") if p["id"] == "deposit-transactions"
+               else None) or _latest_job(f"{PREFIX}-{p['id']}-profile")
+        if job is not None:
+            if p["id"] == "deposit-transactions" and job.data_quality_result.score is not None:
+                r = job.data_quality_result
+                score = f"{float(r.score):.1f}% ({'PASS' if r.passed else 'FAIL'})"
+            else:
+                score = f"profiled: {int(job.data_profile_result.row_count)} rows"
+            asp[key("operational")] = aspect(at("operational"), {
+                "data_quality_score": score,
+                "last_dq_run": job.end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "freshness_sla": c["freshness"], "pipeline_version": "dataflow-flex"})
+        # Rich overview (system aspect, world-usable) -> product Overview.
+        overview = (f"<p><b>{p['display']}</b> — {p['description']}</p>"
+                    f"<p>Contract <b>v{c['version']}</b> ({'CANDIDATE' if p['certification']=='CANDIDATE' else 'ACTIVE'})"
+                    f" · freshness {c['freshness']} · availability {c['availability']}"
+                    f" · owner {p['owner']}</p>"
+                    f"<p>Guarantees: {c['guarantees']}</p>"
+                    f"<p>Contract as code: contracts/{p['id']}.yaml</p>")
+        asp["655216118709.global.overview"] = aspect(
+            "projects/dataplex-types/locations/global/aspectTypes/overview",
+            {"content": overview, "contentType": "HTML"})
+
+        for k, a in asp.items():
+            entry.aspects[k] = a
+        try:
+            client.update_entry(request={
+                "entry": entry, "update_mask": {"paths": ["aspects"]},
+                "aspect_keys": list(asp.keys())})
+            print(f"  ✓ {p['display']:24s} aspects+overview on data-product entry")
+        except Exception as e:
+            print(f"  ✗ {p['display']:24s} {type(e).__name__}: {e}")
+
+
 if __name__ == "__main__":
     print(f"== Catalog bootstrap ({ENV}) ==")
     num = project_number()
     print("project number:", num)
     print("-- glossary --"); create_glossary()
-    print("-- attach aspects (data-product, governance, data-contract) --"); attach_aspects(num)
-    print("-- publish insights to operational aspect --"); publish_insights(num)
+    print("-- attach aspects to BQ table entries (catalog search) --"); attach_aspects(num)
+    print("-- publish insights to operational aspect (table entries) --"); publish_insights(num)
+    print("-- enrich DATA PRODUCT entries (Data Products page Aspects tab) --"); enrich_data_products(num)
     print("Done. Search: gcloud dataplex entries search 'deposit transaction' --project", PROJECT)
