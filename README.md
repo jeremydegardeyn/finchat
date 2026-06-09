@@ -135,8 +135,36 @@ This repository is built **incrementally**. Status of each increment:
 - [x] **Increment 6 — Platform:** CI/CD (GitHub Actions: ci/build-deploy/infra), Cloud Build, Workload Identity Federation (keyless), dev→test→prod promotion. Remaining docs filled: 01 logical, 06 security, 09 governance, 10 runbook, 11 roadmap — **all 12 deliverables complete**.
 - [x] **Increment 7 — AgentOps:** eval datasets (txn + labeled loan), offline eval pipeline (✅ runs: grounding 1.0, hallucination 0.0, tool-use 1.0, approval acc 0.875) gated in CI, Vertex eval sketch, reporting/dashboard strategy.
 - [x] **Increment 8 — Model Armor + custom domain:** Model Armor template + BFF prompt/response screening (ADR-0008); Cloud Run custom-domain module for `finchat.datadinosaur.com`.
-- [x] **Increment 10 — Knowledge Catalog (Dataplex):** discovery/metadata/AI-context overlay ([docs/12](docs/12-knowledge-catalog.md), [ADR-0011](docs/adr/0011-dataplex-universal-catalog.md)) — `catalog` Terraform module (aspect types, domain entry groups, DQ/profile scans; `enable_catalog` toggle), `discover_data_product` agent tool, glossary/aspect bootstrap + data-scan scripts.
+- [x] **Increment 10 — Knowledge Catalog & Data Products (Dataplex):** discovery/metadata/AI-context overlay ([docs/12](docs/12-knowledge-catalog.md), [ADR-0011](docs/adr/0011-dataplex-universal-catalog.md)) — `catalog` Terraform module (aspect types incl. **data-contract**, domain entry groups, per-product profile + DQ scans, scan-SA fine-grained reader; `enable_catalog` toggle), `discover_data_product` agent tool. **Each of the 5 products published as a first-class Dataplex Data Product** with **contracts** (`contracts/*.yaml` + aspect), **insights** (profile/DQ → operational aspect), and **access groups** (consumer personas + approver, request-to-access). Single source of truth in `scripts/products_catalog.py`; driven by `catalog_bootstrap.py` + `data_products.py` (preview Data Products REST API). Loans dataset made TF-managed/co-located (`us-central1`) to satisfy data-product co-location.
 - [x] **Increment 9 — Live deploy & hardening (dev/test/prod):** CI/CD active (WIF), all services deployed; **agents on Cloud Run** (scale-to-zero, [ADR-0010](docs/adr/0010-agents-on-cloud-run.md)); **RAG** knowledge base via BigQuery `VECTOR_SEARCH` ([ADR-0009](docs/adr/0009-bigquery-vector-rag.md)); **BFF OIDC** to private backends; column-level-security serving grant; customer/account **dimension seed**. DaaS API ✅ live (balance/history/summary 200 on real data). **Build complete + running.**
+
+---
+
+## 4a. Knowledge Catalog & Data Products
+
+Every data product is governed and discoverable on two surfaces: the **Universal
+Catalog** (aspects on the BigQuery entry) and a **first-class Dataplex Data
+Product** (the console *Data products* page). Per product:
+
+| Facet | Meaning | Source |
+|---|---|---|
+| **Aspects** | `data-product` (owner/criticality/cert/SLA), `governance` (PII class), `data-contract` (version/SLA/guarantees), `operational` (DQ/insights) | `scripts/catalog_bootstrap.py` |
+| **Contracts** | Versioned producer promise — schema, quality, SLAs, access, lineage, deprecation | [`contracts/*.yaml`](contracts/) (code) → `data-contract` aspect |
+| **Insights** | Profile + data-quality scan results (row counts, null %, rules → DQ score) | Dataplex datascans → `operational` aspect |
+| **Access groups** | Consumer personas (Google groups) that **request access**, approval-gated; per-asset IAM on approval | `scripts/data_products.py` |
+
+The 5 products, their assets, and metadata are a single source of truth in
+[`scripts/products_catalog.py`](scripts/products_catalog.py). Bring it up per env:
+
+```bash
+cd infra/envs/<env> && terraform apply           # enable_catalog = true
+./scripts/run_datascans.sh <env>                 # insights (profile/DQ scans)
+python scripts/catalog_bootstrap.py <env>        # glossary + aspects + publish insights
+python scripts/data_products.py <env>            # data products + access groups
+```
+
+Full design + diagrams (data-product anatomy, access-request flow, lineage):
+[docs/12](docs/12-knowledge-catalog.md).
 
 ---
 

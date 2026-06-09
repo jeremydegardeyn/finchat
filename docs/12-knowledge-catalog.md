@@ -101,8 +101,13 @@ data products, models, vector indexes).
 |---|---|---|
 | `finchat-data-product` | data-product entry | product_name, business_domain, product_owner, steward, criticality (`CRITICAL\|HIGH\|MEDIUM\|LOW`), certification_status (`CERTIFIED\|CANDIDATE\|DEPRECATED`), sla (freshness/availability), source_systems[], cost_center, output_ports[] |
 | `finchat-governance` | dataset/table/column | pii_classification (`PII_DIRECT\|PII_FINANCIAL\|CONFIDENTIAL\|INTERNAL\|PUBLIC`), policy_tag_ref, retention, encryption (CMEK/Google-managed), residency, lawful_basis |
-| `finchat-operational` | table/view | data_quality_score (0–100), last_dq_run, freshness_sla, owner_oncall, pipeline_version, change_ticket |
+| `finchat-operational` | table/view | data_quality_score (0–100 or profile row count), last_dq_run, freshness_sla, owner_oncall, pipeline_version, change_ticket |
+| `finchat-data-contract` | data-product entry | contract_version (semver), status (`ACTIVE\|CANDIDATE\|DEPRECATED`), freshness_sla, availability_sla, guarantees, deprecation_policy, contract_ref (→ `contracts/<id>.yaml`) |
 | `finchat-ai-asset` | model / vector index / corpus | asset_kind (`vector_index\|embedding_model\|feature_view\|agent_tool`), embedding_model, dims, grounding_for[], eval_dataset, last_eval_scores |
+
+> All five aspect types are created in the **`global`** location (BigQuery catalog
+> entries live in the `us` multi-region; a regional aspect type is rejected as "not
+> usable by entries in region 'us'"). See `infra/modules/catalog`.
 
 > The existing **policy tags drive enforcement** (column-level security); the `finchat-governance`
 > aspect **describes** the same classification for *discovery* and links to the policy tag — one source
@@ -273,7 +278,105 @@ agent-to-product reads — giving regulators end-to-end provenance for any figur
 
 ---
 
-## 9. Prioritized implementation roadmap
+## 9. Built today — Data Products, Contracts, Insights & Access Groups
+
+Beyond the catalog *overlay* (aspects on BigQuery entries), FinChat publishes each
+of the 5 products as a **first-class Dataplex Data Product** — the curated, owned,
+consumable package shown on the console **Data products** page. A data product is
+*more* than a table: it bundles **assets**, a **contract**, **insights**, and an
+**access model** consumers request against.
+
+```mermaid
+flowchart TB
+  subgraph DP["Dataplex Data Product · e.g. &quot;Deposit Transactions&quot;"]
+    META[displayName · owner emails · domain · criticality labels]
+    AST[Data assets<br/>BQ table: silver.transaction]
+    CON[Data contract<br/>contracts/deposit-transactions.yaml<br/>→ data-contract aspect]
+    INS[Insights<br/>profile / DQ datascan → operational aspect]
+    AGs[Access groups<br/>analysts · data-science<br/>+ approver emails]
+  end
+  AST -. policy tags (CLS) .-> BQ[(BigQuery)]
+  AGs -->|on approval| IAM[per-asset IAM roles]
+  classDef b fill:#1e293b,stroke:#38bdf8,color:#e2e8f0;
+  class META,AST,CON,INS,AGs b;
+```
+
+### 9.1 The four facets, per product
+
+| Facet | What it is | Where it lives | How it's set |
+|---|---|---|---|
+| **Aspects** | Governed metadata on the catalog entry | `data-product`, `governance`, `data-contract`, `operational` aspects | `scripts/catalog_bootstrap.py` |
+| **Contracts** | Producer's versioned promise (schema, quality, SLA, access, lineage) | `contracts/<id>.yaml` (code) + `data-contract` aspect summary | authored in repo; published by bootstrap |
+| **Insights** | Profiling / data-quality results | Dataplex **data-profile** scan per product (+ detailed **quality** scan for Deposit Transactions) → `operational` aspect | `infra/modules/catalog` datascans + `run_datascans.sh` + bootstrap |
+| **Access groups** | Consumer personas that can **request access** (approval-gated) + per-asset IAM granted on approval | Data Product `accessGroups` + `accessApprovalConfig`; asset `accessGroupConfigs` | `scripts/data_products.py` |
+
+Per-product values are a **single source of truth** in
+[`scripts/products_catalog.py`](../scripts/products_catalog.py), imported by both
+bootstrap scripts so contract/aspect/data-product metadata can never drift.
+
+### 9.2 Access request & approval flow
+
+Consumers don't get blanket access — each product declares **access groups** (a
+consumer persona bound to a Google group) and **approver emails**. A consumer
+issues a *request access*; the approver grants it; the access group's IAM roles
+are then applied to the product's assets.
+
+```mermaid
+sequenceDiagram
+  participant C as Consumer (analyst)
+  participant DP as Data Product
+  participant AP as Approver (product owner)
+  participant BQ as BigQuery asset
+  C->>DP: requestAccess(accessGroupId="analysts")
+  DP->>AP: access request (ChangeRequest)
+  AP->>DP: approve
+  DP->>BQ: grant access group's iamRoles (e.g. bigquery.dataViewer)
+  Note over BQ: CLS policy tags still mask PII unless<br/>the group is also a fine-grained reader
+```
+
+> **Demo vs enterprise:** the access-group *definitions* + approver config are
+> created here. Binding the IAM on approval requires the principals to be **real
+> Cloud Identity groups**; with placeholder groups it is deferred (run
+> `FINCHAT_BIND_ASSET_IAM=1 python scripts/data_products.py <env>` once the groups
+> exist). Column-level security (policy tags) is enforced independently regardless.
+
+### 9.3 Live prod state
+
+| Data product | Asset | Contract | Insight (latest scan) | Access groups |
+|---|---|---|---|---|
+| Deposit Transactions | `silver.transaction` | v1.2.0 ACTIVE | **100% PASS** (quality) | analysts, data-science |
+| Customer Master | `silver.customer` | v2.0.0 ACTIVE | 7,500 rows (profile) | crm, data-science |
+| Overdraft History | `gold.overdraft_history` | v1.0.1 ACTIVE | 7,500 rows (profile) | risk-analysts, collections |
+| Loan Master | `loans.loan_status` | v0.9.0 CANDIDATE | 0 rows (profile) | underwriting, risk-analysts |
+| Bank Knowledge Base | `kb.kb_chunks` | v1.1.0 ACTIVE | 22 rows (profile) | ai-platform, support |
+
+### 9.4 Operate it (per env)
+
+```bash
+# 1. Infra (aspect types, entry groups, datascans, scan-SA fine-grained reader)
+cd infra/envs/<env> && terraform apply        # requires enable_catalog = true
+
+# 2. Run the profile/quality scans (Insights)
+./scripts/run_datascans.sh <env>
+
+# 3. Glossary + aspects (data-product, governance, data-contract) + publish insights
+python scripts/catalog_bootstrap.py <env>
+
+# 4. Data Products: products + assets + access groups + approval
+python scripts/data_products.py <env>
+#    (real groups: FINCHAT_BIND_ASSET_IAM=1 python scripts/data_products.py <env>)
+```
+
+> **API note.** The Data Products surface is a **preview REST API**
+> (`dataplex.googleapis.com/v1/.../dataProducts`) — no `gcloud` group or Terraform
+> resource exists yet, so `scripts/data_products.py` drives it directly (idempotent,
+> polls LROs, 429 backoff). Datasets must be **co-located** with the product
+> (`us-central1`); the loans dataset is now Terraform-managed for exactly this
+> reason (see ADR-0011 / the deployment runbook).
+
+---
+
+## 10. Prioritized implementation roadmap
 
 | Phase | Effort | Enhancement | Outcome |
 |---|---|---|---|
