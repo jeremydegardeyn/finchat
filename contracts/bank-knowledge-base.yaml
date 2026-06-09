@@ -19,18 +19,17 @@ description: >
   VECTOR_SEARCH for retrieval-augmented generation (RAG).
 
 schema:
-  primaryKey: [chunk_id]
+  primaryKey: [doc_id]
   columns:
-    - {name: chunk_id,   type: STRING,           required: true,  description: "PK"}
-    - {name: source_doc, type: STRING,           required: true,  description: "Citation source"}
-    - {name: section,    type: STRING,           required: false}
-    - {name: content,    type: STRING,           required: true,  description: "Chunk text"}
-    - {name: embedding,  type: ARRAY<FLOAT64>,   required: true,  description: "768-dim vector"}
-    - {name: ingest_time, type: TIMESTAMP,       required: true}
+    - {name: doc_id,    type: STRING,         required: true,  description: "PK / citation source"}
+    - {name: title,     type: STRING,         required: true}
+    - {name: category,  type: STRING,         required: false, description: "Policy/product grouping"}
+    - {name: content,   type: STRING,         required: true,  description: "Chunk text"}
+    - {name: embedding, type: ARRAY<FLOAT64>, required: true,  description: "768-dim vector"}
 
 quality:
-  - {column: chunk_id, dimension: UNIQUENESS, rule: unique}
-  - {column: content,  dimension: VALIDITY,   rule: non_null}
+  - {column: doc_id,  dimension: UNIQUENESS, rule: unique}
+  - {column: content, dimension: VALIDITY,   rule: non_null}
 
 sla:
   freshness: "on-publish"

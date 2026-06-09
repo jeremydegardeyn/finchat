@@ -379,10 +379,11 @@ python scripts/catalog_bootstrap.py <env>
 > tab and **Insights → Query recommendations** tab are backed by Google's *gated*
 > system aspect types (`contract`, `query-recommendations`) — these return
 > `PermissionDenied` via the public API, so they're added via the console **"+ Add"
-> / "Edit"** buttons. The identical guarantees are already published as the
-> **`data-contract` aspect** (visible on the Aspects tab) and as code in
-> [`contracts/<id>.yaml`](../contracts/); the **Insights** signal (profile/DQ) is on
-> the `operational` aspect.
+> / "Edit"** buttons. **Paste-ready contract blurbs + runnable sample queries for all
+> 5 products:** [docs/13](13-data-product-console-snippets.md). The identical
+> guarantees are already published as the **`data-contract` aspect** (visible on the
+> Aspects tab) and as code in [`contracts/<id>.yaml`](../contracts/); the **Insights**
+> signal (profile/DQ) is on the `operational` aspect.
 
 > **API note.** The Data Products surface is a **preview REST API**
 > (`dataplex.googleapis.com/v1/.../dataProducts`) — no `gcloud` group or Terraform

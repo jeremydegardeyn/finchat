@@ -18,26 +18,24 @@ description: >
   transactions, used for credit and liquidity risk decisioning (gold layer).
 
 schema:
-  primaryKey: [overdraft_id]
+  primaryKey: [account_id]                 # one aggregated row per account
   columns:
-    - {name: overdraft_id, type: STRING,    required: true,  description: "PK"}
-    - {name: account_id,   type: STRING,    required: true,  description: "FK -> account"}
-    - {name: customer_id,  type: STRING,    required: true,  description: "FK -> customer"}
-    - {name: amount,       type: NUMERIC,   required: true,  classification: PII_FINANCIAL}
-    - {name: occurred_at,  type: TIMESTAMP, required: true}
-    - {name: resolved_at,  type: TIMESTAMP, required: false}
+    - {name: account_id,       type: STRING,  required: true,  description: "PK / FK -> account"}
+    - {name: overdraft_events, type: INT64,   required: true,  description: "Count of overdraft events"}
+    - {name: lowest_balance,   type: NUMERIC, required: true,  classification: PII_FINANCIAL}
+    - {name: overdraft_ratio,  type: FLOAT64, required: true,  description: "Overdraft events / total txns"}
 
 quality:
-  - {column: overdraft_id, dimension: UNIQUENESS, rule: unique}
-  - {column: amount,       dimension: VALIDITY,   rule: non_null}
+  - {column: account_id,       dimension: UNIQUENESS, rule: unique}
+  - {column: overdraft_events, dimension: VALIDITY,   rule: non_null}
 
 sla:
   freshness: "<=24h"
   availability: "99.9%"
 
 guarantees:
-  - One row per overdraft event; derived only from CERTIFIED silver transactions.
-  - resolved_at null => overdraft still open.
+  - One aggregated row per account; derived only from CERTIFIED silver transactions.
+  - overdraft_ratio in [0,1]; lowest_balance is the minimum observed balance.
 
 access:
   approval:

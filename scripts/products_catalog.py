@@ -75,7 +75,7 @@ def products(env: str) -> list[dict]:
             "description": "Negative-balance events aggregated for risk decisioning (gold).",
             "contract": {
                 "version": "1.0.1",
-                "guarantees": "One row per overdraft event; amount & resolved_at consistent; "
+                "guarantees": "One aggregated row per account; overdraft_ratio in [0,1]; "
                               "derived from certified silver transactions.",
                 "freshness": "<=24h", "availability": "99.9%",
                 "deprecation_policy": "90-day notice.",
@@ -123,8 +123,8 @@ def products(env: str) -> list[dict]:
                            "(RAG corpus with ML.GENERATE_EMBEDDING vectors).",
             "contract": {
                 "version": "1.1.0",
-                "guarantees": "chunk_id unique; embedding dim=768 (text-embedding); "
-                              "source_doc + section retained for citation.",
+                "guarantees": "doc_id unique; embedding dim=768 (text-embedding); "
+                              "title + category retained for citation.",
                 "freshness": "on-publish", "availability": "99.5%",
                 "deprecation_policy": "30-day notice; re-embed on model change.",
             },

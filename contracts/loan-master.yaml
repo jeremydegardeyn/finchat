@@ -22,14 +22,19 @@ description: >
 schema:
   primaryKey: [loan_id]
   columns:
-    - {name: loan_id,       type: STRING,    required: true,  description: "PK"}
-    - {name: customer_name, type: STRING,    required: true}
-    - {name: amount,        type: NUMERIC,   required: true,  classification: PII_FINANCIAL}
-    - {name: term_months,   type: INT64,     required: true}
-    - {name: risk_score,    type: INT64,     required: false, description: "0-1000"}
-    - {name: decision,      type: STRING,    required: false, allowed: [APPROVE, DECLINE, REVIEW]}
-    - {name: status,        type: STRING,    required: true,  description: "Latest status"}
-    - {name: updated_at,    type: TIMESTAMP, required: true}
+    - {name: loan_id,            type: STRING,    required: true,  description: "PK"}
+    - {name: customer_name,      type: STRING,    required: true}
+    - {name: amount,             type: NUMERIC,   required: true,  classification: PII_FINANCIAL}
+    - {name: term_months,        type: INT64,     required: true}
+    - {name: status,             type: STRING,    required: true,  description: "Latest workflow status"}
+    - {name: submitted_at,       type: TIMESTAMP, required: true}
+    - {name: updated_at,         type: TIMESTAMP, required: true}
+    - {name: risk_score,         type: INT64,     required: false, description: "0-1000"}
+    - {name: recommendation,     type: STRING,    required: false, allowed: [APPROVE, DECLINE, REVIEW]}
+    - {name: final_decision,     type: STRING,    required: false, allowed: [APPROVE, DECLINE, REVIEW]}
+    - {name: counteroffer_amount, type: NUMERIC,  required: false, classification: PII_FINANCIAL}
+    - {name: approver,           type: STRING,    required: false, description: "HITL approver"}
+    - {name: decided_at,         type: TIMESTAMP, required: false}
 
 quality:
   - {column: loan_id,    dimension: UNIQUENESS, rule: unique}

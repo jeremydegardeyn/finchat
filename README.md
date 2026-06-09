@@ -166,8 +166,9 @@ python scripts/catalog_bootstrap.py <env>        # glossary + aspects on table &
 > Aspects are attached to **both** the BigQuery table entry (catalog Search) and the
 > data-product entry (the **Data Products page → Aspects tab**). The page's **Contract**
 > and **Insights → Query recommendations** tabs use Google's *gated* system aspect types
-> and are console-only ("+ Add"/"Edit") — the same content lives in the `data-contract`
-> aspect + [`contracts/*.yaml`](contracts/).
+> and are console-only ("+ Add"/"Edit") — paste-ready contract blurbs + runnable sample
+> queries are in [docs/13](docs/13-data-product-console-snippets.md); the same content
+> also lives in the `data-contract` aspect + [`contracts/*.yaml`](contracts/).
 
 Full design + diagrams (data-product anatomy, access-request flow, lineage):
 [docs/12](docs/12-knowledge-catalog.md).
