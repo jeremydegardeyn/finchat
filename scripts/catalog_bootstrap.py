@@ -79,27 +79,49 @@ def create_glossary():
     subprocess.run([GCLOUD, "dataplex", "glossaries", "create", gid,
                     f"--project={PROJECT}", f"--location={REGION}",
                     "--display-name=FinChat Banking Glossary"], check=False)
+    parent = f"projects/{PROJECT}/locations/{REGION}/glossaries/{gid}"
     for term, desc in GLOSSARY_TERMS.items():
         subprocess.run([GCLOUD, "dataplex", "glossaries", "terms", "create", term,
-                        f"--glossary={gid}", f"--project={PROJECT}", f"--location={REGION}",
+                        f"--parent={parent}", f"--display-name={term}",
                         f"--description={desc}"], check=False)
-    print(f"glossary {gid}: {len(GLOSSARY_TERMS)} terms (errors above are OK if they already exist)")
+    print(f"glossary {gid}: {len(GLOSSARY_TERMS)} terms (409 'already exists' is OK)")
 
 
 def attach_aspects(num: str):
-    from google.cloud import dataplex_v1
-    from google.protobuf import struct_pb2
+    try:
+        from google.cloud import dataplex_v1
+        from google.protobuf import struct_pb2
+    except ImportError:
+        print("  ✗ run: pip install -U google-cloud-dataplex")
+        return
+    if not hasattr(dataplex_v1, "CatalogServiceClient"):
+        print("  ✗ your google-cloud-dataplex is too old for the Catalog API.")
+        print("    run: pip install -U google-cloud-dataplex   (need CatalogServiceClient)")
+        return
     client = dataplex_v1.CatalogServiceClient()
     dp_key = f"{num}.{REGION}.{PREFIX}-data-product"
     gov_key = f"{num}.{REGION}.{PREFIX}-governance"
     dp_type = f"projects/{PROJECT}/locations/{REGION}/aspectTypes/{PREFIX}-data-product"
     gov_type = f"projects/{PROJECT}/locations/{REGION}/aspectTypes/{PREFIX}-governance"
 
+    scope = f"projects/{PROJECT}/locations/global"
     for p in PRODUCTS:
         try:
-            entry = client.lookup_entry(request={
-                "name": f"projects/{PROJECT}/locations/global",
-                "fully_qualified_name": p["fqn"], "view": "ALL"})
+            # Find the BigQuery entry: try lookup-by-FQN, else fall back to search.
+            entry = None
+            try:
+                entry = client.lookup_entry(request={
+                    "name": scope, "fully_qualified_name": p["fqn"], "view": "ALL"})
+            except Exception:
+                for res in client.search_entries(request={
+                        "name": scope, "query": p["product"], "page_size": 1}):
+                    de = getattr(res, "dataplex_entry", None)
+                    if de and de.name:
+                        entry = client.get_entry(request={"name": de.name, "view": "ALL"})
+                    break
+            if entry is None:
+                print(f"  ✗ {p['product']:24s} entry not found in catalog")
+                continue
             dp_data = struct_pb2.Struct(); dp_data.update({
                 "business_domain": p["domain"], "product_owner": p["owner"],
                 "steward": p["steward"], "criticality": p["criticality"],
