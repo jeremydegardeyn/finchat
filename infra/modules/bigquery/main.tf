@@ -11,6 +11,7 @@ locals {
   bronze = "${var.name_prefix}_bronze_${var.env}"
   silver = "${var.name_prefix}_silver_${var.env}"
   gold   = "${var.name_prefix}_gold_${var.env}"
+  loans  = "${var.name_prefix}_loans_${var.env}"
 }
 
 # --- Datasets ----------------------------------------------------------------
@@ -37,6 +38,19 @@ resource "google_bigquery_dataset" "gold" {
   location    = var.region
   description = "Business aggregates & serving views for APIs/agents."
   labels      = merge(var.labels, { layer = "gold" })
+}
+
+# Loan Approval data product. TF-managed (location = var.region) so it can never
+# drift to the US multi-region — its tables are created from products/loans/
+# schemas/ddl.sql, which inherit this dataset's region. (Previously the DDL's
+# CREATE SCHEMA ran without --location and defaulted to US, breaking co-location
+# with the rest of the medallion and with Dataplex Data Products.)
+resource "google_bigquery_dataset" "loans" {
+  project     = var.project_id
+  dataset_id  = local.loans
+  location    = var.region
+  description = "Loan approval data product: requests, profiles, risk, decisions, audit."
+  labels      = merge(var.labels, { layer = "product", domain = "lending" })
 }
 
 # --- Bronze raw landing table (Pub/Sub BigQuery subscription target) ---------

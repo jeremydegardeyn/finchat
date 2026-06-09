@@ -40,11 +40,15 @@ Pub/Sub + DLQ + BQ subscription, DLP templates, monitoring + audit sink. Enterpr
 
 ## 3. Load schemas (if not using TF-managed tables)
 
+All datasets are Terraform-managed in `us-central1`, so always pin the query
+location to match (a bare `bq query` defaults to the US multi-region and would
+create cross-region tables):
+
 ```bash
 sed -e 's/${PROJECT}/strongsville-city-schools/g' -e 's/${ENV}/dev/g' \
-  products/transactions/schemas/ddl.sql | bq query --use_legacy_sql=false
+  products/transactions/schemas/ddl.sql | bq query --location=us-central1 --use_legacy_sql=false
 sed -e 's/${PROJECT}/strongsville-city-schools/g' -e 's/${ENV}/dev/g' \
-  products/loans/schemas/ddl.sql | bq query --use_legacy_sql=false
+  products/loans/schemas/ddl.sql | bq query --location=us-central1 --use_legacy_sql=false
 ```
 
 ## 4. Build & deploy services
