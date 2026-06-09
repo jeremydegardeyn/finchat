@@ -159,9 +159,15 @@ The 5 products, their assets, and metadata are a single source of truth in
 ```bash
 cd infra/envs/<env> && terraform apply           # enable_catalog = true
 ./scripts/run_datascans.sh <env>                 # insights (profile/DQ scans)
-python scripts/catalog_bootstrap.py <env>        # glossary + aspects + publish insights
-python scripts/data_products.py <env>            # data products + access groups
+python scripts/data_products.py <env>            # data products + assets + access groups
+python scripts/catalog_bootstrap.py <env>        # glossary + aspects on table & data-product entries
 ```
+
+> Aspects are attached to **both** the BigQuery table entry (catalog Search) and the
+> data-product entry (the **Data Products page → Aspects tab**). The page's **Contract**
+> and **Insights → Query recommendations** tabs use Google's *gated* system aspect types
+> and are console-only ("+ Add"/"Edit") — the same content lives in the `data-contract`
+> aspect + [`contracts/*.yaml`](contracts/).
 
 Full design + diagrams (data-product anatomy, access-request flow, lineage):
 [docs/12](docs/12-knowledge-catalog.md).

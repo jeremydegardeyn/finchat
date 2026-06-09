@@ -359,13 +359,30 @@ cd infra/envs/<env> && terraform apply        # requires enable_catalog = true
 # 2. Run the profile/quality scans (Insights)
 ./scripts/run_datascans.sh <env>
 
-# 3. Glossary + aspects (data-product, governance, data-contract) + publish insights
-python scripts/catalog_bootstrap.py <env>
-
-# 4. Data Products: products + assets + access groups + approval
+# 3. Data Products FIRST: products + assets + access groups + approval
 python scripts/data_products.py <env>
 #    (real groups: FINCHAT_BIND_ASSET_IAM=1 python scripts/data_products.py <env>)
+
+# 4. Glossary + aspects + insights — enriches BOTH the BQ table entries (catalog
+#    search) and the data-product entries (the Data Products page Aspects tab)
+python scripts/catalog_bootstrap.py <env>
 ```
+
+> **Two entries, two surfaces.** A FinChat product exists as *two* catalog entries:
+> the **BigQuery table entry** (shown in catalog **Search**) and the **data-product
+> entry** (`entryGroup @dataplex`, regional — what the **Data Products page** renders).
+> `catalog_bootstrap.py` attaches the `data-product`/`governance`/`data-contract`/
+> `operational` aspects to **both** (run `data_products.py` first so the data-product
+> entry exists). The page's **Aspects** tab + **Overview** are populated this way.
+
+> **Contract & Insights tabs are console-only (preview).** The page's **Contract**
+> tab and **Insights → Query recommendations** tab are backed by Google's *gated*
+> system aspect types (`contract`, `query-recommendations`) — these return
+> `PermissionDenied` via the public API, so they're added via the console **"+ Add"
+> / "Edit"** buttons. The identical guarantees are already published as the
+> **`data-contract` aspect** (visible on the Aspects tab) and as code in
+> [`contracts/<id>.yaml`](../contracts/); the **Insights** signal (profile/DQ) is on
+> the `operational` aspect.
 
 > **API note.** The Data Products surface is a **preview REST API**
 > (`dataplex.googleapis.com/v1/.../dataProducts`) — no `gcloud` group or Terraform
