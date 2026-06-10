@@ -46,8 +46,9 @@
   <h1><span class="logo">◆ FinChat</span> Banking Data &amp; AI Platform</h1>
   <span id="demoBadge" class="demo-badge hidden">DEMO DATA</span>
   <div class="spacer"></div>
-  <label style="margin:0;color:var(--mut)">Persona&nbsp;</label>
-  <select id="persona"></select>
+  <span id="personaBox"><label style="margin:0;color:var(--mut)">Persona&nbsp;</label>
+  <select id="persona"></select></span>
+  <span id="authbox" class="row" style="gap:8px"></span>
 </header>
 <nav id="tabs"></nav>
 <main id="view"></main>
@@ -82,7 +83,8 @@ const DEMO = {
 async function api(kind, path, opts={}) {
   try {
     const r = await fetch(`/api/${kind}/${path}`, { ...opts,
-      headers:{ "Content-Type":"application/json", "X-Persona":S.persona, ...(opts.headers||{}) } });
+      headers:{ "Content-Type":"application/json", "X-Persona":S.persona,
+                ...(S.idtok?{"X-User-Token":S.idtok}:{}), ...(opts.headers||{}) } });
     if (r.status === 503) throw new Error("demo");
     return await r.json();
   } catch(e) { return { __demo:true }; }
@@ -353,7 +355,7 @@ async function analystSend(){
 async function renderAdmin() {
   const h = await (await fetch("/healthz").catch(()=>({json:()=>({})}))).json().catch(()=>({}));
   const live = S.live;
-  let ev = {}; try { ev = await (await fetch("/api/eval")).json(); } catch(e){}
+  let ev = {}; try { ev = await (await fetch("/api/eval", { headers: S.idtok?{"X-User-Token":S.idtok}:{} })).json(); } catch(e){}
   // Live metrics (scored production conversations) when available; else offline CI report.
   const m = ev.metrics || [];
   const tile = (x,small)=> `<div><div class="metric${small?' small':''}">${
@@ -377,6 +379,44 @@ async function renderAdmin() {
 }
 function stat(name, ok){ return `<div class="row" style="justify-content:space-between"><span>${name}</span><span class="pill ${ok?'ok':'warn'}">${ok?'LIVE':'DEMO'}</span></div>`; }
 
+// ---------- identity (Google Sign-In; ADR-0016) ----------
+// Signed out -> Customer view (no login needed). Staff sign in with Google; the BFF
+// verifies the ID token and maps the email to a persona (approver/analyst/admin).
+function initGsi(clientId){
+  const s = document.createElement("script");
+  s.src = "https://accounts.google.com/gsi/client"; s.async = true; s.defer = true;
+  s.onload = () => {
+    google.accounts.id.initialize({ client_id: clientId, callback: onGoogleCred, auto_select: true });
+    renderAuthUI();
+  };
+  document.head.appendChild(s);
+}
+function renderAuthUI(){
+  const box = el("authbox");
+  if (S.user) {
+    box.innerHTML = `<span class="pill ok">${escapeHtml(S.user.email)} · ${escapeHtml(S.user.personaLabel)}</span>
+      <button class="ghost" id="signout">Sign out</button>`;
+    el("signout").onclick = signOut;
+  } else {
+    box.innerHTML = `<div id="gsibtn"></div>`;
+    try { google.accounts.id.renderButton(el("gsibtn"), { theme:"outline", size:"medium" }); } catch(e){}
+  }
+}
+async function onGoogleCred(resp){
+  S.idtok = resp.credential;
+  let me = {}; try { me = await (await fetch("/api/me", { headers:{ "X-User-Token": S.idtok } })).json(); } catch(e){}
+  if (me.signed_in) {
+    S.user = { email: me.email, persona: me.persona, personaLabel: me.persona_label || me.persona };
+    S.persona = me.persona;
+  } else { S.idtok = null; }
+  renderAuthUI(); setTabs();
+}
+function signOut(){
+  S.idtok = null; S.user = null; S.persona = "customer";
+  try { google.accounts.id.disableAutoSelect(); } catch(e){}
+  renderAuthUI(); setTabs();
+}
+
 // ---------- boot ----------
 (async function(){
   let cfg = {}; try { cfg = await (await fetch("/api/config")).json(); } catch(e){}
@@ -385,10 +425,19 @@ function stat(name, ok){ return `<div class="row" style="justify-content:space-b
   // Prefill a REAL account id (UUID) from the DaaS API so demos hit live data.
   try { const s = await (await fetch("/api/txn/v1/accounts/samples?n=6")).json();
         if (s.account_ids && s.account_ids.length) S.sampleAccounts = s.account_ids; } catch(e){}
-  const personas = cfg.personas || [{id:"customer",label:"Customer"},{id:"employee",label:"Employee (Loan Officer)"},{id:"analyst",label:"Employee (Analyst)"},{id:"admin",label:"Platform Admin"}];
-  persona.innerHTML = personas.map(p=>`<option value="${p.id}">${p.label}</option>`).join("");
-  persona.onchange = ()=>{ S.persona=persona.value; setTabs(); };
-  S.persona = personas[0].id; setTabs();
+  const auth = cfg.auth || {};
+  if (auth.enabled && auth.client_id) {
+    // Identity-resolved personas: no dropdown; anonymous = Customer, staff sign in.
+    el("personaBox").classList.add("hidden");
+    S.persona = "customer"; setTabs();
+    initGsi(auth.client_id);
+  } else {
+    // Fallback (no OAuth configured): persona simulation dropdown.
+    const personas = cfg.personas || [{id:"customer",label:"Customer"},{id:"employee",label:"Employee (Loan Officer)"},{id:"analyst",label:"Employee (Analyst)"},{id:"admin",label:"Platform Admin"}];
+    persona.innerHTML = personas.map(p=>`<option value="${p.id}">${p.label}</option>`).join("");
+    persona.onchange = ()=>{ S.persona=persona.value; setTabs(); };
+    S.persona = personas[0].id; setTabs();
+  }
 })();
 </script>
 </body>

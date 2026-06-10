@@ -35,6 +35,37 @@ EVAL_DATASET = os.getenv("EVAL_DATASET", "")    # live-eval: conversation_log ca
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")  # Gemini for intent routing
 ANALYST_READY = bool(GCP_PROJECT and (SILVER_DATASET or GOLD_DATASET or LOANS_DATASET))
 
+# --- Identity-resolved personas (Google Sign-In, ADR-0016) -------------------
+# When configured, the persona is resolved from a VERIFIED Google identity (the SPA
+# sends the GIS ID token as X-User-Token) instead of the demo dropdown. Customers
+# stay anonymous; staff personas require sign-in and are enforced per-route.
+OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+
+
+def _emails(var: str) -> set[str]:
+    return {e.strip().lower() for e in os.getenv(var, "").split(",") if e.strip()}
+
+
+APPROVER_EMAILS = _emails("APPROVER_EMAILS")  # -> employee (Loan Officer) view
+ANALYST_EMAILS = _emails("ANALYST_EMAILS")    # -> analyst view
+ADMIN_EMAILS = _emails("ADMIN_EMAILS")        # -> admin view
+PERSONA_LABELS = {"employee": "Loan Approver", "analyst": "Analyst",
+                  "admin": "Platform Admin", "customer": "Customer"}
+
+
+def _auth_enabled() -> bool:
+    return bool(OAUTH_CLIENT_ID and (APPROVER_EMAILS or ANALYST_EMAILS or ADMIN_EMAILS))
+
+
+def _persona_for(email: str) -> str | None:
+    if email in APPROVER_EMAILS:
+        return "employee"
+    if email in ANALYST_EMAILS:
+        return "analyst"
+    if email in ADMIN_EMAILS:
+        return "admin"
+    return None
+
 app = FastAPI(title="FinChat UI BFF", version="1.0.0")
 
 
@@ -56,6 +87,9 @@ def config():
         ],
         "live": {"loan_api": bool(LOAN_API_URL), "txn_api": bool(TXN_API_URL),
                  "agent": bool(AGENT_URL), "analyst": ANALYST_READY},
+        # Identity-resolved personas: when enabled the SPA shows Google Sign-In
+        # instead of the persona dropdown (client_id is public by design).
+        "auth": {"enabled": _auth_enabled(), "client_id": OAUTH_CLIENT_ID},
     }
 
 
@@ -93,6 +127,64 @@ def _mint_token(audience: str) -> str:
     return creds.token
 
 
+_user_cache: dict[str, dict] = {}  # GIS id-token -> {email, persona, exp}
+
+
+def _verify_user(request: Request) -> dict | None:
+    """Verify the Google Sign-In ID token (X-User-Token header) — signature,
+    audience (our OAuth client), issuer, expiry — and resolve the persona from the
+    verified email. Returns {email, persona, exp} or None."""
+    tok = request.headers.get("X-User-Token", "")
+    if not (tok and OAUTH_CLIENT_ID):
+        return None
+    now = time.time()
+    u = _user_cache.get(tok)
+    if u and u["exp"] - 30 > now:
+        return u
+    try:
+        from google.oauth2 import id_token as gid
+        from google.auth.transport.requests import Request as GReq
+        info = gid.verify_oauth2_token(tok, GReq(), OAUTH_CLIENT_ID)
+        if not info.get("email_verified"):
+            return None
+        email = (info.get("email") or "").lower()
+        u = {"email": email, "persona": _persona_for(email),
+             "exp": float(info.get("exp", now + 300))}
+        if len(_user_cache) > 500:
+            _user_cache.clear()
+        _user_cache[tok] = u
+        return u
+    except Exception:
+        return None
+
+
+def _require(request: Request, persona: str):
+    """Return a 403 JSONResponse if auth is enabled and the caller's VERIFIED
+    persona isn't `persona`; None when allowed (or auth not configured)."""
+    if not _auth_enabled():
+        return None
+    u = _verify_user(request)
+    if not u or u.get("persona") != persona:
+        who = PERSONA_LABELS.get(persona, persona)
+        return JSONResponse(
+            {"error": f"{who} sign-in required (your session may have expired — sign in again)"},
+            status_code=403)
+    return None
+
+
+@app.get("/api/me")
+def me(request: Request):
+    """Resolve the signed-in user's persona from their verified Google identity."""
+    if not _auth_enabled():
+        return {"auth_enabled": False}
+    u = _verify_user(request)
+    if not u:
+        return {"auth_enabled": True, "signed_in": False}
+    p = u["persona"] or "customer"
+    return {"auth_enabled": True, "signed_in": True, "email": u["email"],
+            "persona": p, "persona_label": PERSONA_LABELS.get(p, "Customer")}
+
+
 async def _log_eval(persona: str, channel: str, question: str, answer: str, context=None):
     """Best-effort capture of a conversation turn for live evaluation. Awaited (in a
     worker thread) WITHIN the request — Cloud Run throttles CPU once the response is
@@ -123,20 +215,24 @@ async def _log_eval(persona: str, channel: str, question: str, answer: str, cont
         pass
 
 
-async def _proxy(base: str, path: str, request: Request) -> Response:
+async def _proxy(base: str, path: str, request: Request,
+                 extra_headers: dict | None = None) -> Response:
     if not base:
         return JSONResponse({"error": "backend not configured", "demo": True}, status_code=503)
     import httpx
     url = f"{base}/{path}"
-    # Persona -> approver identity for employee write actions (role simulation).
-    persona = request.headers.get("X-Persona", "customer")
     headers = {"content-type": request.headers.get("content-type", "application/json")}
-    if persona == "employee":
+    # Role SIMULATION fallback only (no OAuth configured): trust the client headers.
+    # With auth enabled, privileged routes set X-Approver to the VERIFIED identity
+    # via extra_headers (see loan_proxy) and client-sent values are ignored.
+    if not _auth_enabled() and request.headers.get("X-Persona", "customer") == "employee":
         headers["X-Approver"] = request.headers.get("X-Approver", "loan-officer@datadinosaur.com")
     # OIDC: authenticate to private Cloud Run backends (audience = service base URL).
     token = _id_token(base)
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if extra_headers:
+        headers.update(extra_headers)
     body = await request.body()
     async with httpx.AsyncClient(timeout=90.0) as client:  # agent cold-start + Gemini latency
         r = await client.request(request.method, url, params=request.query_params,
@@ -147,7 +243,20 @@ async def _proxy(base: str, path: str, request: Request) -> Response:
 
 @app.api_route("/api/loan/{path:path}", methods=["GET", "POST"])
 async def loan_proxy(path: str, request: Request):
-    return await _proxy(LOAN_API_URL, path, request)
+    """Customer routes (create, status, notify) stay open. Loan-OPS routes — the
+    review queue, audit trail, and decisions — require the verified approver, and
+    the decision's X-Approver becomes the authenticated email (immutable audit)."""
+    p = path.rstrip("/")
+    privileged = (p.endswith("/decision") or p.endswith("/audit")
+                  or (p == "v1/loans" and request.method == "GET"))
+    extra = None
+    if privileged and _auth_enabled():
+        deny = _require(request, "employee")
+        if deny:
+            return deny
+        u = _verify_user(request)
+        extra = {"X-Approver": u["email"]}  # verified identity -> append-only audit
+    return await _proxy(LOAN_API_URL, path, request, extra_headers=extra)
 
 
 @app.api_route("/api/txn/{path:path}", methods=["GET", "POST"])
@@ -199,10 +308,13 @@ def _is_finchat(*vals) -> bool:
 
 
 @app.get("/api/catalog/search")
-def catalog_search(q: str = "", raw: int = 0):
+def catalog_search(request: Request, q: str = "", raw: int = 0):
     """Discover Dataplex catalog assets by free-text description. Returns matching
     entries with their governed aspects (data-product, governance, data-contract,
     operational) so the analyst can see ownership, PII class, contract, and DQ."""
+    deny = _require(request, "analyst")
+    if deny:
+        return deny
     q = (q or "").strip()
     if not q:
         return {"matches": []}
@@ -441,6 +553,9 @@ async def _classify_intent(q: str) -> str:
 @app.post("/api/analyst/chat")
 async def analyst_chat(request: Request):
     """Force Conversational Analytics (kept for direct callers)."""
+    deny = _require(request, "analyst")
+    if deny:
+        return deny
     body = await request.json()
     q = (body.get("message") or "").strip()
     if not q:
@@ -453,6 +568,9 @@ async def analyst_ask(request: Request):
     """One analyst assistant: classify the question (Gemini, heuristic fallback) and
     route to Conversational Analytics OR the Knowledge Base RAG accordingly. Returns
     {mode, answer, ...} so the UI shows which tool answered."""
+    deny = _require(request, "analyst")
+    if deny:
+        return deny
     body = await request.json()
     q = (body.get("message") or "").strip()
     if not q:
@@ -468,10 +586,13 @@ async def analyst_ask(request: Request):
 
 
 @app.get("/api/eval")
-def eval_report():
+def eval_report(request: Request):
     """Drives the Admin -> Evaluations card. Prefers LIVE rolling metrics from scored
     production conversations (BigQuery eval_summary); falls back to the offline,
     CI-gated report baked into the image."""
+    deny = _require(request, "admin")
+    if deny:
+        return deny
     import json
     # 1) Live: rolling 7-day metrics over real, LLM-judged conversations.
     if GCP_PROJECT and EVAL_DATASET:
