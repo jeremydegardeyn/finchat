@@ -93,9 +93,10 @@ def _mint_token(audience: str) -> str:
     return creds.token
 
 
-def _log_eval(persona: str, channel: str, question: str, answer: str, context=None):
-    """Best-effort capture of a conversation turn for live evaluation. Fire-and-forget
-    on a daemon thread so it never adds latency to or breaks the chat response."""
+async def _log_eval(persona: str, channel: str, question: str, answer: str, context=None):
+    """Best-effort capture of a conversation turn for live evaluation. Awaited (in a
+    worker thread) WITHIN the request — Cloud Run throttles CPU once the response is
+    sent, so a fire-and-forget background thread would never run. Never raises."""
     if not (GCP_PROJECT and EVAL_DATASET and (question or "").strip()):
         return
 
@@ -115,8 +116,11 @@ def _log_eval(persona: str, channel: str, question: str, answer: str, context=No
         except Exception:
             pass
 
-    import threading
-    threading.Thread(target=_do, daemon=True).start()
+    try:
+        import asyncio
+        await asyncio.to_thread(_do)
+    except Exception:
+        pass
 
 
 async def _proxy(base: str, path: str, request: Request) -> Response:
@@ -178,7 +182,7 @@ async def agent_proxy(path: str, request: Request):
         q = (_json.loads(body or b"{}") or {}).get("message", "")
         a = (_json.loads(resp.body or b"{}") or {}).get("response", "")
         if q:
-            _log_eval(request.headers.get("X-Persona", "customer"), "agent", q, a)
+            await _log_eval(request.headers.get("X-Persona", "customer"), "agent", q, a)
     except Exception:
         pass
     return resp
@@ -459,7 +463,7 @@ async def analyst_ask(request: Request):
     ctx = None
     if res.get("mode") == "analytics":
         ctx = {"sql": res.get("sql"), "rows": (res.get("rows") or [])[:10]}
-    _log_eval("analyst", res.get("mode", mode), q, res.get("answer", ""), ctx)
+    await _log_eval("analyst", res.get("mode", mode), q, res.get("answer", ""), ctx)
     return res
 
 
