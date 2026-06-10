@@ -35,8 +35,16 @@ resource "google_cloud_run_v2_service" "this" {
   }
 
   lifecycle {
-    # CI/CD pushes new images; ignore image drift so terraform doesn't fight deploys.
-    ignore_changes = [template[0].containers[0].image, client, client_version]
+    # CI/CD owns runtime deploys: it pushes new images AND sets the full env var set
+    # via `gcloud run deploy --set-env-vars` (e.g. the UI BFF's backend URLs, datasets,
+    # CA/Vertex locations). Ignore image + env drift so `terraform apply` provisions the
+    # service skeleton but never fights/clobbers the CI-deployed runtime config.
+    ignore_changes = [
+      template[0].containers[0].image,
+      template[0].containers[0].env,
+      client,
+      client_version,
+    ]
   }
 }
 
