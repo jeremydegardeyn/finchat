@@ -30,6 +30,7 @@ CA_LOCATION = os.getenv("CA_LOCATION", "global")  # Conversational Analytics loc
 SILVER_DATASET = os.getenv("SILVER_DATASET", "")
 GOLD_DATASET = os.getenv("GOLD_DATASET", "")
 LOANS_DATASET = os.getenv("LOANS_DATASET", "")
+GRAPH_DATASET = os.getenv("GRAPH_DATASET", "")  # knowledge graph (customer_360, kg_*)
 ANALYST_READY = bool(GCP_PROJECT and (SILVER_DATASET or GOLD_DATASET or LOANS_DATASET))
 
 app = FastAPI(title="FinChat UI BFF", version="1.0.0")
@@ -174,8 +175,14 @@ def catalog_search(q: str = ""):
             name = getattr(entry, "name", "")
             resource = res.linked_resource or ""
             etype = (getattr(entry, "entry_type", "") or "").split("/")[-1]
+            is_term = etype in ("glossary-term", "glossary-category")
+            # FinChat assets only: BigQuery entries must be in a finchat_ dataset
+            # (drops billing-export and other auto-harvested project tables). Glossary
+            # terms/data-product entries are kept.
+            if not is_term and "finchat_" not in resource and "finchat-" not in name:
+                continue
             # Scope to this env (drop other envs' duplicate tables); keep env-less terms.
-            if env and env not in resource and env not in name and etype != "glossary-term":
+            if env and env not in resource and env not in name and not is_term:
                 continue
             # Search snippets omit aspects — fetch the full entry to read them.
             aspects = {}
@@ -205,17 +212,41 @@ def catalog_search(q: str = ""):
 
 
 def _analyst_tables() -> list[dict]:
-    """BigQuery tables exposed to Conversational Analytics (the analytical products;
-    the KB vector table is excluded)."""
+    """BigQuery tables exposed to Conversational Analytics. Includes the `account`
+    bridge (so transaction->customer joins resolve) and the pre-joined knowledge-
+    graph `customer_360` rollup. The KB vector table is excluded."""
     t = []
     if SILVER_DATASET:
         t += [{"projectId": GCP_PROJECT, "datasetId": SILVER_DATASET, "tableId": "transaction"},
+              {"projectId": GCP_PROJECT, "datasetId": SILVER_DATASET, "tableId": "account"},
               {"projectId": GCP_PROJECT, "datasetId": SILVER_DATASET, "tableId": "customer"}]
     if GOLD_DATASET:
         t.append({"projectId": GCP_PROJECT, "datasetId": GOLD_DATASET, "tableId": "overdraft_history"})
     if LOANS_DATASET:
         t.append({"projectId": GCP_PROJECT, "datasetId": LOANS_DATASET, "tableId": "loan_status"})
+    if GRAPH_DATASET:  # knowledge graph: pre-joined per-customer rollup + relationships
+        t += [{"projectId": GCP_PROJECT, "datasetId": GRAPH_DATASET, "tableId": "customer_360"},
+              {"projectId": GCP_PROJECT, "datasetId": GRAPH_DATASET, "tableId": "kg_relationships"}]
     return t
+
+
+# Knowledge-graph join model — teaches Conversational Analytics the correct joins
+# (it previously couldn't link transaction->customer because transactions carry
+# only account_id). Mirrors finchat_graph_<env>.kg_relationships.
+_ANALYST_SYSTEM_INSTRUCTION = (
+    "You are a banking data analyst assistant for FinChat. Answer questions over the "
+    "provided BigQuery tables. The data model is a graph — ALWAYS join using these keys:\n"
+    "- account.customer_id = customer.customer_id  (an Account BELONGS_TO a Customer)\n"
+    "- transaction.account_id = account.account_id (a Transaction OCCURS_ON an Account; "
+    "transactions have NO customer_id, so to attribute a transaction to a customer join "
+    "transaction -> account -> customer)\n"
+    "- overdraft_history.account_id = account.account_id\n"
+    "- loan_status / loan_request relate to an account via account_id\n"
+    "For per-customer questions, PREFER the pre-joined `customer_360` view (one row per "
+    "customer with account/transaction/overdraft/loan rollups) instead of joining manually. "
+    "Transaction amounts: DEPOSIT is cash in (positive); WITHDRAWAL and FEE reduce balance. "
+    "Never expose customer names or email addresses; use customer_id and segment."
+)
 
 
 def _access_token() -> str:
@@ -274,7 +305,10 @@ async def analyst_chat(request: Request):
     payload = {
         "parent": f"projects/{GCP_PROJECT}/locations/{CA_LOCATION}",
         "messages": [{"userMessage": {"text": q}}],
-        "inline_context": {"datasource_references": {"bq": {"table_references": tables}}},
+        "inline_context": {
+            "system_instruction": _ANALYST_SYSTEM_INSTRUCTION,  # teaches the graph joins
+            "datasource_references": {"bq": {"table_references": tables}},
+        },
     }
     async with httpx.AsyncClient(timeout=150.0) as client:
         r = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})

@@ -1,0 +1,100 @@
+-- =============================================================================
+-- FinChat — Knowledge Graph (BigQuery semantic layer)
+-- Generates a graph view of the data model (nodes + edges + join relationships)
+-- and a denormalized customer_360 so Conversational Analytics has explicit,
+-- correct joins. Views only — no data is copied. Replace ${PROJECT}/${ENV}.
+--
+-- Entity-relationship (the data model):
+--   Customer (customer_id)
+--     └─HAS_ACCOUNT→ Account (account_id, customer_id)
+--                      ├─OCCURS_ON← Transaction (account_id)
+--                      ├─SUMMARIZED_BY← OverdraftProfile (account_id)
+--                      └─REQUESTED← Loan (account_id)
+-- PII (full_name/email) is intentionally excluded — analytics needs ids + segments.
+-- =============================================================================
+
+-- ---------- Join relationships (the graph schema; feeds the CA system prompt) ----------
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.kg_relationships` AS
+SELECT * FROM UNNEST([
+  STRUCT('account'           AS from_table, 'customer_id' AS from_column,
+         'customer'          AS to_table,   'customer_id' AS to_column,
+         'Account BELONGS_TO Customer'      AS relationship),
+  STRUCT('transaction', 'account_id', 'account', 'account_id', 'Transaction OCCURS_ON Account'),
+  STRUCT('overdraft_history', 'account_id', 'account', 'account_id', 'OverdraftProfile SUMMARIZES Account'),
+  STRUCT('loan_request', 'account_id', 'account', 'account_id', 'Loan REQUESTED_FOR Account'),
+  STRUCT('customer_360', 'customer_id', 'customer', 'customer_id', 'Customer360 ROLLS_UP Customer')
+]);
+
+-- ---------- Nodes: one row per entity instance ----------
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.kg_nodes` AS
+SELECT customer_id AS node_id, 'Customer' AS node_type,
+       COALESCE(segment, 'customer') AS label,
+       TO_JSON_STRING(STRUCT(segment, created_at)) AS properties
+FROM `${PROJECT}.finchat_silver_${ENV}.customer`
+UNION ALL
+SELECT account_id, 'Account', account_type,
+       TO_JSON_STRING(STRUCT(account_type, currency, status, customer_id))
+FROM `${PROJECT}.finchat_silver_${ENV}.account`
+UNION ALL
+SELECT loan_id, 'Loan', status,
+       TO_JSON_STRING(STRUCT(amount, term_months, status))
+FROM `${PROJECT}.finchat_loans_${ENV}.loan_request`;
+
+-- ---------- Edges: directed relationships between nodes ----------
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.kg_edges` AS
+SELECT customer_id AS src_id, 'Customer' AS src_type, 'HAS_ACCOUNT' AS relationship,
+       account_id AS dst_id, 'Account' AS dst_type
+FROM `${PROJECT}.finchat_silver_${ENV}.account`
+WHERE customer_id IS NOT NULL
+UNION ALL
+SELECT account_id, 'Account', 'REQUESTED_LOAN', loan_id, 'Loan'
+FROM `${PROJECT}.finchat_loans_${ENV}.loan_request`
+WHERE account_id IS NOT NULL;
+
+-- ---------- customer_360: denormalized per-customer rollup (CLS-safe) ----------
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.customer_360` AS
+WITH acct AS (
+  SELECT customer_id, COUNT(*) AS account_count
+  FROM `${PROJECT}.finchat_silver_${ENV}.account` GROUP BY customer_id
+),
+tx AS (
+  SELECT a.customer_id,
+         COUNT(*) AS transaction_count,
+         SUM(CASE WHEN t.txn_type = 'DEPOSIT' THEN t.amount
+                  WHEN t.txn_type IN ('WITHDRAWAL', 'FEE') THEN -t.amount ELSE 0 END) AS net_transaction_amount
+  FROM `${PROJECT}.finchat_silver_${ENV}.transaction` t
+  JOIN `${PROJECT}.finchat_silver_${ENV}.account` a USING (account_id)
+  GROUP BY a.customer_id
+),
+od AS (
+  SELECT a.customer_id,
+         SUM(o.overdraft_events) AS overdraft_events,
+         MIN(o.lowest_balance) AS lowest_balance
+  FROM `${PROJECT}.finchat_gold_${ENV}.overdraft_history` o
+  JOIN `${PROJECT}.finchat_silver_${ENV}.account` a USING (account_id)
+  GROUP BY a.customer_id
+),
+ln AS (
+  SELECT a.customer_id,
+         COUNT(*) AS loan_count,
+         SUM(l.amount) AS total_loan_amount
+  FROM `${PROJECT}.finchat_loans_${ENV}.loan_request` l
+  JOIN `${PROJECT}.finchat_silver_${ENV}.account` a USING (account_id)
+  GROUP BY a.customer_id
+)
+SELECT
+  c.customer_id,
+  c.segment,
+  c.created_at AS customer_since,
+  COALESCE(acct.account_count, 0)        AS account_count,
+  COALESCE(tx.transaction_count, 0)      AS transaction_count,
+  COALESCE(tx.net_transaction_amount, 0) AS net_transaction_amount,
+  COALESCE(od.overdraft_events, 0)       AS overdraft_events,
+  od.lowest_balance,
+  COALESCE(ln.loan_count, 0)             AS loan_count,
+  COALESCE(ln.total_loan_amount, 0)      AS total_loan_amount
+FROM `${PROJECT}.finchat_silver_${ENV}.customer` c
+LEFT JOIN acct USING (customer_id)
+LEFT JOIN tx   USING (customer_id)
+LEFT JOIN od   USING (customer_id)
+LEFT JOIN ln   USING (customer_id);

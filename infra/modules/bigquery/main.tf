@@ -53,6 +53,17 @@ resource "google_bigquery_dataset" "loans" {
   labels      = merge(var.labels, { layer = "product", domain = "lending" })
 }
 
+# Knowledge Graph semantic layer (nodes/edges/relationships + customer_360). Views
+# only — pre-joins the medallion entities so Conversational Analytics has explicit,
+# correct joins (e.g. transaction -> account -> customer by customer_id).
+resource "google_bigquery_dataset" "graph" {
+  project     = var.project_id
+  dataset_id  = "${var.name_prefix}_graph_${var.env}"
+  location    = var.region
+  description = "FinChat knowledge graph: entity nodes, edges, join relationships, customer_360."
+  labels      = merge(var.labels, { layer = "semantic", domain = "graph" })
+}
+
 # --- Bronze raw landing table (Pub/Sub BigQuery subscription target) ---------
 # Canonical Pub/Sub->BQ schema: raw payload in `data`, metadata for lineage.
 resource "google_bigquery_table" "bronze_transaction_event" {

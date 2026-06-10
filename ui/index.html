@@ -269,17 +269,39 @@ function renderAnalyst(){
       <div id="catout" class="mut" style="margin-top:10px">Search the Dataplex Universal Catalog by business concept — returns governed assets with owner, PII class, contract, and data-quality.</div>
     </div>
     <div class="card" style="grid-column:1/-1"><h3>Conversational Analytics — ask the data products <span class="pill">Gemini Data Analytics</span></h3>
+      <div class="mut" style="font-size:12px;margin-bottom:6px">Grounded in the knowledge-graph join model (transaction → account → customer); per-customer questions use the <code>customer_360</code> rollup.</div>
       <div id="achat" class="chat" style="height:240px"></div>
-      <div class="row" style="margin-top:8px"><input id="amsg" style="flex:1" placeholder="e.g. how many customers per segment?  ·  average loan risk by status?  ·  worst overdraft accounts">
+      <div class="row" style="margin-top:8px"><input id="amsg" style="flex:1" placeholder="e.g. how many customers per segment?  ·  total deposits by customer segment?  ·  customers with the most overdrafts">
         <button id="asend">Ask</button></div>
       <div id="asql" style="margin-top:10px"></div>
+    </div>
+    <div class="card" style="grid-column:1/-1"><h3>Knowledge Base — ask the bank's policies &amp; docs <span class="pill">RAG · VECTOR_SEARCH</span></h3>
+      <div id="kbchat" class="chat" style="height:200px"></div>
+      <div class="row" style="margin-top:8px"><input id="kbmsg" style="flex:1" placeholder="e.g. what are the overdraft fees?  ·  branch hours?  ·  what's the privacy policy?">
+        <button id="kbsend">Ask</button></div>
     </div>
   </div>`;
   el("catbtn").onclick = catalogSearch;
   el("catq").addEventListener("keydown",e=>{ if(e.key==="Enter") catalogSearch(); });
   el("asend").onclick = analystAsk;
   el("amsg").addEventListener("keydown",e=>{ if(e.key==="Enter") analystAsk(); });
+  el("kbsend").onclick = kbAsk;
+  el("kbmsg").addEventListener("keydown",e=>{ if(e.key==="Enter") kbAsk(); });
   pushAChat("a","Ask a question and I'll query the governed BigQuery data products, then answer with the SQL and results. Discover assets with the catalog search above.");
+  pushKb("a","Ask about FinChat Bank's policies, fees, branches, or terms — answers are retrieved from the knowledge base (RAG) and cited to source documents.");
+}
+function pushKb(who,text){ const d=document.createElement("div"); d.className="msg "+(who==="u"?"u":"a");
+  d.innerHTML=`<span class="b"></span>`; d.querySelector(".b").textContent=text; el("kbchat").appendChild(d); el("kbchat").scrollTop=1e9; return d; }
+async function kbAsk(){
+  const q = el("kbmsg").value.trim(); if(!q) return;
+  pushKb("u",q); el("kbmsg").value="";
+  const t = pushKb("a","Searching the knowledge base…");
+  if (!S.kbsid) S.kbsid = "kb-" + Date.now();
+  const r = await api("agent","chat",{ method:"POST", body:JSON.stringify({ message:q, user_id:"analyst", session_id:S.kbsid }) });
+  t.querySelector(".b").textContent = (r.__demo || r.error || !r.response)
+    ? (r.error ? ("Error: " + r.error) : "Knowledge base assistant isn't available in demo mode (needs the RAG agent + kb_chunks).")
+    : r.response;
+  el("kbchat").scrollTop=1e9;
 }
 
 async function catalogSearch(){
