@@ -49,12 +49,21 @@ class LoanStore:
     def _t(self, name: str) -> str:
         return f"{PROJECT}.{DATASET}.{name}"
 
-    def _insert(self, table: str, row: dict):
+    def _insert(self, table: str, row: dict, stream: bool = False):
         if self._demo:
             return
-        # Use a LOAD job (not the streaming API): streamed rows sit in a buffer
-        # that can't be UPDATE'd for ~30 min, which breaks set_status right after
-        # insert. Load-job rows are immediately updatable.
+        # APPEND-ONLY tables (audit, profile, risk, decisions) use the streaming API:
+        # ~0.2s vs a ~2-4s load job, and they are never UPDATEd so the streaming
+        # buffer's no-UPDATE window doesn't matter. loan_request keeps the LOAD job —
+        # set_status UPDATEs it right after insert, and streamed rows can't be
+        # UPDATE'd for ~30+ min (the original bug). A submit was ~37s wall-clock from
+        # serial load jobs; streaming the append-only writes brings it to single digits.
+        if stream:
+            try:
+                if not self._client.insert_rows_json(self._t(table), [row]):
+                    return
+            except Exception:
+                pass  # fall through to the load job
         from google.cloud import bigquery
         job = self._client.load_table_from_json(
             [row], self._t(table),
@@ -66,7 +75,7 @@ class LoanStore:
         row = {"audit_id": new_id("aud"), "loan_id": loan_id, "actor": actor,
                "action": action, "detail": detail, "event_time": _now()}
         self._audit.append(row)
-        self._insert("loan_audit_log", row)
+        self._insert("loan_audit_log", row, stream=True)
 
     # --- loan request --------------------------------------------------------
     def create_loan(self, customer_name: str, amount: float, term_months: int,
@@ -80,11 +89,14 @@ class LoanStore:
         self.audit(loan_id, "loan-api", "CREATE_LOAN", f"amount={amount}, term={term_months}")
         return row
 
-    def set_status(self, loan_id: str, status: str):
+    def set_status(self, loan_id: str, status: str, update_table: bool = True):
+        """update_table=False records the transition in the audit trail only —
+        used for transient intermediate states (e.g. PROFILED during a submit) to
+        skip a ~2s UPDATE query the serving view never observes."""
         if loan_id in self._loans:
             self._loans[loan_id]["status"] = status
             self._loans[loan_id]["updated_at"] = _now()
-        if not self._demo:
+        if not self._demo and update_table:
             sql = f"UPDATE `{self._t('loan_request')}` SET status=@s, updated_at=CURRENT_TIMESTAMP() WHERE loan_id=@id"
             from google.cloud import bigquery
             self._client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=[
@@ -96,7 +108,7 @@ class LoanStore:
     def save_profile(self, loan_id: str, profile: dict):
         row = {"profile_id": new_id("prof"), "loan_id": loan_id, **profile, "generated_at": _now()}
         self._profiles[loan_id] = row
-        self._insert("credit_profile", row)
+        self._insert("credit_profile", row, stream=True)
         self.audit(loan_id, "credit-agent", "CREDIT_PROFILE", f"score={profile.get('credit_score')}")
 
     def save_risk(self, loan_id: str, risk_row: dict, overdraft_events: int) -> dict:
@@ -104,7 +116,7 @@ class LoanStore:
         row = {"assessment_id": new_id("risk"), "loan_id": loan_id, "version": version,
                "overdraft_events": overdraft_events, **risk_row, "created_at": _now()}
         self._risks.append(row)
-        self._insert("risk_assessment", row)
+        self._insert("risk_assessment", row, stream=True)
         self.audit(loan_id, "approval-agent", "RISK_ASSESSMENT",
                    f"score={risk_row.get('risk_score')}, rec={risk_row.get('recommendation')}")
         return row
@@ -117,7 +129,7 @@ class LoanStore:
                "decision": decision, "counteroffer_amount": counteroffer_amount,
                "approver": approver, "rationale": rationale, "decided_at": _now()}
         self._decisions.append(row)
-        self._insert("approval_decision", row)  # INSERT-only: full history preserved
+        self._insert("approval_decision", row, stream=True)  # INSERT-only: full history preserved
         status = {"APPROVE": "APPROVED", "REJECT": "REJECTED",
                   "REQUEST_MODIFICATION": "MODIFIED", "COUNTEROFFER": "MODIFIED"}.get(decision, "PENDING_APPROVAL")
         self.set_status(loan_id, status)

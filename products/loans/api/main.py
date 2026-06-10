@@ -73,7 +73,8 @@ def submit_loan(sub: LoanSubmission):
     profile = synthesize_credit_profile(lid, sub.amount, sub.term_months)
     store.save_profile(lid, {"credit_score": profile.credit_score, "annual_income": profile.annual_income,
                              "existing_debt": profile.existing_debt, "dti_ratio": profile.dti_ratio})
-    store.set_status(lid, "PROFILED")
+    # Transient state: audit-trail only (skips a ~2s UPDATE the view never shows).
+    store.set_status(lid, "PROFILED", update_table=False)
     # 5. overdraft history from transactions product -> 6. risk score + recommendation
     od = _overdraft_events(sub.account_id)
     result = score_risk(profile, sub.amount, overdraft_events=od)

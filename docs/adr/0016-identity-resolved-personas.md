@@ -63,10 +63,33 @@ Resolve personas from **verified Google identity**, enforced at the BFF:
 - Customer identity remains simulated (account ids) — a future increment can bind
   customers to sign-in too.
 
+## Enterprise mapping (dual-tier)
+
+In the Fortune-500 build the same persona model maps to managed identity services:
+
+- **Staff surfaces → IAP (Identity-Aware Proxy).** Split the staff app (loan ops,
+  analyst, admin) onto its own Cloud Run service/origin and put **IAP** in front of
+  it (Cloud Run's native IAP integration, or a HTTPS LB + serverless NEG). IAP
+  centralizes AuthN at Google's edge, supports **context-aware access** (device,
+  IP, time), and passes a **signed assertion** (`X-Goog-IAP-JWT-Assertion`) the app
+  verifies — replacing this ADR's in-app token check. Access is then IAM
+  (`roles/iap.httpsResourceAccessor`) per principal/group, i.e. persona = IAM group.
+- **Customer surface → CIAM**, e.g. **Identity Platform** (OIDC/SAML, MFA, tenant
+  per brand) — customers authenticate too, bound to their accounts; the demo's
+  anonymous-customer mode is the placeholder for this.
+- **Workforce IdP federation:** staff identities come from the bank's IdP (Entra
+  ID/Okta) via Workforce Identity Federation rather than consumer Google accounts.
+
+IAP wasn't used **here** because it gates the entire service behind login, and the
+demo intentionally serves an anonymous customer surface and a staff surface from
+one app; GIS + BFF verification delivers the same verified-identity guarantees on
+one origin at zero cost.
+
 ## Alternatives considered
 
-- **IAP on Cloud Run:** rejected — gates anonymous customers out (see Rationale).
+- **IAP on Cloud Run (single app):** rejected for the demo — gates anonymous
+  customers out; **it is the enterprise target for the staff surface** (above).
 - **Identity Platform / Firebase Auth:** heavier dependency for the same "Sign in
-  with Google" outcome; revisit if multi-IdP (e.g. SAML) is needed.
+  with Google" outcome; the enterprise target for the *customer* surface.
 - **Keep persona simulation:** rejected — spoofable approver identity in a credit
   audit trail is exactly what a regulator (and an interview panel) would flag.

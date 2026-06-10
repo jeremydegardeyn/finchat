@@ -155,11 +155,17 @@ function renderCustomer() {
       <div class="row"><label style="margin:0">Account&nbsp;</label><input id="cacc" style="width:200px" value="${(S.sampleAccounts&&S.sampleAccounts[0])||'acct-001'}"></div>
       <div id="chat" class="chat" style="margin-top:8px"></div>
       <div class="row" style="margin-top:8px"><input id="cmsg" placeholder="e.g. what is my balance?" style="flex:1"><button id="csend">Send</button></div>
+      <div id="cex" class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
     </div>
   </div>`;
   el("lsub").onclick = submitLoan; el("lsget").onclick = checkStatus; el("csend").onclick = chatSend;
   el("cmsg").addEventListener("keydown",e=>{ if(e.key==="Enter") chatSend(); });
-  pushChat("a","Hi! I'm FinChat. Ask me about your balance, recent transactions, or an account summary.");
+  const cExamples = ["what is my balance?", "show my recent transactions", "give me an account summary",
+                     "what are the overdraft fees?", "when is the Lakewood branch open?"];
+  el("cex").innerHTML = `<span class="mut" style="font-size:12px;align-self:center">try:</span>` +
+    cExamples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("");
+  el("cex").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("cmsg").value=b.textContent; chatSend(); });
+  pushChat("a","Hi! I'm FinChat. Ask me about your balance, recent transactions, an account summary — or bank policies, fees, and branch hours.");
 }
 async function submitLoan() {
   const body = { customer_name:el("ln").value, amount:+el("la").value, term_months:+el("lt").value, account_id:el("lacc").value||null };
