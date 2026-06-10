@@ -261,8 +261,8 @@ def _access_token() -> str:
 
 def _parse_ca(messages: list) -> dict:
     """Reduce a Conversational Analytics streamed message array to {answer, sql,
-    columns, rows, followups}."""
-    answer, followups, sql, rows, cols = [], [], None, [], []
+    columns, rows, followups, vega}."""
+    answer, followups, sql, rows, cols, vega = [], [], None, [], [], None
     for m in messages if isinstance(messages, list) else []:
         sm = m.get("systemMessage", {}) if isinstance(m, dict) else {}
         if "text" in sm:
@@ -280,8 +280,12 @@ def _parse_ca(messages: list) -> dict:
                 if data:
                     rows = data[:50]
                     cols = list(rows[0].keys())
+        if "chart" in sm:  # Vega-Lite spec (self-contained, inline data) for the chart
+            vc = (sm["chart"].get("result") or {}).get("vegaConfig")
+            if vc:
+                vega = vc
     return {"answer": "\n\n".join(a for a in answer if a).strip() or "(no answer returned)",
-            "sql": sql, "columns": cols, "rows": rows, "followups": followups[:3]}
+            "sql": sql, "columns": cols, "rows": rows, "followups": followups[:3], "vega": vega}
 
 
 async def _run_ca(q: str) -> dict:

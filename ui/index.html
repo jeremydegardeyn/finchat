@@ -4,6 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>FinChat — Banking Data & AI Platform</title>
+<!-- Vega-Lite for rendering Conversational Analytics charts -->
+<script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+<script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+<script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
 <style>
   :root { --bg:#0f172a; --panel:#1e293b; --ink:#e2e8f0; --mut:#94a3b8; --acc:#38bdf8; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; --line:#334155; }
   * { box-sizing:border-box; } body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
@@ -335,8 +339,13 @@ async function analystSend(){
       r.rows.slice(0,20).map(row=>`<tr>${cols.map(c=>`<td>${fmtCell(row[c])}</td>`).join("")}</tr>`).join("")}</tbody></table>`; }
   if (r.followups && r.followups.length) html += `<label>Suggested questions</label><div class="row">${
     r.followups.map(f=>`<button class="ghost fq">${escapeHtml(f)}</button>`).join("")}</div>`;
+  if (r.vega) html += `<label>Chart</label><div id="vegachart" style="background:#fff;border-radius:8px;padding:10px;overflow:auto"></div>`;
   el("asql").innerHTML = html;
   el("asql").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("amsg").value=b.textContent; analystSend(); });
+  if (r.vega && window.vegaEmbed) {
+    try { window.vegaEmbed("#vegachart", r.vega, {actions:false}); }
+    catch(e){ const c=el("vegachart"); if(c) c.outerHTML=""; }
+  }
   el("achat").scrollTop=1e9;
 }
 
