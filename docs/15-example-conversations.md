@@ -61,10 +61,12 @@ Bot:  I can't provide investment advice, but I can share your account data.
 
 ## 2. Employee (Analyst)
 
-Three surfaces in the Analyst view. No per-account customer tools — the analyst works at
-population scale through the graph.
+Two surfaces in the Analyst view: **Catalog discovery** (search box) and a single unified
+**"Ask the Data"** chat with a mode toggle — **📊 Analytics** (Conversational Analytics over
+the data products) and **📚 Knowledge Base** (RAG). One transcript; examples update per mode.
+No per-account customer tools — the analyst works at population scale through the graph.
 
-### 2a. Conversational Analytics (Gemini Data Analytics, graph-grounded)
+### 2a. "Ask the Data" → Analytics mode (Gemini Data Analytics, graph-grounded)
 
 Returns a natural-language answer **plus the generated SQL** (transparency) and the result
 table. Joins are correct because the [knowledge graph](14-knowledge-graph.md) join keys are
@@ -94,9 +96,10 @@ CA:   Drills into the raw transaction table (txn_type='FEE') — grouped by mont
 > ones use the raw entities with the join keys from the system instruction. The analyst
 > never needs to know table names or join columns.
 
-### 2b. Knowledge Base (RAG)
+### 2b. "Ask the Data" → Knowledge Base mode (RAG)
 
-Same VECTOR_SEARCH corpus as the customer KB, framed for staff.
+Same chat box, **📚 Knowledge Base** mode — same VECTOR_SEARCH corpus as the customer KB,
+framed for staff.
 ```
 You:  what's our overdraft fee policy?
 KB:   $35 per item, max 3/day… (cited to the Fees policy doc)
