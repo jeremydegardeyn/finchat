@@ -421,6 +421,27 @@ async def analyst_ask(request: Request):
     return await (_run_kb(q) if mode == "kb" else _run_ca(q))
 
 
+@app.get("/api/eval")
+def eval_report():
+    """Latest AgentOps evaluation summary (eval/pipelines/evaluate.py output, baked
+    into the image at build). Drives the Admin -> Evaluations card with real numbers."""
+    import json
+    try:
+        with open(os.path.join(HERE, "eval_report.json")) as f:
+            d = json.load(f)
+        s = d.get("summary", {})
+        return {"available": True, "generated_at": d.get("generated_at"),
+                "grounding_accuracy": s.get("grounding_accuracy"),
+                "hallucination_rate": s.get("hallucination_rate"),
+                "tool_utilization": s.get("tool_utilization"),
+                "response_quality": s.get("response_quality"),
+                "approval_recommendation_accuracy": s.get("approval_recommendation_accuracy"),
+                "n_txn": d.get("transaction_agent", {}).get("n"),
+                "n_loan": d.get("loan_recommendations", {}).get("n")}
+    except Exception:
+        return {"available": False}
+
+
 @app.get("/")
 def index():
     return FileResponse(os.path.join(HERE, "index.html"))

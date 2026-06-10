@@ -46,6 +46,8 @@ jobs:
         run: |
           REPO="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images"
           SHA="${GITHUB_SHA::12}"
+          # Bake the latest AgentOps eval report into the UI image (Admin -> Evaluations).
+          cp -f eval/reports/latest.json ui/eval_report.json 2>/dev/null || true
           declare -A SVC=(
             [txn-api]=products/transactions/api
             [txn-generator]=products/transactions/generator
