@@ -1,0 +1,124 @@
+# 14 — Knowledge Graph (BigQuery semantic layer for conversational AI)
+
+> **Why this exists.** Conversational Analytics (Gemini Data Analytics) was given the
+> raw tables but **couldn't join `transaction` to `customer`** — transactions carry
+> only `account_id`, never `customer_id`, so "deposits **per customer/segment**" silently
+> failed or joined wrong. The Knowledge Graph encodes the data model's **entities +
+> relationships** in BigQuery and a pre-joined **`customer_360`** rollup, and the analyst
+> chat passes the graph's join keys to the model as a **system instruction**. Result:
+> the LLM joins correctly, every time.
+
+The graph is a **semantic overlay** (`finchat_graph_<env>`, Terraform-managed **views**
+only — no data copied) over the medallion. It is the grounding layer for all analyst
+conversational-AI queries.
+
+## 1. The data model as a graph
+
+```mermaid
+flowchart LR
+  C["Customer<br/>(customer_id)"]
+  A["Account<br/>(account_id, customer_id)"]
+  T["Transaction<br/>(account_id) — no customer_id!"]
+  O["OverdraftProfile<br/>(account_id)"]
+  L["Loan<br/>(account_id)"]
+  C -- HAS_ACCOUNT --> A
+  A -- OCCURS_ON --- T
+  A -- SUMMARIZED_BY --- O
+  A -- REQUESTED --- L
+  classDef e fill:#1e293b,stroke:#38bdf8,color:#e2e8f0;
+  class C,A,T,O,L e;
+```
+
+`Account` is the **bridge**: the only path from a `Transaction` (or overdraft / loan)
+to a `Customer` is `… → account.account_id` then `account.customer_id → customer`.
+Missing that bridge is exactly why naive NL→SQL failed.
+
+## 2. What's built (`finchat_graph_<env>`)
+
+| View | Shape | Purpose |
+|---|---|---|
+| `kg_relationships` | from_table·from_column → to_table·to_column · relationship | The **join schema** — the edges of the model as data (and the source of the CA system prompt) |
+| `kg_nodes` | node_id · node_type · label · properties(JSON) | Every entity instance (Customer / Account / Loan) |
+| `kg_edges` | src_id·src_type · relationship · dst_id·dst_type | Directed relationships (HAS_ACCOUNT, REQUESTED_LOAN) |
+| `customer_360` | one row per customer: segment + account/transaction/overdraft/loan rollups | **Pre-joined** analytical backbone — per-customer questions need no joins |
+
+`customer_360` is **CLS-safe by construction**: it exposes `customer_id` + `segment` +
+aggregates, never `full_name`/`email`. DDL: [`products/graph/schemas/graph.sql`](../products/graph/schemas/graph.sql).
+
+```mermaid
+flowchart TB
+  subgraph raw["Medallion (raw entities)"]
+    cu[(silver.customer)]
+    ac[(silver.account)]
+    tx[(silver.transaction)]
+    od[(gold.overdraft_history)]
+    ln[(loans.loan_request)]
+  end
+  subgraph kg["finchat_graph — knowledge graph (views)"]
+    REL[kg_relationships<br/>join schema]
+    NOD[kg_nodes]
+    EDG[kg_edges]
+    C360[customer_360<br/>pre-joined rollup]
+  end
+  cu & ac --> NOD & EDG
+  cu & ac & tx & od & ln --> C360
+  ac --> REL
+  classDef b fill:#1e293b,stroke:#38bdf8,color:#e2e8f0;
+  class REL,NOD,EDG,C360 b;
+```
+
+## 3. How conversational AI uses it
+
+The analyst BFF (`ui/server.py`) gives Conversational Analytics **both** the raw entities
+**and** the graph, then teaches it the joins:
+
+```mermaid
+sequenceDiagram
+  participant AN as Analyst
+  participant BFF as UI BFF
+  participant CA as Conversational Analytics (Gemini)
+  participant BQ as BigQuery
+  AN->>BFF: "total deposits by customer segment?"
+  Note over BFF: inlineContext.systemInstruction =<br/>graph join keys (from kg_relationships)
+  BFF->>CA: chat(question, tables=[transaction, account, customer,<br/>overdraft_history, loan_status, customer_360, kg_relationships], systemInstruction)
+  CA->>CA: plan: join transaction→account→customer
+  CA->>BQ: generated SQL (3-table join)
+  BQ-->>CA: rows
+  CA-->>BFF: answer + generated SQL + rows + follow-ups
+  BFF-->>AN: grounded answer (SQL shown for transparency)
+```
+
+**System instruction** (verbatim, `_ANALYST_SYSTEM_INSTRUCTION`): hard-codes the four
+join keys, says to **prefer `customer_360`** for per-customer questions, defines deposit
+vs withdrawal/fee sign, and forbids exposing names/emails.
+
+**Hybrid, not graph-only — by design.** Raw tables stay in scope so CA can still answer
+granular questions the rollup didn't pre-aggregate ("fee revenue by month", "deposits
+over $1,000"); the graph gives the easy, join-safe path for per-customer questions. See
+[ADR-0014](adr/0014-knowledge-graph-semantic-layer.md).
+
+## 4. Verified
+
+Live in prod — `customer_360` rolls up 7,500 customers across 4 segments
+(transaction→account→customer join correct), and the analyst CA call now emits:
+
+```sql
+SELECT customer.segment,
+       SUM(CASE WHEN t.txn_type='DEPOSIT' THEN t.amount ELSE 0 END) AS total_deposits,
+       COUNT(t.transaction_id) AS txns
+FROM `…finchat_silver_prod.transaction` t
+JOIN `…finchat_silver_prod.account`  a ON t.account_id = a.account_id
+JOIN `…finchat_silver_prod.customer` c ON a.customer_id = c.customer_id
+GROUP BY customer.segment ORDER BY total_deposits DESC;
+```
+
+## 5. Enterprise mapping
+
+A true graph database (Spanner Graph / Neo4j) or a dbt/LookML semantic layer is the
+enterprise target for graph traversal and a governed metric layer. Here the same value —
+**explicit, machine-readable relationships that ground conversational AI** — is delivered
+as zero-cost BigQuery views, consistent with the dual-tier posture.
+
+See also: [ADR-0014](adr/0014-knowledge-graph-semantic-layer.md),
+[ADR-0012 (Conversational Analytics)](adr/0012-conversational-analytics.md),
+[data model](data-model.md), [example conversations](15-example-conversations.md).

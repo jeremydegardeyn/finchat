@@ -63,6 +63,11 @@ fine-grained reader).
   not `MessageToDict`.
 - Deploy: UI + agent images rebuild via CI/CD; `terraform apply` grants the new SA
   roles. Datasets must be co-located (`us-central1`) for the inline BQ datasource.
+- **Join grounding (follow-up):** raw tables alone left CA unable to join
+  `transaction → customer` (transactions carry only `account_id`). Resolved by the
+  **Knowledge Graph** ([ADR-0014](0014-knowledge-graph-semantic-layer.md)): the analyst
+  call now also passes the `account` bridge + `customer_360` rollup and a
+  `systemInstruction` encoding the graph join keys.
 
 ## Alternatives considered
 

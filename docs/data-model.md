@@ -159,3 +159,24 @@ overdraft signals. This dependency is recorded as lineage (loan `risk_assessment
   `source_system`, and `pipeline_version` columns for inline provenance.
 - **Why:** regulators require demonstrable provenance for any figure presented to a customer or used
   in a credit decision. Lineage also powers impact analysis before schema changes.
+
+---
+
+## Semantic layer — Knowledge Graph
+
+The entities above relate as a graph; conversational AI (and analysts) need those
+relationships made **explicit and machine-readable** to join correctly. The
+`finchat_graph_<env>` dataset ([docs/14](14-knowledge-graph.md),
+[ADR-0014](adr/0014-knowledge-graph-semantic-layer.md)) overlays the medallion with
+**views** (no data copied):
+
+| View | Role |
+|---|---|
+| `kg_relationships` | The join schema as data: `account.customer_id→customer.customer_id`; `transaction.account_id→account.account_id`; `overdraft_history.account_id→account.account_id`; `loan_request.account_id→account.account_id` |
+| `kg_nodes` / `kg_edges` | Entity instances + directed relationships (HAS_ACCOUNT, REQUESTED_LOAN) |
+| `customer_360` | Denormalized per-customer rollup (segment + account/transaction/overdraft/loan aggregates) — **CLS-safe** (no `full_name`/`email`) |
+
+**Key modeling point:** a `transaction` carries **only `account_id`** — never
+`customer_id`. `account` is the bridge (`account_id` ↔ transactions/overdrafts/loans;
+`customer_id` → customer). The graph encodes that bridge so per-customer analytics
+join `transaction → account → customer` correctly instead of guessing.
