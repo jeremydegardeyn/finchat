@@ -122,6 +122,7 @@ finchat/
 | — | Data Product console snippets (Contract/Insights) | [`docs/13`](docs/13-data-product-console-snippets.md) |
 | — | Knowledge Graph (semantic layer for conversational AI) | [`docs/14`](docs/14-knowledge-graph.md) |
 | — | Example conversations (Customer & Analyst) | [`docs/15`](docs/15-example-conversations.md) |
+| — | Contract Catalog (API · Data · Event contracts) | [`docs/16`](docs/16-contracts.md) |
 | — | Architecture Decision Records | [`docs/adr/`](docs/adr/) |
 
 ---

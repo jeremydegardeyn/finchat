@@ -1,5 +1,10 @@
 # FinChat Data Contracts
 
+> Part of the platform's three contract surfaces — see the unified
+> [Contract Catalog (API · Data · Event)](../docs/16-contracts.md). This folder is the
+> **data** contracts.
+
+
 A **data contract** is the producer's binding, versioned promise to consumers about a
 data product: its schema, semantics, quality, freshness/availability SLAs, access
 model, and change policy. Contracts here are **code** (`<product>.yaml`) — reviewed in
