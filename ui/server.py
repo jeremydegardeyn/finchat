@@ -31,6 +31,7 @@ SILVER_DATASET = os.getenv("SILVER_DATASET", "")
 GOLD_DATASET = os.getenv("GOLD_DATASET", "")
 LOANS_DATASET = os.getenv("LOANS_DATASET", "")
 GRAPH_DATASET = os.getenv("GRAPH_DATASET", "")  # knowledge graph (customer_360, kg_*)
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")  # Gemini for intent routing
 ANALYST_READY = bool(GCP_PROJECT and (SILVER_DATASET or GOLD_DATASET or LOANS_DATASET))
 
 app = FastAPI(title="FinChat UI BFF", version="1.0.0")
@@ -283,22 +284,15 @@ def _parse_ca(messages: list) -> dict:
             "sql": sql, "columns": cols, "rows": rows, "followups": followups[:3]}
 
 
-@app.post("/api/analyst/chat")
-async def analyst_chat(request: Request):
-    """Natural-language analytics over the FinChat data products via Google's
-    Conversational Analytics API (Gemini Data Analytics). Returns a grounded answer,
-    the generated SQL, and the result rows."""
-    body = await request.json()
-    q = (body.get("message") or "").strip()
-    if not q:
-        return JSONResponse({"error": "empty message"}, status_code=400)
+async def _run_ca(q: str) -> dict:
+    """Conversational Analytics over the data products (graph-grounded)."""
     tables = _analyst_tables()
     if not (ANALYST_READY and tables):
-        return JSONResponse({"error": "analytics not configured", "demo": True}, status_code=503)
+        return {"mode": "analytics", "error": "analytics not configured", "demo": True}
     try:
         token = _access_token()
     except Exception:
-        return JSONResponse({"error": "no credentials", "demo": True}, status_code=503)
+        return {"mode": "analytics", "error": "no credentials", "demo": True}
     import httpx
     url = (f"https://geminidataanalytics.googleapis.com/v1beta/projects/{GCP_PROJECT}"
            f"/locations/{CA_LOCATION}:chat")
@@ -313,15 +307,102 @@ async def analyst_chat(request: Request):
     async with httpx.AsyncClient(timeout=150.0) as client:
         r = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
     if r.status_code >= 400:
-        return JSONResponse({"error": f"analytics error {r.status_code}",
-                             "detail": r.text[:400]}, status_code=502)
+        return {"mode": "analytics", "error": f"analytics error {r.status_code}", "detail": r.text[:400]}
     try:
         import json as _json
         msgs = r.json() if r.text.lstrip().startswith("[") else \
             [_json.loads(li) for li in r.text.splitlines() if li.strip()]
     except Exception:
-        return JSONResponse({"error": "could not parse analytics response"}, status_code=502)
-    return _parse_ca(msgs)
+        return {"mode": "analytics", "error": "could not parse analytics response"}
+    return {"mode": "analytics", **_parse_ca(msgs)}
+
+
+async def _run_kb(q: str) -> dict:
+    """Knowledge-base RAG via the banking agent's search_knowledge_base tool."""
+    if not AGENT_URL:
+        return {"mode": "kb", "error": "knowledge base not configured", "demo": True}
+    import httpx
+    headers = {"content-type": "application/json"}
+    token = _id_token(AGENT_URL)  # OIDC to the private agent
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            r = await client.post(f"{AGENT_URL}/chat", headers=headers, json={
+                "message": q, "user_id": "analyst", "session_id": "analyst-kb"})
+        data = r.json()
+    except Exception as e:
+        return {"mode": "kb", "error": f"knowledge base unavailable: {type(e).__name__}"}
+    return {"mode": "kb", "answer": data.get("response") or "(no answer)"}
+
+
+_KB_WORDS = ("fee", "polic", "hour", "branch", "atm", " open", "close", "term", "condition",
+             "privacy", "eligib", "require", "interest", "rate", "offer", "document", "contact",
+             "support", "location", "how do i", "what is a", "limit", "disclosure")
+_AN_WORDS = ("how many", "count", "number of", "total", "sum", "average", "avg", "median", "top ",
+             " most ", "least", "list ", "per segment", "by segment", "per customer", "distribution",
+             "breakdown", "customers with", "which customer", "trend", "over time", "compare",
+             "percentage", "ratio", "largest", "smallest", "highest", "lowest", "how much")
+
+
+def _heuristic_intent(q: str) -> str:
+    ql = q.lower()
+    kb = sum(w in ql for w in _KB_WORDS)
+    an = sum(w in ql for w in _AN_WORDS)
+    return "kb" if kb > an else "analytics"
+
+
+async def _classify_intent(q: str) -> str:
+    """Decide ANALYTICS vs KB via Gemini (Vertex), falling back to a keyword
+    heuristic if the model isn't reachable (e.g. SA lacks aiplatform.user)."""
+    prompt = (
+        "You route a bank analyst's question to one of two tools. Reply with ONE word.\n"
+        "ANALYTICS = a quantitative question about the bank's DATA (counts, sums, averages, "
+        "lists, per-segment/per-customer metrics over transactions, accounts, customers, loans, "
+        "overdrafts).\n"
+        "KB = a question answerable from the bank's POLICY/PRODUCT DOCUMENTS (fees, policies, "
+        "branch hours, terms, eligibility, rates offered, how-to).\n"
+        f"Question: {q}\nAnswer (ANALYTICS or KB):")
+    try:
+        import httpx
+        token = _access_token()
+        url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
+               f"/locations/{VERTEX_LOCATION}/publishers/google/models/gemini-2.5-flash:generateContent")
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0, "maxOutputTokens": 4}}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(url, json=body, headers={"Authorization": f"Bearer {token}"})
+        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].upper()
+        if "KB" in txt and "ANALYTIC" not in txt:
+            return "kb"
+        if "ANALYTIC" in txt:
+            return "analytics"
+    except Exception:
+        pass
+    return _heuristic_intent(q)
+
+
+@app.post("/api/analyst/chat")
+async def analyst_chat(request: Request):
+    """Force Conversational Analytics (kept for direct callers)."""
+    body = await request.json()
+    q = (body.get("message") or "").strip()
+    if not q:
+        return JSONResponse({"error": "empty message"}, status_code=400)
+    return await _run_ca(q)
+
+
+@app.post("/api/analyst/ask")
+async def analyst_ask(request: Request):
+    """One analyst assistant: classify the question (Gemini, heuristic fallback) and
+    route to Conversational Analytics OR the Knowledge Base RAG accordingly. Returns
+    {mode, answer, ...} so the UI shows which tool answered."""
+    body = await request.json()
+    q = (body.get("message") or "").strip()
+    if not q:
+        return JSONResponse({"error": "empty message"}, status_code=400)
+    mode = await _classify_intent(q)
+    return await (_run_kb(q) if mode == "kb" else _run_ca(q))
 
 
 @app.get("/")

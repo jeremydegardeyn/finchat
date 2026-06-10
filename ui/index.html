@@ -269,13 +269,9 @@ function renderAnalyst(){
       <div id="catout" class="mut" style="margin-top:10px">Search the Dataplex Universal Catalog by business concept — returns governed assets with owner, PII class, contract, and data-quality.</div>
     </div>
     <div class="card" style="grid-column:1/-1"><h3>Ask the Data <span class="pill">Conversational Analytics</span> <span class="pill">Knowledge Base · RAG</span></h3>
-      <div class="row" style="gap:6px;margin-bottom:6px">
-        <button class="tab amode active" data-m="analytics">📊 Analytics — data products</button>
-        <button class="tab amode" data-m="kb">📚 Knowledge Base — policies &amp; docs</button>
-      </div>
-      <div id="ahelp" class="mut" style="font-size:12px;margin-bottom:6px"></div>
+      <div class="mut" style="font-size:12px;margin-bottom:6px">One assistant — it reads your question and routes it to <b>📊 Analytics</b> (queries the data products, shows the SQL) or the <b>📚 Knowledge Base</b> (policy/doc RAG) automatically. The badge on each answer shows which it used.</div>
       <div id="achat" class="chat" style="height:260px"></div>
-      <div class="row" style="margin-top:8px"><input id="amsg" style="flex:1"><button id="asend">Ask</button></div>
+      <div class="row" style="margin-top:8px"><input id="amsg" style="flex:1" placeholder="ask anything — e.g. 'total deposits by segment'  ·  'what are the overdraft fees?'"><button id="asend">Ask</button></div>
       <div id="aex" class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
       <div id="asql" style="margin-top:10px"></div>
     </div>
@@ -284,35 +280,13 @@ function renderAnalyst(){
   el("catq").addEventListener("keydown",e=>{ if(e.key==="Enter") catalogSearch(); });
   el("asend").onclick = analystSend;
   el("amsg").addEventListener("keydown",e=>{ if(e.key==="Enter") analystSend(); });
-  document.querySelectorAll(".amode").forEach(b=>b.onclick=()=>setAnalystMode(b.dataset.m));
-  pushAChat("a","Pick a mode and ask. Analytics queries the governed data products (shows the SQL); Knowledge Base answers from the bank's policy docs (RAG). Discover assets with the catalog search above.");
-  setAnalystMode("analytics");
-}
-// One chat, two modes: Conversational Analytics (BigQuery data products) + Knowledge Base (RAG).
-const AMODES = {
-  analytics: {
-    help: "Natural-language analytics over the governed data products — grounded in the knowledge-graph join model (transaction → account → customer); per-customer questions use the customer_360 rollup. Returns the generated SQL + result rows.",
-    placeholder: "e.g. total deposits by customer segment?  ·  customers with the most overdrafts",
-    examples: ["how many customers per segment?", "total deposits and transaction counts by segment",
-               "which customers have the most overdrafts?", "monthly fee revenue"],
-  },
-  kb: {
-    help: "Retrieval-augmented answers from the bank's Knowledge Base (VECTOR_SEARCH over kb_chunks), cited to source documents.",
-    placeholder: "e.g. what are the overdraft fees?  ·  branch hours?  ·  what's the privacy policy?",
-    examples: ["what are the overdraft fees?", "when is the Lakewood branch open?",
-               "summarize the privacy policy", "what lending rates do we offer?"],
-  },
-};
-function setAnalystMode(m){
-  S.amode = m;
-  document.querySelectorAll(".amode").forEach(b=>b.classList.toggle("active", b.dataset.m===m));
-  const cfg = AMODES[m];
-  el("ahelp").textContent = cfg.help;
-  el("amsg").placeholder = cfg.placeholder;
-  el("asql").innerHTML = "";
+  const examples = ["how many customers per segment?", "total deposits by customer segment",
+    "which customers have the most overdrafts?",  // → Analytics
+    "what are the overdraft fees?", "when is the Lakewood branch open?", "what's the privacy policy?"]; // → KB
   el("aex").innerHTML = `<span class="mut" style="font-size:12px;align-self:center">try:</span>` +
-    cfg.examples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("");
+    examples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("");
   el("aex").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("amsg").value=b.textContent; analystSend(); });
+  pushAChat("a","Ask me anything about FinChat — I'll pull metrics from the governed data products or answer from the bank's policy docs, whichever fits. Discover assets with the catalog search above.");
 }
 
 async function catalogSearch(){
@@ -344,24 +318,16 @@ async function catalogSearch(){
 
 async function analystSend(){
   const q = el("amsg").value.trim(); if(!q) return;
-  const mode = S.amode || "analytics";
-  pushAChat("u", q); el("amsg").value="";
-  if (mode === "kb") {                       // Knowledge Base (RAG via the agent)
-    const t = pushAChat("a","Searching the knowledge base…");
-    if (!S.kbsid) S.kbsid = "kb-" + Date.now();
-    const r = await api("agent","chat",{ method:"POST", body:JSON.stringify({ message:q, user_id:"analyst", session_id:S.kbsid }) });
-    t.querySelector(".b").textContent = (r.__demo || r.error || !r.response)
-      ? (r.error ? ("Error: " + r.error) : "Knowledge base isn't available in demo mode (needs the RAG agent + kb_chunks).")
-      : r.response;
-    el("achat").scrollTop=1e9; return;
-  }
-  // Conversational Analytics (BigQuery data products)
-  el("asql").innerHTML="";
-  const t = pushAChat("a","Analyzing the data products… (this can take ~15s)");
-  const r = await api("analyst","chat",{ method:"POST", body:JSON.stringify({ message:q }) });
-  if (r.__demo) { t.querySelector(".b").textContent = "Conversational Analytics isn't available in demo mode (needs the Gemini Data Analytics API + BigQuery access)."; return; }
-  if (r.error) { t.querySelector(".b").textContent = "Analytics error: " + escapeHtml(r.error) + (r.detail?` — ${escapeHtml(r.detail)}`:""); return; }
-  t.querySelector(".b").textContent = r.answer || "(no answer)";
+  pushAChat("u", q); el("amsg").value=""; el("asql").innerHTML="";
+  const t = pushAChat("a","Thinking… (routing to analytics or the knowledge base)");
+  // Single agentic endpoint: the BFF classifies intent and routes to CA or KB.
+  const r = await api("analyst","ask",{ method:"POST", body:JSON.stringify({ message:q }) });
+  if (r.__demo) { t.querySelector(".b").textContent = "The analyst assistant isn't available in demo mode (needs Gemini Data Analytics + the RAG agent)."; return; }
+  if (r.error) { t.querySelector(".b").textContent = "Error: " + escapeHtml(r.error) + (r.detail?` — ${escapeHtml(r.detail)}`:""); return; }
+  const badge = r.mode === "kb"
+    ? `<span class="pill ok">📚 Knowledge Base</span> `
+    : `<span class="pill ok">📊 Analytics</span> `;
+  t.querySelector(".b").innerHTML = badge + escapeHtml(r.answer || "(no answer)");
   let html="";
   if (r.sql) html += `<label>Generated SQL</label><pre>${escapeHtml(r.sql)}</pre>`;
   if (r.rows && r.rows.length){ const cols = r.columns && r.columns.length ? r.columns : Object.keys(r.rows[0]);
