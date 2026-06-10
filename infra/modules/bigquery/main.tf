@@ -64,6 +64,25 @@ resource "google_bigquery_dataset" "graph" {
   labels      = merge(var.labels, { layer = "semantic", domain = "graph" })
 }
 
+# Live evaluation (AgentOps): captured conversations + LLM-as-judge scores. The BFF
+# (writes logs) and the scorer SA (reads logs, writes scores) get dataEditor. Tables
+# created from scripts/eval_schema.sql.
+resource "google_bigquery_dataset" "eval" {
+  project     = var.project_id
+  dataset_id  = "${var.name_prefix}_eval_${var.env}"
+  location    = var.region
+  description = "FinChat live evaluation: conversation_log, conversation_scores, eval_summary."
+  labels      = merge(var.labels, { layer = "ops", domain = "eval" })
+}
+
+resource "google_bigquery_dataset_iam_member" "eval_writers" {
+  for_each   = toset(var.eval_writer_members)
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.eval.dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = each.value
+}
+
 # --- Bronze raw landing table (Pub/Sub BigQuery subscription target) ---------
 # Canonical Pub/Sub->BQ schema: raw payload in `data`, metadata for lineage.
 resource "google_bigquery_table" "bronze_transaction_event" {

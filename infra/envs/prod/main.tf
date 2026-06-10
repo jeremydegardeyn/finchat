@@ -49,6 +49,12 @@ module "bigquery" {
   financial_reader_members = [
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
   ]
+  # Live eval: BFF (txn_api) writes conversation logs; CI/CD SA (the scorer runs via
+  # the live-eval scheduled workflow) reads logs + writes scores.
+  eval_writer_members = [
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+    "serviceAccount:${module.foundation.service_account_emails["cicd"]}",
+  ]
   labels = local.labels
 }
 

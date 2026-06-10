@@ -1,0 +1,43 @@
+name: Live Eval
+
+# Scores recently captured production conversations (BFF -> conversation_log) with an
+# LLM-as-judge on Vertex, writing rolling metrics that the Admin -> Evaluations card
+# reads live. Runs on a schedule; can also be triggered manually per environment.
+on:
+  schedule:
+    - cron: "17 7 * * *" # daily ~07:17 UTC
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, test, prod]
+        default: prod
+      limit:
+        description: Max turns to score this run
+        default: "50"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+      - name: Install deps
+        run: pip install google-cloud-bigquery google-auth
+      - name: Score recent conversations
+        run: |
+          python scripts/live_eval.py "${{ github.event.inputs.environment || 'prod' }}" \
+            --limit "${{ github.event.inputs.limit || '50' }}"

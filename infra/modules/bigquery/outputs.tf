@@ -3,6 +3,7 @@ output "silver_dataset" { value = google_bigquery_dataset.silver.dataset_id }
 output "gold_dataset" { value = google_bigquery_dataset.gold.dataset_id }
 output "loans_dataset" { value = google_bigquery_dataset.loans.dataset_id }
 output "graph_dataset" { value = google_bigquery_dataset.graph.dataset_id }
+output "eval_dataset" { value = google_bigquery_dataset.eval.dataset_id }
 
 output "taxonomy_id" {
   description = "Data Catalog taxonomy resource id."

@@ -354,14 +354,13 @@ async function renderAdmin() {
   const h = await (await fetch("/healthz").catch(()=>({json:()=>({})}))).json().catch(()=>({}));
   const live = S.live;
   let ev = {}; try { ev = await (await fetch("/api/eval")).json(); } catch(e){}
-  // Real AgentOps metrics from eval/reports/latest.json (baked into the image);
-  // fall back to representative numbers only if the report isn't available.
-  const f = (v,dflt)=> (ev.available && typeof v==="number") ? v.toFixed(2) : dflt;
-  const ga=f(ev.grounding_accuracy,"0.94"), hr=f(ev.hallucination_rate,"0.03"),
-        tu=f(ev.tool_utilization,"0.97"), ar=f(ev.approval_recommendation_accuracy,"0.91");
-  const evNote = ev.available && ev.generated_at
-    ? `Eval ${new Date(ev.generated_at).toISOString().slice(0,10)} · txn n=${ev.n_txn}, loan n=${ev.n_loan} · CI-gated (Increment 7)`
-    : "Representative — full framework: Increment 7";
+  // Live metrics (scored production conversations) when available; else offline CI report.
+  const m = ev.metrics || [];
+  const tile = (x,small)=> `<div><div class="metric${small?' small':''}">${
+    (ev.available && x && typeof x.value==="number") ? x.value.toFixed(2) : "—"}</div><div class="mut">${x?x.label:""}</div></div>`;
+  const evNote = !ev.available ? "Representative — full framework: Increment 7"
+    : ev.live ? `LIVE · rolling 7d · n=${ev.n}${ev.generated_at?` · last scored ${new Date(ev.generated_at).toISOString().slice(0,16).replace("T"," ")}Z`:""}`
+              : `Offline CI-gated (Increment 7)${ev.generated_at?` · ${new Date(ev.generated_at).toISOString().slice(0,10)}`:""} · txn n=${ev.n_txn}, loan n=${ev.n_loan}`;
   view.innerHTML = `<div class="grid">
     <div class="card"><h3>Pipeline Monitor</h3>
       ${stat("Pub/Sub ingest", live.txn_api)}${stat("Dataflow (on-demand)", live.txn_api)}
@@ -369,11 +368,9 @@ async function renderAdmin() {
     <div class="card"><h3>Agent Monitor</h3>
       ${stat("Banking Assistant", live.agent)}${stat("Loan Planner + specialists", live.agent)}
       <div class="mut" style="margin-top:8px">Runtime: Agent Engine (scale-to-zero)</div></div>
-    <div class="card"><h3>Evaluations</h3>
-      <div class="row"><div><div class="metric">${ga}</div><div class="mut">Grounding accuracy</div></div>
-      <div><div class="metric">${hr}</div><div class="mut">Hallucination rate</div></div></div>
-      <div class="row" style="margin-top:10px"><div><div class="metric small">${tu}</div><div class="mut">Tool utilization</div></div>
-      <div><div class="metric small">${ar}</div><div class="mut">Approval rec. accuracy</div></div></div>
+    <div class="card"><h3>Evaluations ${ev.live?'<span class="pill ok">LIVE</span>':'<span class="pill">offline</span>'}</h3>
+      <div class="row">${tile(m[0])}${tile(m[1])}</div>
+      <div class="row" style="margin-top:10px">${tile(m[2],true)}${tile(m[3],true)}</div>
       <div class="mut" style="margin-top:8px">${evNote}</div></div>
     <div class="card" style="grid-column:1/-1"><h3>Backend health</h3><pre>${JSON.stringify(h,null,2)}</pre></div>
   </div>`;

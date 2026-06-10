@@ -31,6 +31,7 @@ SILVER_DATASET = os.getenv("SILVER_DATASET", "")
 GOLD_DATASET = os.getenv("GOLD_DATASET", "")
 LOANS_DATASET = os.getenv("LOANS_DATASET", "")
 GRAPH_DATASET = os.getenv("GRAPH_DATASET", "")  # knowledge graph (customer_360, kg_*)
+EVAL_DATASET = os.getenv("EVAL_DATASET", "")    # live-eval: conversation_log capture
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")  # Gemini for intent routing
 ANALYST_READY = bool(GCP_PROJECT and (SILVER_DATASET or GOLD_DATASET or LOANS_DATASET))
 
@@ -92,6 +93,32 @@ def _mint_token(audience: str) -> str:
     return creds.token
 
 
+def _log_eval(persona: str, channel: str, question: str, answer: str, context=None):
+    """Best-effort capture of a conversation turn for live evaluation. Fire-and-forget
+    on a daemon thread so it never adds latency to or breaks the chat response."""
+    if not (GCP_PROJECT and EVAL_DATASET and (question or "").strip()):
+        return
+
+    def _do():
+        try:
+            import uuid as _uuid
+            import json as _json
+            from datetime import datetime, timezone
+            from google.cloud import bigquery
+            row = {"conversation_id": str(_uuid.uuid4()),
+                   "ts": datetime.now(timezone.utc).isoformat(),
+                   "persona": persona, "channel": channel,
+                   "question": (question or "")[:4000], "answer": (answer or "")[:8000],
+                   "context": (_json.dumps(context)[:8000] if context else None)}
+            bigquery.Client(project=GCP_PROJECT).insert_rows_json(
+                f"{GCP_PROJECT}.{EVAL_DATASET}.conversation_log", [row])
+        except Exception:
+            pass
+
+    import threading
+    threading.Thread(target=_do, daemon=True).start()
+
+
 async def _proxy(base: str, path: str, request: Request) -> Response:
     if not base:
         return JSONResponse({"error": "backend not configured", "demo": True}, status_code=503)
@@ -143,6 +170,15 @@ async def agent_proxy(path: str, request: Request):
             return JSONResponse(
                 {"error": "The response was withheld by safety screening.", "reason": reason},
                 status_code=502)
+    except Exception:
+        pass
+    # Capture the turn for live eval (customer banking-assistant chats).
+    try:
+        import json as _json
+        q = (_json.loads(body or b"{}") or {}).get("message", "")
+        a = (_json.loads(resp.body or b"{}") or {}).get("response", "")
+        if q:
+            _log_eval(request.headers.get("X-Persona", "customer"), "agent", q, a)
     except Exception:
         pass
     return resp
@@ -418,26 +454,52 @@ async def analyst_ask(request: Request):
     if not q:
         return JSONResponse({"error": "empty message"}, status_code=400)
     mode = await _classify_intent(q)
-    return await (_run_kb(q) if mode == "kb" else _run_ca(q))
+    res = await (_run_kb(q) if mode == "kb" else _run_ca(q))
+    # Capture for live eval; for analytics the generated SQL + rows are the grounding context.
+    ctx = None
+    if res.get("mode") == "analytics":
+        ctx = {"sql": res.get("sql"), "rows": (res.get("rows") or [])[:10]}
+    _log_eval("analyst", res.get("mode", mode), q, res.get("answer", ""), ctx)
+    return res
 
 
 @app.get("/api/eval")
 def eval_report():
-    """Latest AgentOps evaluation summary (eval/pipelines/evaluate.py output, baked
-    into the image at build). Drives the Admin -> Evaluations card with real numbers."""
+    """Drives the Admin -> Evaluations card. Prefers LIVE rolling metrics from scored
+    production conversations (BigQuery eval_summary); falls back to the offline,
+    CI-gated report baked into the image."""
     import json
+    # 1) Live: rolling 7-day metrics over real, LLM-judged conversations.
+    if GCP_PROJECT and EVAL_DATASET:
+        try:
+            from google.cloud import bigquery
+            rows = list(bigquery.Client(project=GCP_PROJECT).query(
+                f"SELECT * FROM `{GCP_PROJECT}.{EVAL_DATASET}.eval_summary`").result())
+            if rows and rows[0]["n"]:
+                d = dict(rows[0])
+                ts = d.get("last_scored_at")
+                return {"available": True, "live": True, "n": d["n"],
+                        "generated_at": ts.isoformat() if ts else None,
+                        "metrics": [
+                            {"label": "Grounding", "value": d["grounding_accuracy"]},
+                            {"label": "Hallucination", "value": d["hallucination_rate"]},
+                            {"label": "Instruction-following", "value": d["instruction_following"]},
+                            {"label": "Safety", "value": d["safety"]}]}
+        except Exception:
+            pass
+    # 2) Offline: CI-gated report baked into the image.
     try:
         with open(os.path.join(HERE, "eval_report.json")) as f:
             d = json.load(f)
         s = d.get("summary", {})
-        return {"available": True, "generated_at": d.get("generated_at"),
-                "grounding_accuracy": s.get("grounding_accuracy"),
-                "hallucination_rate": s.get("hallucination_rate"),
-                "tool_utilization": s.get("tool_utilization"),
-                "response_quality": s.get("response_quality"),
-                "approval_recommendation_accuracy": s.get("approval_recommendation_accuracy"),
+        return {"available": True, "live": False, "generated_at": d.get("generated_at"),
                 "n_txn": d.get("transaction_agent", {}).get("n"),
-                "n_loan": d.get("loan_recommendations", {}).get("n")}
+                "n_loan": d.get("loan_recommendations", {}).get("n"),
+                "metrics": [
+                    {"label": "Grounding accuracy", "value": s.get("grounding_accuracy")},
+                    {"label": "Hallucination rate", "value": s.get("hallucination_rate")},
+                    {"label": "Tool utilization", "value": s.get("tool_utilization")},
+                    {"label": "Approval rec. accuracy", "value": s.get("approval_recommendation_accuracy")}]}
     except Exception:
         return {"available": False}
 

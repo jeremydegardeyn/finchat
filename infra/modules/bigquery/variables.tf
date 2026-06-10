@@ -39,6 +39,12 @@ variable "financial_reader_members" {
   default     = []
 }
 
+variable "eval_writer_members" {
+  type        = list(string)
+  description = "Members granted dataEditor on the live-eval dataset (BFF writes logs; scorer writes scores)."
+  default     = []
+}
+
 variable "labels" {
   type    = map(string)
   default = {}

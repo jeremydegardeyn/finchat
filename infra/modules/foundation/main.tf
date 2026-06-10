@@ -51,6 +51,8 @@ locals {
       "roles/iam.serviceAccountUser",
       "roles/dataflow.developer",  # build/launch the Flex Template
       "roles/storage.objectAdmin", # write the Flex Template spec to the dataflow bucket
+      "roles/bigquery.jobUser",    # live-eval scorer: query conversation_log
+      "roles/aiplatform.user",     # live-eval scorer: Vertex Gen AI Evaluation
     ] }
   }
 
