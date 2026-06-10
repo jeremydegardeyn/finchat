@@ -20,8 +20,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to cp1252.
+except Exception:
+    pass
 
 PROJECT = "strongsville-city-schools"
 REGION = "us-central1"
@@ -56,7 +63,7 @@ def _token() -> str:
     return creds.token
 
 
-def _judge(token: str, question: str, answer: str, context: str) -> dict | None:
+def _judge(token: str, question: str, answer: str, context: str, _tries: int = 4) -> dict | None:
     prompt = JUDGE_PROMPT.format(question=question[:3000], answer=answer[:5000],
                                  context=(context or "(none)")[:5000])
     url = (f"https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
@@ -69,6 +76,12 @@ def _judge(token: str, question: str, answer: str, context: str) -> dict | None:
         with urllib.request.urlopen(req, timeout=30) as r:
             txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
         return json.loads(txt)
+    except urllib.error.HTTPError as e:
+        if e.code == 429 and _tries > 1:  # Vertex rate limit — back off and retry.
+            time.sleep(10)
+            return _judge(token, question, answer, context, _tries - 1)
+        print(f"  judge error: HTTP {e.code}")
+        return None
     except Exception as e:
         print(f"  judge error: {type(e).__name__}: {e}")
         return None
@@ -109,18 +122,25 @@ def main():
         v = _judge(token, r["question"], r["answer"] or "", r["context"] or "")
         if not v:
             continue
-        g, instr, coh = _norm(v.get("groundedness")), _norm(v.get("instruction_following")), _norm(v.get("coherence"))
+        # Store RAW judge values (groundedness/instruction_following/coherence on 1-5,
+        # safety 0/1); the eval_summary view normalizes to 0..1. `overall` is the mean
+        # of the normalized metrics present.
+        rg, ri, rc = v.get("groundedness"), v.get("instruction_following"), v.get("coherence")
         safety = float(v.get("safety", 1))
-        parts = [x for x in (g, instr, coh, safety) if x is not None]
-        overall = round(sum(parts) / len(parts), 3) if parts else None
+        norm = [x for x in (_norm(rg), _norm(ri), _norm(rc), safety) if x is not None]
+        overall = round(sum(norm) / len(norm), 3) if norm else None
         out.append({"conversation_id": r["conversation_id"], "scored_at": now,
-                    "channel": r["channel"], "groundedness": g,
-                    "instruction_following": instr, "coherence": coh, "safety": safety,
-                    "overall": overall, "rationale": (v.get("rationale") or "")[:500],
+                    "channel": r["channel"],
+                    "groundedness": (float(rg) if rg is not None else None),
+                    "instruction_following": (float(ri) if ri is not None else None),
+                    "coherence": (float(rc) if rc is not None else None),
+                    "safety": safety, "overall": overall,
+                    "rationale": (v.get("rationale") or "")[:500],
                     "model_version": "gemini-2.5-flash-judge"})
-        print(f"  ✓ {r['channel']:9s} g={g} instr={instr} coh={coh} safety={safety}")
+        print(f"  ✓ {r['channel']:9s} g={rg} instr={ri} coh={rc} safety={safety}")
 
     if out:
+        # Streaming insert respects the table schema (handles all-null columns + types).
         errs = bq.insert_rows_json(f"{PROJECT}.{ds}.conversation_scores", out)
         print(("insert errors: " + str(errs)) if errs else f"wrote {len(out)} scores.")
     print("summary:", f"SELECT * FROM `{PROJECT}.{ds}.eval_summary`")
