@@ -127,6 +127,17 @@ def _mint_token(audience: str) -> str:
     return creds.token
 
 
+_http = None  # shared pooled HTTP client (keep-alive: saves a TLS handshake per hop)
+
+
+def _client():
+    global _http
+    if _http is None:
+        import httpx
+        _http = httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=10.0))
+    return _http
+
+
 _user_cache: dict[str, dict] = {}  # GIS id-token -> {email, persona, exp}
 
 
@@ -219,7 +230,6 @@ async def _proxy(base: str, path: str, request: Request,
                  extra_headers: dict | None = None) -> Response:
     if not base:
         return JSONResponse({"error": "backend not configured", "demo": True}, status_code=503)
-    import httpx
     url = f"{base}/{path}"
     headers = {"content-type": request.headers.get("content-type", "application/json")}
     # Role SIMULATION fallback only (no OAuth configured): trust the client headers.
@@ -234,9 +244,9 @@ async def _proxy(base: str, path: str, request: Request,
     if extra_headers:
         headers.update(extra_headers)
     body = await request.body()
-    async with httpx.AsyncClient(timeout=90.0) as client:  # agent cold-start + Gemini latency
-        r = await client.request(request.method, url, params=request.query_params,
-                                 content=body or None, headers=headers)
+    r = await _client().request(request.method, url, params=request.query_params,
+                                content=body or None, headers=headers,
+                                timeout=90.0)  # agent cold-start + Gemini latency
     return Response(content=r.content, status_code=r.status_code,
                     media_type=r.headers.get("content-type", "application/json"))
 
@@ -461,7 +471,6 @@ async def _run_ca(q: str) -> dict:
         token = _access_token()
     except Exception:
         return {"mode": "analytics", "error": "no credentials", "demo": True}
-    import httpx
     url = (f"https://geminidataanalytics.googleapis.com/v1beta/projects/{GCP_PROJECT}"
            f"/locations/{CA_LOCATION}:chat")
     payload = {
@@ -472,8 +481,8 @@ async def _run_ca(q: str) -> dict:
             "datasource_references": {"bq": {"table_references": tables}},
         },
     }
-    async with httpx.AsyncClient(timeout=150.0) as client:
-        r = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
+    r = await _client().post(url, json=payload, headers={"Authorization": f"Bearer {token}"},
+                             timeout=150.0)
     if r.status_code >= 400:
         return {"mode": "analytics", "error": f"analytics error {r.status_code}", "detail": r.text[:400]}
     try:
@@ -489,15 +498,13 @@ async def _run_kb(q: str) -> dict:
     """Knowledge-base RAG via the banking agent's search_knowledge_base tool."""
     if not AGENT_URL:
         return {"mode": "kb", "error": "knowledge base not configured", "demo": True}
-    import httpx
     headers = {"content-type": "application/json"}
     token = _id_token(AGENT_URL)  # OIDC to the private agent
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            r = await client.post(f"{AGENT_URL}/chat", headers=headers, json={
-                "message": q, "user_id": "analyst", "session_id": "analyst-kb"})
+        r = await _client().post(f"{AGENT_URL}/chat", headers=headers, json={
+            "message": q, "user_id": "analyst", "session_id": "analyst-kb"}, timeout=90.0)
         data = r.json()
     except Exception as e:
         return {"mode": "kb", "error": f"knowledge base unavailable: {type(e).__name__}"}
@@ -532,14 +539,13 @@ async def _classify_intent(q: str) -> str:
         "branch hours, terms, eligibility, rates offered, how-to).\n"
         f"Question: {q}\nAnswer (ANALYTICS or KB):")
     try:
-        import httpx
         token = _access_token()
         url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
                f"/locations/{VERTEX_LOCATION}/publishers/google/models/gemini-2.5-flash:generateContent")
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0, "maxOutputTokens": 4}}
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(url, json=body, headers={"Authorization": f"Bearer {token}"})
+        r = await _client().post(url, json=body, headers={"Authorization": f"Bearer {token}"},
+                                 timeout=15.0)
         txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].upper()
         if "KB" in txt and "ANALYTIC" not in txt:
             return "kb"

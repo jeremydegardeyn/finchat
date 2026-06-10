@@ -68,10 +68,12 @@ jobs:
           REPO="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images"
           SHA="${GITHUB_SHA::12}"
           deploy() { # name image-name service-account extra-env
+            # --cpu-boost: extra CPU during container startup only (no idle cost) —
+            # meaningfully shortens Python cold starts on scale-to-zero services.
             gcloud run deploy "finchat-${ENV}-$1" \
               --image "${REPO}/$2:${SHA}" --region "${REGION}" \
               --service-account "finchat-${ENV}-$3@${PROJECT}.iam.gserviceaccount.com" \
-              --quiet $4
+              --cpu-boost --quiet $4
           }
           deploy txn-api txn-api txn-api \
             "--set-env-vars=GCP_PROJECT=${PROJECT},GOLD_DATASET=finchat_gold_${ENV},SILVER_DATASET=finchat_silver_${ENV} --no-allow-unauthenticated"
