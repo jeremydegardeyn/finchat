@@ -210,8 +210,13 @@ def catalog_search(q: str = "", raw: int = 0):
                 continue
             seen.add(dk)
             matches.append({"name": disp, "resource": resource, "entry_type": etype, "aspects": aspects})
-            if len(matches) >= 8:
+            if len(matches) >= 20:
                 break
+        # Surface governed data products (entries carrying FinChat aspects) first; keep
+        # relevance order within each group. Glossary terms next, raw tables/datasets last.
+        matches.sort(key=lambda m: (0 if m["aspects"] else (1 if m["entry_type"] in
+                     ("glossary-term", "glossary-category") else 2)))
+        matches = matches[:8]
         if raw:  # diagnostic: what the BFF SA's search actually returns, pre-filter
             return {"matches": matches, "raw": rawlist}
         return {"matches": matches}
