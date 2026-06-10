@@ -153,8 +153,13 @@ async def agent_proxy(path: str, request: Request):
 # persona only (the SPA exposes these in the Analyst view; the customer agent no
 # longer carries the catalog-discovery tool).
 
+def _is_finchat(*vals) -> bool:
+    # BigQuery entries use finchat_<dataset>; data-product/glossary use finchat-<env>.
+    return any(("finchat_" in v or "finchat-" in v) for v in vals if v)
+
+
 @app.get("/api/catalog/search")
-def catalog_search(q: str = ""):
+def catalog_search(q: str = "", raw: int = 0):
     """Discover Dataplex catalog assets by free-text description. Returns matching
     entries with their governed aspects (data-product, governance, data-contract,
     operational) so the analyst can see ownership, PII class, contract, and DQ."""
@@ -168,19 +173,19 @@ def catalog_search(q: str = ""):
         client = dataplex_v1.CatalogServiceClient()
         scope = f"projects/{GCP_PROJECT}/locations/global"
         env = SILVER_DATASET.rsplit("_", 1)[-1] if "_" in SILVER_DATASET else ""  # e.g. "prod"
-        matches, seen = [], set()
+        matches, seen, rawlist = [], set(), []
         for res in client.search_entries(request={"name": scope, "query": q, "page_size": 25}):
             entry = getattr(res, "dataplex_entry", None)
             if not entry:
                 continue
             name = getattr(entry, "name", "")
-            resource = res.linked_resource or ""
+            resource = res.linked_resource or getattr(entry, "fully_qualified_name", "") or ""
             etype = (getattr(entry, "entry_type", "") or "").split("/")[-1]
+            rawlist.append({"type": etype, "name": name[-70:], "resource": resource[:70]})
             is_term = etype in ("glossary-term", "glossary-category")
-            # FinChat assets only: BigQuery entries must be in a finchat_ dataset
-            # (drops billing-export and other auto-harvested project tables). Glossary
-            # terms/data-product entries are kept.
-            if not is_term and "finchat_" not in resource and "finchat-" not in name:
+            # FinChat assets only: keep finchat_* / finchat-* entries (drops billing-export
+            # and other auto-harvested project tables). Match name OR resource, _ OR -.
+            if not is_term and not _is_finchat(resource, name):
                 continue
             # Scope to this env (drop other envs' duplicate tables); keep env-less terms.
             if env and env not in resource and env not in name and not is_term:
@@ -207,6 +212,8 @@ def catalog_search(q: str = ""):
             matches.append({"name": disp, "resource": resource, "entry_type": etype, "aspects": aspects})
             if len(matches) >= 8:
                 break
+        if raw:  # diagnostic: what the BFF SA's search actually returns, pre-filter
+            return {"matches": matches, "raw": rawlist}
         return {"matches": matches}
     except Exception as e:
         return {"matches": [], "error": f"{type(e).__name__}: {e}"}
