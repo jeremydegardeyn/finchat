@@ -13,6 +13,38 @@
 -- PII (full_name/email) is intentionally excluded — analytics needs ids + segments.
 -- =============================================================================
 
+-- ---------- NATIVE property graph (BigQuery Graph / GQL) ---------------------
+-- A real property graph over the operational entities — queried with GQL
+-- (GRAPH_TABLE ... MATCH), e.g.:
+--   SELECT segment, COUNT(*) FROM GRAPH_TABLE(`${PROJECT}.finchat_graph_${ENV}.banking_graph`
+--     MATCH (c:Customer)-[:OWNS]->(a:Account)<-[:ON_ACCOUNT]-(t:Transaction)
+--     COLUMNS (c.segment AS segment)) GROUP BY segment;
+-- Metadata-only over existing tables (no copies, no extra storage cost). The kg_*
+-- VIEWS below remain the grounding for Conversational Analytics (CA emits SQL,
+-- not GQL); the property graph serves native graph analytics (multi-hop paths,
+-- relationship patterns — e.g. fraud-ring style traversals at enterprise).
+CREATE OR REPLACE PROPERTY GRAPH `${PROJECT}.finchat_graph_${ENV}.banking_graph`
+NODE TABLES (
+  `${PROJECT}.finchat_silver_${ENV}.customer`    AS Customer    KEY (customer_id),
+  `${PROJECT}.finchat_silver_${ENV}.account`     AS Account     KEY (account_id),
+  `${PROJECT}.finchat_silver_${ENV}.transaction` AS Transaction KEY (transaction_id),
+  `${PROJECT}.finchat_loans_${ENV}.loan_request` AS Loan        KEY (loan_id)
+)
+EDGE TABLES (
+  `${PROJECT}.finchat_silver_${ENV}.account` AS OWNS
+    KEY (account_id)
+    SOURCE KEY (customer_id) REFERENCES Customer (customer_id)
+    DESTINATION KEY (account_id) REFERENCES Account (account_id),
+  `${PROJECT}.finchat_silver_${ENV}.transaction` AS ON_ACCOUNT
+    KEY (transaction_id)
+    SOURCE KEY (transaction_id) REFERENCES Transaction (transaction_id)
+    DESTINATION KEY (account_id) REFERENCES Account (account_id),
+  `${PROJECT}.finchat_loans_${ENV}.loan_request` AS REQUESTED
+    KEY (loan_id)
+    SOURCE KEY (account_id) REFERENCES Account (account_id)
+    DESTINATION KEY (loan_id) REFERENCES Loan (loan_id)
+);
+
 -- ---------- Join relationships (the graph schema; feeds the CA system prompt) ----------
 CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.kg_relationships` AS
 SELECT * FROM UNNEST([

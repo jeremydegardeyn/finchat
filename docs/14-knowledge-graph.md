@@ -33,7 +33,26 @@ flowchart LR
 to a `Customer` is `… → account.account_id` then `account.customer_id → customer`.
 Missing that bridge is exactly why naive NL→SQL failed.
 
-## 2. What's built (`finchat_graph_<env>`)
+## 2. What's built (`finchat_graph_<env>`) — two layers
+
+**Layer 1 — a NATIVE BigQuery property graph** (`banking_graph`, [BigQuery Graph](https://cloud.google.com/blog/products/data-analytics/introducing-bigquery-graph)):
+real graph semantics over the operational tables — `Customer`, `Account`, `Transaction`,
+`Loan` nodes with `OWNS` / `ON_ACCOUNT` / `REQUESTED` edges — queried with **GQL**:
+
+```sql
+SELECT segment, COUNT(*) AS txns, ROUND(SUM(amount),0) AS total
+FROM GRAPH_TABLE(`…finchat_graph_prod.banking_graph`
+  MATCH (c:Customer)-[:OWNS]->(a:Account)<-[:ON_ACCOUNT]-(t:Transaction)
+  WHERE t.txn_type = "DEPOSIT"
+  COLUMNS (c.segment AS segment, t.amount AS amount))
+GROUP BY segment ORDER BY total DESC;   -- verified: matches the SQL-join numbers exactly
+```
+
+It is **metadata over the existing tables** — no copies, no storage cost; GQL queries bill
+as ordinary BigQuery analysis. This is the surface for genuine graph questions (multi-hop
+paths, relationship patterns — fraud-ring style traversals at enterprise scale).
+
+**Layer 2 — relational views** (the original grounding layer):
 
 | View | Shape | Purpose |
 |---|---|---|
@@ -41,6 +60,10 @@ Missing that bridge is exactly why naive NL→SQL failed.
 | `kg_nodes` | node_id · node_type · label · properties(JSON) | Every entity instance (Customer / Account / Loan) |
 | `kg_edges` | src_id·src_type · relationship · dst_id·dst_type | Directed relationships (HAS_ACCOUNT, REQUESTED_LOAN) |
 | `customer_360` | one row per customer: segment + account/transaction/overdraft/loan rollups | **Pre-joined** analytical backbone — per-customer questions need no joins |
+
+**Why both?** Conversational Analytics generates **SQL, not GQL** — so the views +
+system-instruction remain the grounding for the analyst chat, while the property graph
+serves native graph analytics. Same model, two query surfaces.
 
 `customer_360` is **CLS-safe by construction**: it exposes `customer_id` + `segment` +
 aggregates, never `full_name`/`email`. DDL: [`products/graph/schemas/graph.sql`](../products/graph/schemas/graph.sql).

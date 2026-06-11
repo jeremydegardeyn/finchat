@@ -42,6 +42,17 @@ conversational-AI queries on it:
 - **Zero-cost, IaC:** views over existing data — no storage, no pipeline; co-located in
   `us-central1` so the inline BQ datasource resolves.
 
+## Decision (amended) — native BigQuery property graph added
+
+The views are a *relational encoding* of the graph; BigQuery's native **property graph**
+(`CREATE PROPERTY GRAPH` + GQL `GRAPH_TABLE`/`MATCH`) is now layered on top:
+`banking_graph` defines Customer/Account/Transaction/Loan nodes and OWNS/ON_ACCOUNT/
+REQUESTED edges directly over the silver/loans tables (cross-dataset node tables work;
+metadata-only, zero storage cost). GQL traversals verified to match the SQL-join results.
+Division of labor: **GQL** for genuine graph analytics (multi-hop, relationship patterns);
+the **views + system instruction** stay as Conversational Analytics grounding, since CA
+emits SQL, not GQL.
+
 ## Consequences
 
 - New `finchat_graph_<env>` dataset (bigquery module) + `products/graph/schemas/graph.sql`
