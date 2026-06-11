@@ -98,10 +98,11 @@ const VIEWS = {
   analyst:  { label:"Analyst", render: renderAnalyst },
   admin:    { label:"Admin",    render: renderAdmin },
 };
-// Every persona gets Ask-the-Data (ADR-0019): the data layer decides what each
-// caller sees — signed-in users via their own credentials (values/masked/denied),
-// anonymous customers via the impersonated masked-reader tier.
-function viewsFor(p){ return p==="customer"?["customer","analyst"]:p==="employee"?["employee","analyst"]:p==="analyst"?["analyst"]:["admin","analyst"]; }
+// Ask-the-Data (free-form Conversational Analytics) is a STAFF capability. The
+// anonymous customer gets only the DaaS-grounded banking assistant (tools), not
+// arbitrary SQL over the data products. Staff personas see what their own
+// credentials allow (values / masked / denied), ADR-0019.
+function viewsFor(p){ return p==="customer"?["customer"]:p==="employee"?["employee","analyst"]:p==="analyst"?["analyst"]:["admin","analyst"]; }
 let activeTab = "customer";
 
 function setTabs() {

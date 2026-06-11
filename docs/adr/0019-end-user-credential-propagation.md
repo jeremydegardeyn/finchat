@@ -42,15 +42,40 @@ Propagate the signed-in user's **OAuth access token** to the analytics path so
   `DATA_MASKING_POLICY` on the `PII_FINANCIAL` tag returns NULLs to masked
   readers instead of erroring — analytical SQL keeps working for the analyst tier.
 
-## Decision (amended) — anonymous tier + authorized views
+## Decision (amended) — staff-only free-form CA + masked fallback + authorized views
 
-- **Anonymous callers are a first-class tier**: Ask-the-Data is open to the
-  unauthenticated customer persona, executed via **impersonation of a dedicated
-  low-privilege SA** (`finchat-<env>-analyst-anon`: jobUser, dataset READER on the
+- **Free-form Conversational Analytics is a staff surface, not a customer one.**
+  The anonymous customer persona gets only the **DaaS-grounded banking assistant**
+  (balance / transactions / summary / KB via tools) — it never reaches free-form
+  Ask-the-Data. The CA endpoints (`/api/analyst/{ask,chat}`) are gated to the
+  `analyst`, `employee` (loan approver), and `admin` personas; the gate answers
+  *may you call this endpoint*, the user's own credentials answer *what you can see*.
+- **Staff get CA + KB, never the DaaS serving-tier chat — by design, for
+  governance consistency.** The DaaS banking-assistant tools (`get_account_balance`,
+  `get_transaction_history`, `get_account_summary`, `get_loan_status`) are
+  deterministic single-entity lookups against the **serving tier (Bigtable hot
+  path)**, which has **no policy-tag masking**. Exposing them on the staff assistant
+  would hand the masked analyst tier a **side door to real values** — reading
+  unmasked balances/amounts through the serving API while CA returns NULL for the
+  same columns — directly contradicting the per-user CLS/masking control this ADR
+  establishes. So operational serving and governed analytics stay **separate paths**:
+  every staff data question flows through CA, the one path where per-user enforcement
+  lives. CA point-lookups are also an anti-pattern (LLM→SQL→BigQuery at a keyed read:
+  slower, wrong tier, masked), so CA is not a substitute for DaaS — they answer
+  different question classes and simply aren't in competition. The one persona whose
+  job is single-applicant context, the **loan approver**, is served by the loans
+  product's own agents (credit profile / overdraft / risk) plus CA over the views,
+  and holds fine-grained reader anyway, so no masking inconsistency arises there. KB
+  remains universal — it is non-sensitive published reference content with no governed
+  columns.
+- **The low-privilege SA is now a safe fallback, not a customer tier.** A dedicated
+  **impersonated SA** (`finchat-<env>-analyst-anon`: jobUser, dataset READER on the
   semantic datasets, **maskedReader** on the PII_FINANCIAL data policy, and
-  deliberately **no fine-grained read**). Guests therefore see structure and counts
-  with **masked (NULL) protected values** — never real amounts. The BFF SA is never
-  used for restricted callers, and restricted tiers never fall back to it on denial.
+  deliberately **no fine-grained read**) is used only when a *signed-in staff caller*
+  has not yet propagated an OAuth token (consent pending) — they see **masked (NULL)
+  protected values** rather than the BFF SA's broad access. Least privilege is the
+  default: the BFF SA is never used for restricted callers, and restricted tiers
+  never fall back to it on denial.
 - **Enforcement is CLS/masking, not view-hiding — the decisive lesson.** Authorized
   views (graph dataset registered as an authorized dataset on the sources) let the
   views read silver on a caller's behalf, *but* Conversational Analytics, during

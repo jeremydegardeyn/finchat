@@ -651,9 +651,19 @@ async def _classify_intent(q: str) -> str:
 # grants); anonymous callers run as the impersonated masked-reader SA.
 
 
+# Free-form Conversational Analytics is a STAFF surface. Anonymous customers use
+# only the DaaS-grounded banking assistant (tools); they never reach free-form CA.
+# The gate answers "may you call this endpoint"; the user's own credentials then
+# answer "what data can you see" (values / masked / denied), ADR-0019.
+_ASK_PERSONAS = ("analyst", "employee", "admin")
+
+
 @app.post("/api/analyst/chat")
 async def analyst_chat(request: Request):
     """Force Conversational Analytics (kept for direct callers)."""
+    deny = _require_any(request, _ASK_PERSONAS)
+    if deny:
+        return deny
     body = await request.json()
     q = (body.get("message") or "").strip()
     if not q:
@@ -666,6 +676,9 @@ async def analyst_ask(request: Request):
     """One analyst assistant: classify the question (Gemini, heuristic fallback) and
     route to Conversational Analytics OR the Knowledge Base RAG accordingly. Returns
     {mode, answer, ...} so the UI shows which tool answered."""
+    deny = _require_any(request, _ASK_PERSONAS)
+    if deny:
+        return deny
     body = await request.json()
     q = (body.get("message") or "").strip()
     if not q:
