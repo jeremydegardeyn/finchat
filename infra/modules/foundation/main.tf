@@ -23,7 +23,8 @@ locals {
       "roles/bigquery.jobUser",
       "roles/modelarmor.user",                            # UI BFF screens agent I/O
       "roles/dataplex.catalogViewer",                     # Analyst: catalog discovery search
-      "roles/geminidataanalytics.dataAgentStatelessUser", # Analyst: Conversational Analytics chat
+      "roles/geminidataanalytics.dataAgentStatelessUser", # Analyst: Conversational Analytics chat (inline fallback)
+      "roles/geminidataanalytics.dataAgentUser",          # Analyst: chat via the persistent Data Agent (ADR-0018)
       "roles/aiplatform.user",                            # Analyst: Gemini intent router (KB vs analytics)
     ] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [

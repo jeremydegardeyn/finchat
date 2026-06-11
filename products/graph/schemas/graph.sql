@@ -130,3 +130,20 @@ LEFT JOIN acct USING (customer_id)
 LEFT JOIN tx   USING (customer_id)
 LEFT JOIN od   USING (customer_id)
 LEFT JOIN ln   USING (customer_id);
+
+-- ---------- Analyst semantic perimeter (ADR-0018) -----------------------------
+-- The ONLY relational surface exposed to conversational analytics. Curated
+-- dim/fact views that structurally OMIT identifier columns (account_number,
+-- full_name, email, natural keys) — minimization by design, not by prompt.
+-- Amounts remain (the analytical point); CLS still applies via the source tags.
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.dim_customer` AS
+SELECT customer_id, segment, created_at
+FROM `${PROJECT}.finchat_silver_${ENV}.customer`;
+
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.dim_account` AS
+SELECT account_id, customer_id, account_type, currency, status, opened_at
+FROM `${PROJECT}.finchat_silver_${ENV}.account`;   -- account_number intentionally absent
+
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.fact_transaction` AS
+SELECT transaction_id, account_id, txn_type, amount, currency, status, event_time
+FROM `${PROJECT}.finchat_silver_${ENV}.transaction`;  -- counterparty_account intentionally absent

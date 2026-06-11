@@ -32,6 +32,7 @@ GOLD_DATASET = os.getenv("GOLD_DATASET", "")
 LOANS_DATASET = os.getenv("LOANS_DATASET", "")
 GRAPH_DATASET = os.getenv("GRAPH_DATASET", "")  # knowledge graph (customer_360, kg_*)
 EVAL_DATASET = os.getenv("EVAL_DATASET", "")    # live-eval: conversation_log capture
+DATA_AGENT_ID = os.getenv("DATA_AGENT_ID", "")  # persistent Gemini Data Agent (ADR-0018)
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")  # Gemini for intent routing
 ANALYST_READY = bool(GCP_PROJECT and (SILVER_DATASET or GOLD_DATASET or LOANS_DATASET))
 
@@ -387,21 +388,20 @@ def catalog_search(request: Request, q: str = "", raw: int = 0):
 
 
 def _analyst_tables() -> list[dict]:
-    """BigQuery tables exposed to Conversational Analytics. Includes the `account`
-    bridge (so transaction->customer joins resolve) and the pre-joined knowledge-
-    graph `customer_360` rollup. The KB vector table is excluded."""
+    """The analyst SEMANTIC PERIMETER (ADR-0018): conversational analytics sees ONLY
+    curated serving surfaces — the graph dataset's dim/fact views (which structurally
+    omit identifier columns like account_number/full_name), the customer_360 rollup,
+    and the gold/loans products. NO silver tables: the medallion contract is that
+    silver is canonical, not a consumption layer. KB is excluded (RAG route)."""
     t = []
-    if SILVER_DATASET:
-        t += [{"projectId": GCP_PROJECT, "datasetId": SILVER_DATASET, "tableId": "transaction"},
-              {"projectId": GCP_PROJECT, "datasetId": SILVER_DATASET, "tableId": "account"},
-              {"projectId": GCP_PROJECT, "datasetId": SILVER_DATASET, "tableId": "customer"}]
+    if GRAPH_DATASET:
+        t += [{"projectId": GCP_PROJECT, "datasetId": GRAPH_DATASET, "tableId": x}
+              for x in ("dim_customer", "dim_account", "fact_transaction",
+                        "customer_360", "kg_relationships")]
     if GOLD_DATASET:
         t.append({"projectId": GCP_PROJECT, "datasetId": GOLD_DATASET, "tableId": "overdraft_history"})
     if LOANS_DATASET:
         t.append({"projectId": GCP_PROJECT, "datasetId": LOANS_DATASET, "tableId": "loan_status"})
-    if GRAPH_DATASET:  # knowledge graph: pre-joined per-customer rollup + relationships
-        t += [{"projectId": GCP_PROJECT, "datasetId": GRAPH_DATASET, "tableId": "customer_360"},
-              {"projectId": GCP_PROJECT, "datasetId": GRAPH_DATASET, "tableId": "kg_relationships"}]
     return t
 
 
@@ -409,21 +409,21 @@ def _analyst_tables() -> list[dict]:
 # (it previously couldn't link transaction->customer because transactions carry
 # only account_id). Mirrors finchat_graph_<env>.kg_relationships.
 _ANALYST_SYSTEM_INSTRUCTION = (
-    "You are a banking data analyst assistant for FinChat. Answer questions over the "
-    "provided BigQuery tables. The data model is a graph — ALWAYS join using these keys:\n"
-    "- account.customer_id = customer.customer_id  (an Account BELONGS_TO a Customer)\n"
-    "- transaction.account_id = account.account_id (a Transaction OCCURS_ON an Account; "
-    "transactions have NO customer_id, so to attribute a transaction to a customer join "
-    "transaction -> account -> customer)\n"
-    "- overdraft_history.account_id = account.account_id\n"
-    "- loan_status / loan_request relate to an account via account_id\n"
+    "You are a banking data analyst assistant for FinChat. Answer questions ONLY over "
+    "the provided curated views (the analyst semantic layer) — never reference other "
+    "datasets or tables. The data model is a graph — ALWAYS join using these keys:\n"
+    "- dim_account.customer_id = dim_customer.customer_id (an Account BELONGS_TO a Customer)\n"
+    "- fact_transaction.account_id = dim_account.account_id (a Transaction OCCURS_ON an "
+    "Account; transactions have NO customer_id, so to attribute a transaction to a "
+    "customer join fact_transaction -> dim_account -> dim_customer)\n"
+    "- overdraft_history.account_id = dim_account.account_id\n"
+    "- loan_status relates to accounts via the lending product\n"
     "For per-customer questions, PREFER the pre-joined `customer_360` view (one row per "
     "customer with account/transaction/overdraft/loan rollups) instead of joining manually. "
     "Transaction amounts: DEPOSIT is cash in (positive); WITHDRAWAL and FEE reduce balance. "
-    "Never expose customer names, email addresses, or account numbers; identify rows by "
-    "customer_id, account_id, and segment only. (Names/emails are also blocked by "
-    "column-level security; account_number shares the financial tag with amount, so this "
-    "instruction is the control until the taxonomy splits identifiers from values.)"
+    "Identify rows by customer_id, account_id, and segment; the semantic layer contains no "
+    "names, emails, or account numbers by design — if asked for them, say they are not "
+    "available on the analyst surface."
 )
 
 
@@ -476,16 +476,24 @@ async def _run_ca(q: str) -> dict:
         return {"mode": "analytics", "error": "no credentials", "demo": True}
     url = (f"https://geminidataanalytics.googleapis.com/v1beta/projects/{GCP_PROJECT}"
            f"/locations/{CA_LOCATION}:chat")
-    payload = {
-        "parent": f"projects/{GCP_PROJECT}/locations/{CA_LOCATION}",
-        "messages": [{"userMessage": {"text": q}}],
-        "inline_context": {
+    base = {"parent": f"projects/{GCP_PROJECT}/locations/{CA_LOCATION}",
+            "messages": [{"userMessage": {"text": q}}]}
+    r = None
+    if DATA_AGENT_ID:
+        # Preferred: the PERSISTENT Data Agent — context (semantic-perimeter tables +
+        # system instruction) is a governed resource, not a per-request payload.
+        agent = f"projects/{GCP_PROJECT}/locations/{CA_LOCATION}/dataAgents/{DATA_AGENT_ID}"
+        r = await _client().post(url, json={**base, "data_agent_context": {"data_agent": agent}},
+                                 headers={"Authorization": f"Bearer {token}"}, timeout=150.0)
+        if r.status_code >= 400:  # e.g. agent not created in this env -> inline fallback
+            r = None
+    if r is None:
+        payload = {**base, "inline_context": {
             "system_instruction": _ANALYST_SYSTEM_INSTRUCTION,  # teaches the graph joins
             "datasource_references": {"bq": {"table_references": tables}},
-        },
-    }
-    r = await _client().post(url, json=payload, headers={"Authorization": f"Bearer {token}"},
-                             timeout=150.0)
+        }}
+        r = await _client().post(url, json=payload, headers={"Authorization": f"Bearer {token}"},
+                                 timeout=150.0)
     if r.status_code >= 400:
         return {"mode": "analytics", "error": f"analytics error {r.status_code}", "detail": r.text[:400]}
     try:
