@@ -98,9 +98,10 @@ const VIEWS = {
   analyst:  { label:"Analyst", render: renderAnalyst },
   admin:    { label:"Admin",    render: renderAdmin },
 };
-// Staff personas also get Ask-the-Data (ADR-0019): identity propagation means
-// BigQuery decides what each signed-in user can see, so the tab is shared.
-function viewsFor(p){ return p==="customer"?["customer"]:p==="employee"?["employee","analyst"]:p==="analyst"?["analyst"]:["admin","analyst"]; }
+// Every persona gets Ask-the-Data (ADR-0019): the data layer decides what each
+// caller sees — signed-in users via their own credentials (values/masked/denied),
+// anonymous customers via the impersonated masked-reader tier.
+function viewsFor(p){ return p==="customer"?["customer","analyst"]:p==="employee"?["employee","analyst"]:p==="analyst"?["analyst"]:["admin","analyst"]; }
 let activeTab = "customer";
 
 function setTabs() {

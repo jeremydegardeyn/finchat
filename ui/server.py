@@ -33,6 +33,10 @@ LOANS_DATASET = os.getenv("LOANS_DATASET", "")
 GRAPH_DATASET = os.getenv("GRAPH_DATASET", "")  # knowledge graph (customer_360, kg_*)
 EVAL_DATASET = os.getenv("EVAL_DATASET", "")    # live-eval: conversation_log capture
 DATA_AGENT_ID = os.getenv("DATA_AGENT_ID", "")  # persistent Gemini Data Agent (ADR-0018)
+# Anonymous analytics tier (ADR-0019): unauthenticated Ask-the-Data runs as this
+# low-privilege SA (masked reader, NO fine-grained read) via impersonation — never
+# as the BFF SA, whose fine-grained read would expose values to guests.
+ANON_ANALYST_SA = os.getenv("ANON_ANALYST_SA", "")
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")  # Gemini for intent routing
 ANALYST_READY = bool(GCP_PROJECT and (SILVER_DATASET or GOLD_DATASET or LOANS_DATASET))
 
@@ -328,9 +332,6 @@ def catalog_search(request: Request, q: str = "", raw: int = 0):
     """Discover Dataplex catalog assets by free-text description. Returns matching
     entries with their governed aspects (data-product, governance, data-contract,
     operational) so the analyst can see ownership, PII class, contract, and DQ."""
-    deny = _require_any(request, _ASK_PERSONAS)
-    if deny:
-        return deny
     q = (q or "").strip()
     if not q:
         return {"matches": []}
@@ -476,6 +477,36 @@ def _parse_ca(messages: list) -> dict:
 _REQUEST_ACCESS_URL = ("https://console.cloud.google.com/dataplex/catalog/data-products"
                        "?project=" + (GCP_PROJECT or ""))
 
+_anon_cache = {"token": None, "exp": 0.0}
+
+
+def _anon_token() -> str | None:
+    """Impersonate the anonymous-analyst SA (iamcredentials.generateAccessToken).
+    Returns a cached ~1h token, or None when the tier isn't configured."""
+    if not ANON_ANALYST_SA:
+        return None
+    now = time.time()
+    if _anon_cache["token"] and _anon_cache["exp"] - 60 > now:
+        return _anon_cache["token"]
+    try:
+        import json as _json
+        import urllib.request
+        body = _json.dumps({"scope": ["https://www.googleapis.com/auth/cloud-platform"],
+                            "lifetime": "3600s"}).encode()
+        req = urllib.request.Request(
+            f"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+            f"{ANON_ANALYST_SA}:generateAccessToken",
+            data=body, method="POST",
+            headers={"Authorization": f"Bearer {_access_token()}",
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            tok = _json.loads(r.read()).get("accessToken")
+        if tok:
+            _anon_cache.update(token=tok, exp=now + 3300)
+        return tok
+    except Exception:
+        return None
+
 
 async def _run_ca(q: str, user_token: str | None = None) -> dict:
     """Conversational Analytics over the data products (graph-grounded).
@@ -488,9 +519,15 @@ async def _run_ca(q: str, user_token: str | None = None) -> dict:
     tables = _analyst_tables()
     if not (ANALYST_READY and tables):
         return {"mode": "analytics", "error": "analytics not configured", "demo": True}
+    # Tier selection: signed-in user's own credentials > anonymous masked SA >
+    # legacy BFF SA (only when the anonymous tier isn't configured, e.g. dev).
+    restricted = True
     if user_token:
         token = user_token
+    elif (anon := _anon_token()):
+        token = anon
     else:
+        restricted = False
         try:
             token = _access_token()
         except Exception:
@@ -515,7 +552,7 @@ async def _run_ca(q: str, user_token: str | None = None) -> dict:
         }}
         r = await _client().post(url, json=payload, headers={"Authorization": f"Bearer {token}"},
                                  timeout=150.0)
-    if r.status_code in (401, 403) and user_token:
+    if r.status_code in (401, 403) and restricted:
         return {"mode": "analytics", "action": "request_access",
                 "error": "You don't have access to the analyst data products. "
                          "Request access from the data product owner.",
@@ -530,7 +567,7 @@ async def _run_ca(q: str, user_token: str | None = None) -> dict:
         return {"mode": "analytics", "error": "could not parse analytics response"}
     parsed = _parse_ca(msgs)
     cae = (parsed.get("ca_error") or "")
-    if user_token and cae and any(k in cae.lower() for k in ("denied", "permission", "policy tag", "access")):
+    if restricted and cae and any(k in cae.lower() for k in ("denied", "permission", "policy tag", "access")):
         # The user's own credentials were rejected at query time (column-level security).
         return {"mode": "analytics", "action": "request_access",
                 "error": "Your access level doesn't permit reading protected columns "
@@ -602,18 +639,15 @@ async def _classify_intent(q: str) -> str:
     return _heuristic_intent(q)
 
 
-# Ask-the-Data is available to all staff personas (ADR-0019): the analyst, the loan
-# approver, and the platform admin. With identity propagation, WHAT each sees is
-# decided by BigQuery against their own credentials, not by the persona gate.
-_ASK_PERSONAS = ("analyst", "employee", "admin")
+# Ask-the-Data is open to ALL personas including the anonymous customer (ADR-0019):
+# WHAT each caller sees is decided by the data layer against their credentials —
+# signed-in users propagate their own token (values / masked / denied per their
+# grants); anonymous callers run as the impersonated masked-reader SA.
 
 
 @app.post("/api/analyst/chat")
 async def analyst_chat(request: Request):
     """Force Conversational Analytics (kept for direct callers)."""
-    deny = _require_any(request, _ASK_PERSONAS)
-    if deny:
-        return deny
     body = await request.json()
     q = (body.get("message") or "").strip()
     if not q:
@@ -626,9 +660,6 @@ async def analyst_ask(request: Request):
     """One analyst assistant: classify the question (Gemini, heuristic fallback) and
     route to Conversational Analytics OR the Knowledge Base RAG accordingly. Returns
     {mode, answer, ...} so the UI shows which tool answered."""
-    deny = _require_any(request, _ASK_PERSONAS)
-    if deny:
-        return deny
     body = await request.json()
     q = (body.get("message") or "").strip()
     if not q:
@@ -690,7 +721,9 @@ def eval_report(request: Request):
 
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(HERE, "index.html"))
+    # no-cache: stale cached SPAs have repeatedly hidden fresh features after deploys.
+    return FileResponse(os.path.join(HERE, "index.html"),
+                        headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 if __name__ == "__main__":

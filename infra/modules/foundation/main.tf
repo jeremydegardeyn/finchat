@@ -39,6 +39,15 @@ locals {
       "roles/run.invoker",
       "roles/dataplex.catalogViewer", # discover_data_product: search the catalog
     ] }
+    # Anonymous Ask-the-Data tier (ADR-0019): impersonated by the BFF for guests.
+    # Resource-level grants live outside this map: dataset READER on graph/gold/
+    # loans, maskedReader on the PII_FINANCIAL data policy, and tokenCreator for
+    # the BFF SA on this SA. Deliberately NO fine-grained policy-tag read.
+    analyst_anon = { display = "Anonymous analyst tier (masked reader)", roles = [
+      "roles/bigquery.jobUser",
+      "roles/geminidataanalytics.dataAgentStatelessUser",
+      "roles/geminidataanalytics.dataAgentUser",
+    ] }
     workflow = { display = "Loan Cloud Workflows orchestrator", roles = [
       "roles/run.invoker",
       "roles/bigquery.dataEditor",
