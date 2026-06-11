@@ -173,11 +173,16 @@ def _verify_user(request: Request) -> dict | None:
 def _require(request: Request, persona: str):
     """Return a 403 JSONResponse if auth is enabled and the caller's VERIFIED
     persona isn't `persona`; None when allowed (or auth not configured)."""
+    return _require_any(request, (persona,))
+
+
+def _require_any(request: Request, personas: tuple):
+    """403 unless the verified persona is one of `personas` (auth on)."""
     if not _auth_enabled():
         return None
     u = _verify_user(request)
-    if not u or u.get("persona") != persona:
-        who = PERSONA_LABELS.get(persona, persona)
+    if not u or u.get("persona") not in personas:
+        who = " / ".join(PERSONA_LABELS.get(p, p) for p in personas)
         return JSONResponse(
             {"error": f"{who} sign-in required (your session may have expired — sign in again)"},
             status_code=403)
@@ -323,7 +328,7 @@ def catalog_search(request: Request, q: str = "", raw: int = 0):
     """Discover Dataplex catalog assets by free-text description. Returns matching
     entries with their governed aspects (data-product, governance, data-contract,
     operational) so the analyst can see ownership, PII class, contract, and DQ."""
-    deny = _require(request, "analyst")
+    deny = _require_any(request, _ASK_PERSONAS)
     if deny:
         return deny
     q = (q or "").strip()
@@ -438,10 +443,12 @@ def _access_token() -> str:
 
 def _parse_ca(messages: list) -> dict:
     """Reduce a Conversational Analytics streamed message array to {answer, sql,
-    columns, rows, followups, vega}."""
-    answer, followups, sql, rows, cols, vega = [], [], None, [], [], None
+    columns, rows, followups, vega, ca_error}."""
+    answer, followups, sql, rows, cols, vega, ca_error = [], [], None, [], [], None, None
     for m in messages if isinstance(messages, list) else []:
         sm = m.get("systemMessage", {}) if isinstance(m, dict) else {}
+        if "error" in sm:  # e.g. the user's credentials were denied by CLS at query time
+            ca_error = str(sm["error"])[:500]
         if "text" in sm:
             t = sm["text"]; tt = t.get("textType", "")
             if tt == "FINAL_RESPONSE":
@@ -462,18 +469,32 @@ def _parse_ca(messages: list) -> dict:
             if vc:
                 vega = vc
     return {"answer": "\n\n".join(a for a in answer if a).strip() or "(no answer returned)",
-            "sql": sql, "columns": cols, "rows": rows, "followups": followups[:3], "vega": vega}
+            "sql": sql, "columns": cols, "rows": rows, "followups": followups[:3], "vega": vega,
+            "ca_error": ca_error}
 
 
-async def _run_ca(q: str) -> dict:
-    """Conversational Analytics over the data products (graph-grounded)."""
+_REQUEST_ACCESS_URL = ("https://console.cloud.google.com/dataplex/catalog/data-products"
+                       "?project=" + (GCP_PROJECT or ""))
+
+
+async def _run_ca(q: str, user_token: str | None = None) -> dict:
+    """Conversational Analytics over the data products (graph-grounded).
+
+    Identity propagation (ADR-0019): when the SPA supplies the signed-in user's
+    OAuth ACCESS token, queries execute AS THAT USER — BigQuery evaluates their
+    IAM + policy tags (fine-grained reader sees values; masked reader sees NULLs;
+    everyone else gets a friendly request-access message). Without a user token,
+    the BFF service account is the fallback (legacy/demo mode)."""
     tables = _analyst_tables()
     if not (ANALYST_READY and tables):
         return {"mode": "analytics", "error": "analytics not configured", "demo": True}
-    try:
-        token = _access_token()
-    except Exception:
-        return {"mode": "analytics", "error": "no credentials", "demo": True}
+    if user_token:
+        token = user_token
+    else:
+        try:
+            token = _access_token()
+        except Exception:
+            return {"mode": "analytics", "error": "no credentials", "demo": True}
     url = (f"https://geminidataanalytics.googleapis.com/v1beta/projects/{GCP_PROJECT}"
            f"/locations/{CA_LOCATION}:chat")
     base = {"parent": f"projects/{GCP_PROJECT}/locations/{CA_LOCATION}",
@@ -494,6 +515,11 @@ async def _run_ca(q: str) -> dict:
         }}
         r = await _client().post(url, json=payload, headers={"Authorization": f"Bearer {token}"},
                                  timeout=150.0)
+    if r.status_code in (401, 403) and user_token:
+        return {"mode": "analytics", "action": "request_access",
+                "error": "You don't have access to the analyst data products. "
+                         "Request access from the data product owner.",
+                "request_url": _REQUEST_ACCESS_URL}
     if r.status_code >= 400:
         return {"mode": "analytics", "error": f"analytics error {r.status_code}", "detail": r.text[:400]}
     try:
@@ -502,7 +528,16 @@ async def _run_ca(q: str) -> dict:
             [_json.loads(li) for li in r.text.splitlines() if li.strip()]
     except Exception:
         return {"mode": "analytics", "error": "could not parse analytics response"}
-    return {"mode": "analytics", **_parse_ca(msgs)}
+    parsed = _parse_ca(msgs)
+    cae = (parsed.get("ca_error") or "")
+    if user_token and cae and any(k in cae.lower() for k in ("denied", "permission", "policy tag", "access")):
+        # The user's own credentials were rejected at query time (column-level security).
+        return {"mode": "analytics", "action": "request_access",
+                "error": "Your access level doesn't permit reading protected columns "
+                         "(column-level security). Request elevated access from the data "
+                         "product owner.",
+                "request_url": _REQUEST_ACCESS_URL}
+    return {"mode": "analytics", **parsed}
 
 
 async def _run_kb(q: str) -> dict:
@@ -567,17 +602,23 @@ async def _classify_intent(q: str) -> str:
     return _heuristic_intent(q)
 
 
+# Ask-the-Data is available to all staff personas (ADR-0019): the analyst, the loan
+# approver, and the platform admin. With identity propagation, WHAT each sees is
+# decided by BigQuery against their own credentials, not by the persona gate.
+_ASK_PERSONAS = ("analyst", "employee", "admin")
+
+
 @app.post("/api/analyst/chat")
 async def analyst_chat(request: Request):
     """Force Conversational Analytics (kept for direct callers)."""
-    deny = _require(request, "analyst")
+    deny = _require_any(request, _ASK_PERSONAS)
     if deny:
         return deny
     body = await request.json()
     q = (body.get("message") or "").strip()
     if not q:
         return JSONResponse({"error": "empty message"}, status_code=400)
-    return await _run_ca(q)
+    return await _run_ca(q, user_token=request.headers.get("X-User-Access-Token") or None)
 
 
 @app.post("/api/analyst/ask")
@@ -585,7 +626,7 @@ async def analyst_ask(request: Request):
     """One analyst assistant: classify the question (Gemini, heuristic fallback) and
     route to Conversational Analytics OR the Knowledge Base RAG accordingly. Returns
     {mode, answer, ...} so the UI shows which tool answered."""
-    deny = _require(request, "analyst")
+    deny = _require_any(request, _ASK_PERSONAS)
     if deny:
         return deny
     body = await request.json()
@@ -593,7 +634,8 @@ async def analyst_ask(request: Request):
     if not q:
         return JSONResponse({"error": "empty message"}, status_code=400)
     mode = await _classify_intent(q)
-    res = await (_run_kb(q) if mode == "kb" else _run_ca(q))
+    utok = request.headers.get("X-User-Access-Token") or None
+    res = await (_run_kb(q) if mode == "kb" else _run_ca(q, user_token=utok))
     # Capture for live eval; for analytics the generated SQL + rows are the grounding context.
     ctx = None
     if res.get("mode") == "analytics":

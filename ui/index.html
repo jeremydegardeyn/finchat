@@ -84,7 +84,8 @@ async function api(kind, path, opts={}) {
   try {
     const r = await fetch(`/api/${kind}/${path}`, { ...opts,
       headers:{ "Content-Type":"application/json", "X-Persona":S.persona,
-                ...(S.idtok?{"X-User-Token":S.idtok}:{}), ...(opts.headers||{}) } });
+                ...(S.idtok?{"X-User-Token":S.idtok}:{}),
+                ...(S.accessTok?{"X-User-Access-Token":S.accessTok}:{}), ...(opts.headers||{}) } });
     if (r.status === 503) throw new Error("demo");
     return await r.json();
   } catch(e) { return { __demo:true }; }
@@ -97,7 +98,9 @@ const VIEWS = {
   analyst:  { label:"Analyst", render: renderAnalyst },
   admin:    { label:"Admin",    render: renderAdmin },
 };
-function viewsFor(p){ return p==="customer"?["customer"]:p==="employee"?["employee"]:p==="analyst"?["analyst"]:["admin"]; }
+// Staff personas also get Ask-the-Data (ADR-0019): identity propagation means
+// BigQuery decides what each signed-in user can see, so the tab is shared.
+function viewsFor(p){ return p==="customer"?["customer"]:p==="employee"?["employee","analyst"]:p==="analyst"?["analyst"]:["admin","analyst"]; }
 let activeTab = "customer";
 
 function setTabs() {
@@ -332,9 +335,16 @@ async function analystSend(){
   const q = el("amsg").value.trim(); if(!q) return;
   pushAChat("u", q); el("amsg").value=""; el("asql").innerHTML="";
   const t = pushAChat("a","Thinking… (routing to analytics or the knowledge base)");
+  // Identity propagation: run analytics AS the signed-in user when possible.
+  if (S.user && !S.accessTok) await ensureAccessToken();
   // Single agentic endpoint: the BFF classifies intent and routes to CA or KB.
   const r = await api("analyst","ask",{ method:"POST", body:JSON.stringify({ message:q }) });
   if (r.__demo) { t.querySelector(".b").textContent = "The analyst assistant isn't available in demo mode (needs Gemini Data Analytics + the RAG agent)."; return; }
+  if (r.action === "request_access") {
+    t.querySelector(".b").innerHTML = `<span class="pill warn">🔒 access</span> ${escapeHtml(r.error)}`
+      + (r.request_url ? ` <a href="${r.request_url}" target="_blank" style="color:var(--acc)">Request access →</a>` : "");
+    return;
+  }
   if (r.error) { t.querySelector(".b").textContent = "Error: " + escapeHtml(r.error) + (r.detail?` — ${escapeHtml(r.detail)}`:""); return; }
   const badge = r.mode === "kb"
     ? `<span class="pill ok">📚 Knowledge Base</span> `
@@ -389,6 +399,7 @@ function stat(name, ok){ return `<div class="row" style="justify-content:space-b
 // Signed out -> Customer view (no login needed). Staff sign in with Google; the BFF
 // verifies the ID token and maps the email to a persona (approver/analyst/admin).
 function initGsi(clientId){
+  S.oauthClientId = clientId;
   const s = document.createElement("script");
   s.src = "https://accounts.google.com/gsi/client"; s.async = true; s.defer = true;
   s.onload = () => {
@@ -396,6 +407,31 @@ function initGsi(clientId){
     renderAuthUI();
   };
   document.head.appendChild(s);
+}
+// Identity propagation (ADR-0019): staff grant a one-time OAuth consent so analytics
+// queries run AS THEM — BigQuery evaluates their IAM/policy tags (values vs masked
+// vs denied). Token cached ~1h; silently re-requested when expired.
+function ensureAccessToken(){
+  return new Promise((resolve)=>{
+    if (!S.user || !S.oauthClientId) return resolve(null);
+    if (S.accessTok && S.accessTokExp > Date.now()+60000) return resolve(S.accessTok);
+    try {
+      const tc = google.accounts.oauth2.initTokenClient({
+        client_id: S.oauthClientId,
+        scope: "https://www.googleapis.com/auth/cloud-platform",
+        hint: S.user.email,
+        callback: (resp)=>{
+          if (resp && resp.access_token) {
+            S.accessTok = resp.access_token;
+            S.accessTokExp = Date.now() + ((resp.expires_in||3600)-60)*1000;
+            resolve(S.accessTok);
+          } else resolve(null);
+        },
+        error_callback: ()=>resolve(null),
+      });
+      tc.requestAccessToken({ prompt: "" });
+    } catch(e){ resolve(null); }
+  });
 }
 function renderAuthUI(){
   const box = el("authbox");
@@ -419,6 +455,7 @@ async function onGoogleCred(resp){
 }
 function signOut(){
   S.idtok = null; S.user = null; S.persona = "customer";
+  S.accessTok = null; S.accessTokExp = 0;
   try { google.accounts.id.disableAutoSelect(); } catch(e){}
   renderAuthUI(); setTabs();
 }
