@@ -447,7 +447,11 @@ def _parse_ca(messages: list) -> dict:
     columns, rows, followups, vega, ca_error}."""
     answer, followups, sql, rows, cols, vega, ca_error = [], [], None, [], [], None, None
     for m in messages if isinstance(messages, list) else []:
-        sm = m.get("systemMessage", {}) if isinstance(m, dict) else {}
+        if not isinstance(m, dict):
+            continue
+        if "error" in m:  # CA streams errors as TOP-LEVEL {"error": ...} messages (HTTP 200)
+            ca_error = str(m["error"])[:500]
+        sm = m.get("systemMessage", {})
         if "error" in sm:  # e.g. the user's credentials were denied by CLS at query time
             ca_error = str(sm["error"])[:500]
         if "text" in sm:
