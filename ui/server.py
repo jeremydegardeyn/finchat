@@ -420,7 +420,10 @@ _ANALYST_SYSTEM_INSTRUCTION = (
     "For per-customer questions, PREFER the pre-joined `customer_360` view (one row per "
     "customer with account/transaction/overdraft/loan rollups) instead of joining manually. "
     "Transaction amounts: DEPOSIT is cash in (positive); WITHDRAWAL and FEE reduce balance. "
-    "Never expose customer names or email addresses; use customer_id and segment."
+    "Never expose customer names, email addresses, or account numbers; identify rows by "
+    "customer_id, account_id, and segment only. (Names/emails are also blocked by "
+    "column-level security; account_number shares the financial tag with amount, so this "
+    "instruction is the control until the taxonomy splits identifiers from values.)"
 )
 
 

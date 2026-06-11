@@ -52,6 +52,25 @@ scale. **Cross-product lineage:** loan `risk_assessment` ← transaction `gold.o
 > masking. **De-identification (DLP) is applied on promotion Bronze/stream → Silver**, which is the
 > broadly-consumed layer. This is the standard medallion contract: lock down raw, govern the curated copy.
 
+### Known refinement: split identifiers from values in the taxonomy
+
+A finding from probing the analyst conversational surface: `account_number` and `amount`
+share the **PII_FINANCIAL** tag, and the serving SA must read that tag (analytics needs
+amounts) — so CLS alone cannot stop a chat-generated query from returning **account
+numbers** to an analyst. Today's control is the model **system instruction** (soft;
+never return names/emails/account numbers). The enterprise fix is structural:
+
+1. **Split the taxonomy** — `PII_FINANCIAL_VALUE` (amount, balance — analysts read) vs
+   `PII_IDENTIFIER` (account_number — analysts masked/denied).
+2. **BigQuery data masking** on the identifier tag (`Masked Reader` → analysts see a
+   hash/NULL instead of a hard error), so analytical queries keep working while
+   identifiers stay protected.
+
+This layers controls correctly: hard (CLS/masking) for what roles must never see,
+soft (instructions) only for tone/shape — never as the sole barrier. `full_name`/`email`
+already demonstrate the hard layer (PII_DIRECT, no analyst-path grant → denied through
+SQL, GQL, or chat-generated queries alike).
+
 ## 6. Retention & lifecycle
 
 | Data | Retention | Mechanism |

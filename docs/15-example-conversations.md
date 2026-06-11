@@ -94,6 +94,13 @@ You:  monthly fee revenue this year
 CA:   Drills into the raw transaction table (txn_type='FEE') — grouped by month.
       (Granular question the customer_360 rollup doesn't pre-aggregate.)
 ```
+```
+You:  Show me all customers in the 'Premium' segment and the accounts they own
+CA:   Maps 'Premium' -> the PREMIER segment found in the data, says so explicitly
+      ("I assumed 'Premium' refers to 'PREMIER'... if you mean a different segment,
+      let me know"), and returns the 1,959 ownership records. Grounded fuzzy
+      matching: it adapts to the user's vocabulary but discloses the assumption.
+```
 > **Why these work:** per-customer questions use the pre-joined `customer_360`; granular
 > ones use the raw entities with the join keys from the system instruction. The analyst
 > never needs to know table names or join columns.
