@@ -65,6 +65,16 @@ paths, relationship patterns — fraud-ring style traversals at enterprise scale
 system-instruction remain the grounding for the analyst chat, while the property graph
 serves native graph analytics. Same model, two query surfaces.
 
+**Graph explorer + chat (console).** BigQuery Studio renders `banking_graph` visually
+(Datasets → finchat_graph → Graphs) and its **Chat** (Preview) generates GQL from
+natural language — verified prompt: *“Show me all customers in the PREMIER segment and
+the accounts they own”* produced a correct `GRAPH_TABLE … MATCH (c:Customer)-[:OWNS]->
+(a:Account)` query. Be explicit (name the graph, segments are UPPERCASE, mention
+GQL/edge labels) or the assistant may fall back to plain-SQL joins. Governance note:
+**column-level security enforces through `GRAPH_TABLE`** — that chat-generated query
+projects policy-tagged columns (`full_name`, `account_number`), so non-fine-grained
+readers are denied at the column regardless of the query surface.
+
 `customer_360` is **CLS-safe by construction**: it exposes `customer_id` + `segment` +
 aggregates, never `full_name`/`email`. DDL: [`products/graph/schemas/graph.sql`](../products/graph/schemas/graph.sql).
 
