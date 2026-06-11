@@ -92,4 +92,4 @@ one origin at zero cost.
 - **Identity Platform / Firebase Auth:** heavier dependency for the same "Sign in
   with Google" outcome; the enterprise target for the *customer* surface.
 - **Keep persona simulation:** rejected — spoofable approver identity in a credit
-  audit trail is exactly what a regulator (and an interview panel) would flag.
+  audit trail is exactly what a regulator (or any serious security review) would flag.

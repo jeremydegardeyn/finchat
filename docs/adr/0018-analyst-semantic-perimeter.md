@@ -7,7 +7,7 @@
 
 ## Context
 
-Probing the analyst chat surfaced two gaps (user-found, during interview-prep review):
+Probing the analyst chat surfaced two gaps (found during a hands-on security review of the chat surfaces):
 
 1. Conversational Analytics was grounded on **silver entity tables** (added for the
    knowledge-graph join fix). Silver is the *canonical* layer, not a consumption
