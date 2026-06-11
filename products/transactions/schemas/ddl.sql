@@ -57,7 +57,7 @@ CLUSTER BY customer_id, account_type;
 CREATE TABLE IF NOT EXISTS `${PROJECT}.finchat_silver_${ENV}.transaction`
 (
   transaction_id       STRING NOT NULL,
-  idempotency_key      STRING NOT NULL,            -- NK for MERGE dedup
+  idempotency_key      STRING NOT NULL,            -- producer-minted NK; deduped in-stream (Beam DeduplicatePerKey), uniqueness asserted by DQ scan
   account_id           STRING NOT NULL,            -- FK -> account
   txn_type             STRING NOT NULL,            -- DEPOSIT|WITHDRAWAL|TRANSFER|FEE
   amount               NUMERIC NOT NULL,           -- PII_FINANCIAL (policy tag)

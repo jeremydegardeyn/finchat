@@ -3,9 +3,18 @@ FinChat transactions streaming pipeline (Apache Beam / Dataflow).
 
 Flow:  Pub/Sub subscription
          -> parse + schema enforcement   (invalid -> DLQ topic)
+         -> stateful dedup on idempotency_key (Pub/Sub redelivery + publisher retries)
          -> optional DLP de-identification (sampled, cost-controlled)
          -> enrich (lineage columns)
-         -> BigQuery Silver.transaction   (insertId = idempotency_key -> dedup)
+         -> BigQuery Silver.transaction (append)
+
+Exactly-once notes: Pub/Sub delivery and publisher retries are AT-LEAST-ONCE, so
+the pipeline dedupes IN-STREAM (DeduplicatePerKey on the producer-minted
+idempotency_key, TTL --dedup_ttl_seconds). Defense in depth: the Dataplex DQ scan
+asserts key uniqueness at rest (detective control); a scheduled reconciliation
+MERGE is the documented backstop for anything outside the TTL window. BigQuery's
+streaming-insert auto insertId only covers the sink's own transient retries — it
+is NOT business-level dedup.
 
 SINGLE-FILE BY DESIGN: the transform logic is inlined here (it mirrors
 transforms.py, which the unit tests import without Beam). Inlining means every
@@ -181,8 +190,23 @@ def build_pipeline(p, opts):
 
     parsed = raw | "ParseValidate" >> beam.ParDo(ParseAndValidate()).with_outputs(DLQ, main=VALID)
 
+    deduped = parsed[VALID]
+    if int(getattr(opts, "dedup_ttl_seconds", 0) or 0) > 0:
+        # Stateful dedup on the producer-minted business key, BEFORE DLP (don't pay
+        # de-identification for duplicates). Keying introduces a shuffle — that is
+        # the price of dedup-at-write; consumers stay simple and pay nothing.
+        from apache_beam.transforms.deduplicate import DeduplicatePerKey
+        from apache_beam.utils.timestamp import Duration
+        deduped = (
+            parsed[VALID]
+            | "KeyByIdempotency" >> beam.Map(lambda r: (r["idempotency_key"], r))
+            | "DedupRedeliveries" >> DeduplicatePerKey(
+                processing_time_duration=Duration(seconds=int(opts.dedup_ttl_seconds)))
+            | "DropDedupKey" >> beam.Values()
+        )
+
     valid = (
-        parsed[VALID]
+        deduped
         | "Deidentify" >> beam.ParDo(MaybeDeidentify(opts.project, opts.deid_template, opts.inspect_template, opts.dlp_sample_rate))
         | "Enrich" >> beam.Map(enrich)
     )
@@ -215,6 +239,8 @@ def run(argv=None):
     parser.add_argument("--deid_template", default="")
     parser.add_argument("--inspect_template", default="")
     parser.add_argument("--dlp_sample_rate", type=float, default=0.1)
+    parser.add_argument("--dedup_ttl_seconds", type=int, default=3600,
+                        help="In-stream idempotency_key dedup window (0 disables).")
     parser.add_argument("--input_file")
     parser.add_argument("--output_file")
     parser.add_argument("--dlq_file")
