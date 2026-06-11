@@ -42,6 +42,27 @@ Propagate the signed-in user's **OAuth access token** to the analytics path so
   `DATA_MASKING_POLICY` on the `PII_FINANCIAL` tag returns NULLs to masked
   readers instead of erroring — analytical SQL keeps working for the analyst tier.
 
+## Decision (amended) — anonymous tier + authorized views
+
+- **Anonymous callers are a first-class tier**: Ask-the-Data is open to the
+  unauthenticated customer persona, executed via **impersonation of a dedicated
+  low-privilege SA** (`finchat-<env>-analyst-anon`: jobUser, dataset READER on the
+  semantic datasets, **maskedReader** on the PII_FINANCIAL data policy, and
+  deliberately **no fine-grained read**). Guests therefore see structure and counts
+  with **masked (NULL) protected values** — never real amounts. The BFF SA is never
+  used for restricted callers, and restricted tiers never fall back to it on denial.
+- **The semantic views must be AUTHORIZED views.** Standard views require the caller
+  to hold access on the underlying tables — which restricted tiers deliberately
+  don't (no silver grants). Fix: the graph dataset is registered as an **authorized
+  dataset** (`targetTypes: VIEWS`) on silver/gold/loans, so the views read their
+  sources on behalf of callers. Crucially, **authorized views delegate dataset ACLs
+  but never policy-tag enforcement** — column-level security and masking always
+  evaluate against the end user, which is exactly what makes one query path yield
+  values / masked / denied per caller.
+- Diagnostics: CA streams errors as **top-level `{"error":…}` entries in an
+  HTTP-200 body**; the BFF parser captures these so restricted-tier denials map to
+  the friendly request-access response instead of an empty answer.
+
 ## Consequences
 
 - First Ask-the-Data use per staff account triggers a Google consent popup
