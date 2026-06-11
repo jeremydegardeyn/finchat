@@ -93,7 +93,8 @@ async function api(kind, path, opts={}) {
 
 // ---------- views ----------
 const VIEWS = {
-  customer: { label:"Customer", render: renderCustomer },
+  customer: { label:"Banking Assistant", render: renderCustomerChat },
+  loans:    { label:"Loans", render: renderCustomerLoans },
   employee: { label:"Loan Officer", render: renderEmployee },
   analyst:  { label:"Analyst", render: renderAnalyst },
   admin:    { label:"Admin",    render: renderAdmin },
@@ -101,13 +102,16 @@ const VIEWS = {
 // Ask-the-Data (free-form Conversational Analytics) is a STAFF capability. The
 // anonymous customer gets only the DaaS-grounded banking assistant (tools), not
 // arbitrary SQL over the data products. Staff personas see what their own
-// credentials allow (values / masked / denied), ADR-0019.
-function viewsFor(p){ return p==="customer"?["customer"]:p==="employee"?["employee","analyst"]:p==="analyst"?["analyst"]:["admin","analyst"]; }
+// credentials allow (values / masked / denied), ADR-0019. Anonymous customer
+// splits the assistant chat and loan request/status onto separate tabs.
+function viewsFor(p){ return p==="customer"?["customer","loans"]:p==="employee"?["employee","analyst"]:p==="analyst"?["analyst"]:["admin","analyst"]; }
 let activeTab = "customer";
 
 function setTabs() {
   const allowed = viewsFor(S.persona);
-  activeTab = allowed[0];
+  // Staff land on the Analyst (Ask-the-Data) tab by default; anonymous customer
+  // lands on the Banking Assistant chat.
+  activeTab = allowed.includes("analyst") ? "analyst" : allowed[0];
   tabs.innerHTML = allowed.map(v=>`<button class="tab ${v===activeTab?'active':''}" data-v="${v}">${VIEWS[v].label} View</button>`).join("");
   tabs.querySelectorAll("button").forEach(b=>b.onclick=()=>{ activeTab=b.dataset.v;
     tabs.querySelectorAll("button").forEach(x=>x.classList.toggle("active",x.dataset.v===activeTab)); draw(); });
@@ -140,7 +144,28 @@ function riskExplainHtml(o){
 }
 
 // ===== CUSTOMER =====
-function renderCustomer() {
+// Anonymous customer surface, split across two tabs: the grounded Banking
+// Assistant chat (this) and loan request/status (renderCustomerLoans).
+function renderCustomerChat() {
+  view.innerHTML = `
+  <div class="grid">
+    <div class="card" style="grid-column:1/-1"><h3>Chat with Banking Assistant</h3>
+      <div class="row"><label style="margin:0">Account&nbsp;</label><input id="cacc" style="width:200px" value="${(S.sampleAccounts&&S.sampleAccounts[0])||'acct-001'}"></div>
+      <div id="chat" class="chat" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:8px"><input id="cmsg" placeholder="e.g. what is my balance?" style="flex:1"><button id="csend">Send</button></div>
+      <div id="cex" class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
+    </div>
+  </div>`;
+  el("csend").onclick = chatSend;
+  el("cmsg").addEventListener("keydown",e=>{ if(e.key==="Enter") chatSend(); });
+  const cExamples = ["what is my balance?", "show my recent transactions", "give me an account summary",
+                     "what are the overdraft fees?", "when is the Lakewood branch open?"];
+  el("cex").innerHTML = `<span class="mut" style="font-size:12px;align-self:center">try:</span>` +
+    cExamples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("");
+  el("cex").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("cmsg").value=b.textContent; chatSend(); });
+  pushChat("a","Hi! I'm FinChat. Ask me about your balance, recent transactions, an account summary — or bank policies, fees, and branch hours.");
+}
+function renderCustomerLoans() {
   view.innerHTML = `
   <div class="grid">
     <div class="card"><h3>Submit Loan Request</h3>
@@ -156,21 +181,8 @@ function renderCustomer() {
       <div class="row" style="margin-top:12px"><button class="ghost" id="lsget">Check status</button></div>
       <div id="lsout"></div>
     </div>
-    <div class="card" style="grid-column:1/-1"><h3>Chat with Banking Assistant</h3>
-      <div class="row"><label style="margin:0">Account&nbsp;</label><input id="cacc" style="width:200px" value="${(S.sampleAccounts&&S.sampleAccounts[0])||'acct-001'}"></div>
-      <div id="chat" class="chat" style="margin-top:8px"></div>
-      <div class="row" style="margin-top:8px"><input id="cmsg" placeholder="e.g. what is my balance?" style="flex:1"><button id="csend">Send</button></div>
-      <div id="cex" class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
-    </div>
   </div>`;
-  el("lsub").onclick = submitLoan; el("lsget").onclick = checkStatus; el("csend").onclick = chatSend;
-  el("cmsg").addEventListener("keydown",e=>{ if(e.key==="Enter") chatSend(); });
-  const cExamples = ["what is my balance?", "show my recent transactions", "give me an account summary",
-                     "what are the overdraft fees?", "when is the Lakewood branch open?"];
-  el("cex").innerHTML = `<span class="mut" style="font-size:12px;align-self:center">try:</span>` +
-    cExamples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("");
-  el("cex").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("cmsg").value=b.textContent; chatSend(); });
-  pushChat("a","Hi! I'm FinChat. Ask me about your balance, recent transactions, an account summary — or bank policies, fees, and branch hours.");
+  el("lsub").onclick = submitLoan; el("lsget").onclick = checkStatus;
 }
 async function submitLoan() {
   const body = { customer_name:el("ln").value, amount:+el("la").value, term_months:+el("lt").value, account_id:el("lacc").value||null };
@@ -454,6 +466,12 @@ async function onGoogleCred(resp){
     S.persona = me.persona;
   } else { S.idtok = null; }
   renderAuthUI(); setTabs();
+  // ADR-0019: request the analytics OAuth token right after sign-in so it's ONE
+  // login flow — chat never interrupts with a second popup. Silent on repeat
+  // logins (cloud-platform already granted to the account). Fire-and-forget; if a
+  // popup blocker eats a first-ever grant (non-gesture), the lazy path on first
+  // chat still covers it.
+  if (S.user) { try { ensureAccessToken(); } catch(e){} }
 }
 function signOut(){
   S.idtok = null; S.user = null; S.persona = "customer";
