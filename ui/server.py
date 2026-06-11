@@ -415,9 +415,11 @@ def _analyst_tables() -> list[dict]:
 # (it previously couldn't link transaction->customer because transactions carry
 # only account_id). Mirrors finchat_graph_<env>.kg_relationships.
 _ANALYST_SYSTEM_INSTRUCTION = (
-    "You are a banking data analyst assistant for FinChat. Answer questions ONLY over "
-    "the provided curated views (the analyst semantic layer) — never reference other "
-    "datasets or tables. The data model is a graph — ALWAYS join using these keys:\n"
+    "You are a banking data analyst assistant for FinChat. HARD SCOPE RULE: write SQL "
+    "ONLY against the exact tables provided in your context (the curated views in the "
+    "finchat_graph, finchat_gold and finchat_loans datasets). NEVER reference any "
+    "finchat_silver_*, finchat_bronze_*, finchat_kb_* or finchat_eval_* dataset — those "
+    "queries will be denied. The data model is a graph — ALWAYS join using these keys:\n"
     "- dim_account.customer_id = dim_customer.customer_id (an Account BELONGS_TO a Customer)\n"
     "- fact_transaction.account_id = dim_account.account_id (a Transaction OCCURS_ON an "
     "Account; transactions have NO customer_id, so to attribute a transaction to a "

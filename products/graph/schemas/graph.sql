@@ -47,14 +47,16 @@ EDGE TABLES (
 
 -- ---------- Join relationships (the graph schema; feeds the CA system prompt) ----------
 CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.kg_relationships` AS
+-- NOTE: names reference the SEMANTIC views (dim_/fact_), never physical silver
+-- tables — this content grounds the NL model, and teaching it silver names makes
+-- it generate out-of-perimeter SQL that IAM then (correctly) denies.
 SELECT * FROM UNNEST([
-  STRUCT('account'           AS from_table, 'customer_id' AS from_column,
-         'customer'          AS to_table,   'customer_id' AS to_column,
+  STRUCT('dim_account'       AS from_table, 'customer_id' AS from_column,
+         'dim_customer'      AS to_table,   'customer_id' AS to_column,
          'Account BELONGS_TO Customer'      AS relationship),
-  STRUCT('transaction', 'account_id', 'account', 'account_id', 'Transaction OCCURS_ON Account'),
-  STRUCT('overdraft_history', 'account_id', 'account', 'account_id', 'OverdraftProfile SUMMARIZES Account'),
-  STRUCT('loan_request', 'account_id', 'account', 'account_id', 'Loan REQUESTED_FOR Account'),
-  STRUCT('customer_360', 'customer_id', 'customer', 'customer_id', 'Customer360 ROLLS_UP Customer')
+  STRUCT('fact_transaction', 'account_id', 'dim_account', 'account_id', 'Transaction OCCURS_ON Account'),
+  STRUCT('overdraft_history', 'account_id', 'dim_account', 'account_id', 'OverdraftProfile SUMMARIZES Account'),
+  STRUCT('customer_360', 'customer_id', 'dim_customer', 'customer_id', 'Customer360 ROLLS_UP Customer')
 ]);
 
 -- ---------- Nodes: one row per entity instance ----------
