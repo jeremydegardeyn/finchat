@@ -92,3 +92,9 @@ variable "labels" {
   type    = map(string)
   default = { app = "finchat", managed_by = "terraform" }
 }
+
+variable "enable_bigtable" {
+  type        = bool
+  description = "Deploy the Bigtable hot-path serving tier (ADR-0017). No scale-to-zero (~$475/mo/node) — default off; develop against the emulator."
+  default     = false
+}

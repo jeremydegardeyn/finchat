@@ -34,3 +34,4 @@ custom_domain = "" # e.g. "finchat-prod.datadinosaur.com"
 
 # --- Labels ---
 labels = { app = "finchat", managed_by = "terraform" }
+enable_bigtable = false # Bigtable hot path (ADR-0017): ~$475/mo/node, use emulator for dev

@@ -253,3 +253,22 @@ module "monitoring" {
   notification_email  = var.notification_email
   dlq_subscription_id = "${var.name_prefix}-${var.env}-transactions-dlq-sub"
 }
+
+# --- Bigtable hot path (ADR-0017; default off — no scale-to-zero) -------------
+module "bigtable" {
+  count       = var.enable_bigtable ? 1 : 0
+  source      = "../../modules/bigtable"
+  project_id  = var.project_id
+  region      = var.region
+  env         = var.env
+  name_prefix = var.name_prefix
+  reader_members = [
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+    "serviceAccount:${module.foundation.service_account_emails["agent"]}",
+  ]
+  writer_members = [
+    "serviceAccount:${module.foundation.service_account_emails["pipeline"]}",
+    "serviceAccount:${module.foundation.service_account_emails["cicd"]}",
+  ]
+  labels = local.labels
+}

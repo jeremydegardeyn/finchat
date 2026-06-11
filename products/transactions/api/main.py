@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
+import bt
 from bq import Repository
 
 app = FastAPI(
@@ -67,7 +68,9 @@ def get_sample_accounts(n: int = Query(5, ge=1, le=20)):
 
 @app.get("/v1/accounts/{account_id}/balance", response_model=Balance, tags=["accounts"])
 def get_balance(account_id: str):
-    row = repo.get_balance(account_id)
+    # Hot path (ADR-0017): Bigtable point read when BIGTABLE_INSTANCE is set;
+    # BigQuery (the analytical source of truth) remains the fallback.
+    row = (bt.get_balance(account_id) if bt.enabled() else None) or repo.get_balance(account_id)
     if not row:
         raise HTTPException(status_code=404, detail=f"account {account_id} not found")
     return row
@@ -75,7 +78,9 @@ def get_balance(account_id: str):
 
 @app.get("/v1/accounts/{account_id}/transactions", response_model=list[Transaction], tags=["accounts"])
 def get_transaction_history(account_id: str, limit: int = Query(50, ge=1, le=500)):
-    rows = repo.get_transactions(account_id, limit)
+    # Hot path: newest-first prefix scan on account_id#reverse_ts (ADR-0017).
+    rows = (bt.get_transactions(account_id, limit) if bt.enabled() else []) \
+        or repo.get_transactions(account_id, limit)
     if not rows:
         raise HTTPException(status_code=404, detail=f"no transactions for account {account_id}")
     return rows
