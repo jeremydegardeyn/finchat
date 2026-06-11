@@ -51,14 +51,21 @@ Propagate the signed-in user's **OAuth access token** to the analytics path so
   deliberately **no fine-grained read**). Guests therefore see structure and counts
   with **masked (NULL) protected values** — never real amounts. The BFF SA is never
   used for restricted callers, and restricted tiers never fall back to it on denial.
-- **The semantic views must be AUTHORIZED views.** Standard views require the caller
-  to hold access on the underlying tables — which restricted tiers deliberately
-  don't (no silver grants). Fix: the graph dataset is registered as an **authorized
-  dataset** (`targetTypes: VIEWS`) on silver/gold/loans, so the views read their
-  sources on behalf of callers. Crucially, **authorized views delegate dataset ACLs
-  but never policy-tag enforcement** — column-level security and masking always
-  evaluate against the end user, which is exactly what makes one query path yield
-  values / masked / denied per caller.
+- **Enforcement is CLS/masking, not view-hiding — the decisive lesson.** Authorized
+  views (graph dataset registered as an authorized dataset on the sources) let the
+  views read silver on a caller's behalf, *but* Conversational Analytics, during
+  planning, also resolves the underlying silver tables — and an LLM cannot be 100%
+  constrained to query only the curated views. Relying on the views as the security
+  boundary is therefore fragile. The robust model: restricted tiers get
+  `bigquery.dataViewer` on silver, and **column-level security + data masking are the
+  hard control** — `maskedReader` returns NULLs for protected columns, non-readers are
+  denied, fine-grained readers see values. The semantic views remain the *preferred,
+  clean* surface (instruction + agent context), but they are not the access boundary.
+  Critically, **dataset access is delegated; policy-tag enforcement is never** — CLS
+  evaluates against the end user regardless of how the table is reached, which is what
+  makes one query path yield values / masked / denied per caller. Verified: the anon
+  masked tier runs `total deposits by segment` and gets segments with `total_deposits =
+  NULL`.
 - Diagnostics: CA streams errors as **top-level `{"error":…}` entries in an
   HTTP-200 body**; the BFF parser captures these so restricted-tier denials map to
   the friendly request-access response instead of an empty answer.
