@@ -409,6 +409,7 @@ async function renderAdmin() {
       <div class="row">${tile(m[0])}${tile(m[1])}</div>
       <div class="row" style="margin-top:10px">${tile(m[2],true)}${tile(m[3],true)}</div>
       <div class="mut" style="margin-top:8px">${evNote}</div>
+      ${(ev.latency_p50_ms!=null)?`<div class="mut" style="margin-top:6px">Latency · p50 <b>${ev.latency_p50_ms}</b> ms · p95 <b>${ev.latency_p95_ms}</b> ms</div>`:""}
       <div class="row" style="margin-top:10px;gap:8px"><button class="ghost" id="evrun">Run evals now</button>
         <span id="evrunmsg" class="mut" style="font-size:12px;align-self:center"></span></div>
       <div class="mut" style="font-size:11px;margin-top:4px">Same LLM-as-judge scorer as the scheduled daily job — run on demand.</div></div>

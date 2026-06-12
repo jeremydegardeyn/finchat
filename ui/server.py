@@ -206,10 +206,12 @@ def me(request: Request):
             "persona": p, "persona_label": PERSONA_LABELS.get(p, "Customer")}
 
 
-async def _log_eval(persona: str, channel: str, question: str, answer: str, context=None):
+async def _log_eval(persona: str, channel: str, question: str, answer: str, context=None,
+                    latency_ms: int | None = None):
     """Best-effort capture of a conversation turn for live evaluation. Awaited (in a
     worker thread) WITHIN the request — Cloud Run throttles CPU once the response is
-    sent, so a fire-and-forget background thread would never run. Never raises."""
+    sent, so a fire-and-forget background thread would never run. Never raises.
+    latency_ms is the wall-clock answer-generation time (operational eval signal)."""
     if not (GCP_PROJECT and EVAL_DATASET and (question or "").strip()):
         return
 
@@ -223,7 +225,8 @@ async def _log_eval(persona: str, channel: str, question: str, answer: str, cont
                    "ts": datetime.now(timezone.utc).isoformat(),
                    "persona": persona, "channel": channel,
                    "question": (question or "")[:4000], "answer": (answer or "")[:8000],
-                   "context": (_json.dumps(context)[:8000] if context else None)}
+                   "context": (_json.dumps(context)[:8000] if context else None),
+                   "latency_ms": latency_ms}
             bigquery.Client(project=GCP_PROJECT).insert_rows_json(
                 f"{GCP_PROJECT}.{EVAL_DATASET}.conversation_log", [row])
         except Exception:
@@ -295,7 +298,10 @@ async def agent_proxy(path: str, request: Request):
             return JSONResponse(
                 {"error": "Your message was blocked by safety screening.", "reason": reason},
                 status_code=400)
+    import time as _time
+    _t0 = _time.perf_counter()
     resp = await _proxy(AGENT_URL, path, request)
+    _latency_ms = int((_time.perf_counter() - _t0) * 1000)
     # Screen the model response before returning it to the user.
     try:
         ok, reason = await armor.screen_response(resp.body.decode("utf-8", "replace"))
@@ -311,7 +317,8 @@ async def agent_proxy(path: str, request: Request):
         q = (_json.loads(body or b"{}") or {}).get("message", "")
         a = (_json.loads(resp.body or b"{}") or {}).get("response", "")
         if q:
-            await _log_eval(request.headers.get("X-Persona", "customer"), "agent", q, a)
+            await _log_eval(request.headers.get("X-Persona", "customer"), "agent", q, a,
+                            latency_ms=_latency_ms)
     except Exception:
         pass
     return resp
@@ -683,14 +690,18 @@ async def analyst_ask(request: Request):
     q = (body.get("message") or "").strip()
     if not q:
         return JSONResponse({"error": "empty message"}, status_code=400)
+    import time as _time
+    _t0 = _time.perf_counter()
     mode = await _classify_intent(q)
     utok = request.headers.get("X-User-Access-Token") or None
     res = await (_run_kb(q) if mode == "kb" else _run_ca(q, user_token=utok))
+    _latency_ms = int((_time.perf_counter() - _t0) * 1000)
     # Capture for live eval; for analytics the generated SQL + rows are the grounding context.
     ctx = None
     if res.get("mode") == "analytics":
         ctx = {"sql": res.get("sql"), "rows": (res.get("rows") or [])[:10]}
-    await _log_eval("analyst", res.get("mode", mode), q, res.get("answer", ""), ctx)
+    await _log_eval("analyst", res.get("mode", mode), q, res.get("answer", ""), ctx,
+                    latency_ms=_latency_ms)
     return res
 
 
@@ -714,6 +725,8 @@ def eval_report(request: Request):
                 ts = d.get("last_scored_at")
                 return {"available": True, "live": True, "n": d["n"],
                         "generated_at": ts.isoformat() if ts else None,
+                        "latency_p50_ms": d.get("latency_p50_ms"),
+                        "latency_p95_ms": d.get("latency_p95_ms"),
                         "metrics": [
                             {"label": "Grounding", "value": d["grounding_accuracy"]},
                             {"label": "Hallucination", "value": d["hallucination_rate"]},

@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS `${PROJECT}.finchat_eval_${ENV}.conversation_scores`
 PARTITION BY DATE(scored_at)
 CLUSTER BY channel;
 
--- Rolling 7-day live metrics (normalized 0..1) + sample size.
+-- Rolling 7-day live metrics (normalized 0..1) + sample size. Latency p50/p95 are
+-- taken from conversation_log over ALL turns in the window (every turn has a latency,
+-- scored or not) — the operational half of eval observability alongside quality.
 CREATE OR REPLACE VIEW `${PROJECT}.finchat_eval_${ENV}.eval_summary` AS
 SELECT
   COUNT(*)                                   AS n,
@@ -46,6 +48,14 @@ SELECT
   ROUND(AVG(SAFE_DIVIDE(instruction_following - 1, 4)), 3) AS instruction_following,
   ROUND(AVG(SAFE_DIVIDE(coherence - 1, 4)), 3)             AS coherence,
   ROUND(AVG(safety), 3)                                    AS safety,
-  ROUND(AVG(overall), 3)                                   AS overall
+  ROUND(AVG(overall), 3)                                   AS overall,
+  (SELECT APPROX_QUANTILES(latency_ms, 100)[OFFSET(50)]
+     FROM `${PROJECT}.finchat_eval_${ENV}.conversation_log`
+     WHERE latency_ms IS NOT NULL
+       AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)) AS latency_p50_ms,
+  (SELECT APPROX_QUANTILES(latency_ms, 100)[OFFSET(95)]
+     FROM `${PROJECT}.finchat_eval_${ENV}.conversation_log`
+     WHERE latency_ms IS NOT NULL
+       AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)) AS latency_p95_ms
 FROM `${PROJECT}.finchat_eval_${ENV}.conversation_scores`
 WHERE scored_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY);
