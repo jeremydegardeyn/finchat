@@ -37,7 +37,9 @@ gets a `search_knowledge_base` tool that runs the search and grounds Gemini in t
 - Small per-query embedding cost; negligible at chat volume.
 - **Enterprise scale:** add a `VECTOR INDEX`, scheduled re-embedding on corpus change, chunking of large
   docs, and (optionally) Vertex AI Search / Vector Search if recall/scale demands it — the agent tool
-  contract is unchanged.
+  contract is unchanged. Full corpus/embedding lifecycle (event-driven ingestion, incremental re-embed,
+  blue/green model upgrades, retrieval-quality evals) is documented in
+  [docs/11 — KB corpus & embedding lifecycle](../11-future-state-roadmap.md#knowledge-base-corpus--embedding-lifecycle-enterprise-tier).
 
 ## Alternatives considered
 
