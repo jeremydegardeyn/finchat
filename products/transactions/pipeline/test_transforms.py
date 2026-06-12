@@ -1,7 +1,8 @@
-"""Unit tests for the pure transform logic (no Beam runner needed)."""
+"""Unit tests for the pure components (validation + enrich) — no Beam runner needed."""
 import json
 import pytest
-from transforms import parse_and_validate, enrich, to_dlq_envelope, ValidationError
+from finchat_pipeline.validation import parse_and_validate, to_dlq_envelope, ValidationError
+from finchat_pipeline.enrich import enrich
 
 VALID = {
     "transaction_id": "11111111-1111-1111-1111-111111111111",

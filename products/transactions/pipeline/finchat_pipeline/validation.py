@@ -1,9 +1,8 @@
-"""
-Pure (Beam-free) transform logic for the transactions pipeline.
+"""Validation component — pure schema enforcement, parsing, and DLQ enveloping.
 
-Kept separate from the Beam wiring so it can be unit-tested without a runner and
-reused by other consumers. Implements schema enforcement, validation, and
-enrichment. PII de-identification is applied in the Beam layer (DLP API call).
+Beam-free on purpose: importable without a runner, so it is unit-tested directly
+and reused by any consumer that needs the transaction contract. The Beam layer
+(transforms.py) wraps these functions in a tagged-output DoFn.
 """
 from __future__ import annotations
 
@@ -11,10 +10,12 @@ import json
 import re
 from datetime import datetime, timezone
 
-PIPELINE_VERSION = "1.0.0"
+from finchat_pipeline.schema import PIPELINE_VERSION
+
 VALID_TYPES = {"DEPOSIT", "WITHDRAWAL", "TRANSFER", "FEE"}
 VALID_STATUS = {"POSTED", "PENDING", "REJECTED"}
-REQUIRED = ("transaction_id", "idempotency_key", "account_id", "txn_type", "amount", "currency", "status", "event_time")
+REQUIRED = ("transaction_id", "idempotency_key", "account_id", "txn_type",
+            "amount", "currency", "status", "event_time")
 _AMOUNT_RE = re.compile(r"^[0-9]+(\.[0-9]{1,2})?$")
 _CCY_RE = re.compile(r"^[A-Z]{3}$")
 
@@ -66,15 +67,6 @@ def parse_and_validate(raw: bytes | str) -> dict:
         "status": obj["status"],
         "event_time": str(obj["event_time"]).replace("Z", "+00:00"),
     }
-
-
-def enrich(record: dict, source_system: str = "synthetic-generator") -> dict:
-    """Add lineage/provenance columns required by the Silver schema."""
-    record = dict(record)
-    record["ingest_time"] = datetime.now(timezone.utc).isoformat()
-    record["source_system"] = source_system
-    record["pipeline_version"] = PIPELINE_VERSION
-    return record
 
 
 def to_dlq_envelope(raw: bytes | str, error: str) -> bytes:

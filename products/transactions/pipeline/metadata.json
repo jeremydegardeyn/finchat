@@ -7,6 +7,7 @@
     { "name": "dlq_topic", "label": "Dead-letter topic", "helpText": "projects/PROJECT/topics/...", "regexes": ["^projects/[^/]+/topics/[^/]+$"] },
     { "name": "deid_template", "label": "DLP de-identify template", "helpText": "Optional DLP de-identify template name.", "isOptional": true },
     { "name": "inspect_template", "label": "DLP inspect template", "helpText": "Optional DLP inspect template name (required with deid_template).", "isOptional": true },
-    { "name": "dlp_sample_rate", "label": "DLP sample rate", "helpText": "0..1 fraction inspected (cost control).", "isOptional": true }
+    { "name": "dlp_sample_rate", "label": "DLP sample rate", "helpText": "0..1 fraction inspected (cost control).", "isOptional": true },
+    { "name": "sdk_container_image", "label": "Worker SDK container image", "helpText": "Custom Beam worker image (same image as the template) so workers import finchat_pipeline.* natively.", "isOptional": true }
   ]
 }

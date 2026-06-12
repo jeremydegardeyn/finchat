@@ -31,10 +31,15 @@ done
 BUCKET="finchat-${ENV}-dataflow"
 SA="finchat-${ENV}-pipeline@${PROJECT}.iam.gserviceaccount.com"
 JOB="txn-stream-${ENV}-$(date +%s)"
+# Custom worker container (modular package): workers run the SAME image the Flex
+# Template was built from, so they import finchat_pipeline.* natively. Forwarded
+# as a pipeline option (parse_known_args -> PipelineOptions.sdk_container_image).
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images/txn-pipeline:latest"
 
 PARAMS="input_subscription=projects/${PROJECT}/subscriptions/finchat-${ENV}-transactions-dataflow"
 PARAMS="${PARAMS},output_table=${PROJECT}:finchat_silver_${ENV}.transaction"
 PARAMS="${PARAMS},dlq_topic=projects/${PROJECT}/topics/finchat-${ENV}-transactions-dlq"
+PARAMS="${PARAMS},sdk_container_image=${IMAGE}"
 
 if [ "$WITH_DLP" = "dlp" ]; then
   DEID="$(terraform -chdir="infra/envs/${ENV}" output -raw dlp_deidentify_template)"

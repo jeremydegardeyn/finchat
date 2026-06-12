@@ -92,8 +92,11 @@ jobs:
         run: |
           REPO="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images"
           SHA="${GITHUB_SHA::12}"
-          docker build -t "${REPO}/txn-pipeline:${SHA}" products/transactions/pipeline
+          # Custom container = Flex Template launcher AND Beam worker image. Tag a
+          # stable :latest so run_dataflow.sh can pass it as --sdk_container_image.
+          docker build -t "${REPO}/txn-pipeline:${SHA}" -t "${REPO}/txn-pipeline:latest" products/transactions/pipeline
           docker push "${REPO}/txn-pipeline:${SHA}"
+          docker push "${REPO}/txn-pipeline:latest"
           gcloud dataflow flex-template build \
             "gs://finchat-${ENV}-dataflow/templates/txn-pipeline.json" \
             --image "${REPO}/txn-pipeline:${SHA}" --sdk-language PYTHON \

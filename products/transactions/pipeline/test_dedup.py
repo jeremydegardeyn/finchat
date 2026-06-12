@@ -26,7 +26,7 @@ def _row(txn_id: str, key: str) -> dict:
 
 
 def test_pipeline_collapses_duplicate_keys(tmp_path):
-    import pipeline as pl
+    import finchat_pipeline.pipeline as pl
 
     rows = [
         _row("t1", "k1"),
@@ -53,7 +53,7 @@ def test_pipeline_collapses_duplicate_keys(tmp_path):
 
 
 def test_dedup_disabled_passes_duplicates_through(tmp_path):
-    import pipeline as pl
+    import finchat_pipeline.pipeline as pl
 
     rows = [_row("t1", "k1"), _row("t1", "k1")]
     inp = tmp_path / "in.jsonl"
