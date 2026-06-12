@@ -49,11 +49,24 @@ module "bigquery" {
   financial_reader_members = [
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
   ]
+  masked_reader_members = compact([
+    var.masked_reader_member,
+    "serviceAccount:${module.foundation.service_account_emails["analyst_anon"]}",
+  ])
   eval_writer_members = [
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
     "serviceAccount:${module.foundation.service_account_emails["cicd"]}",
   ]
   labels = local.labels
+}
+
+# Platform Admin persona: browse Dataplex Data Products to request access (then
+# CLS-denied on the actual data). dataplex.viewer grants NO column data access.
+resource "google_project_iam_member" "platform_admin_dataplex" {
+  count   = var.platform_admin_member == "" ? 0 : 1
+  project = var.project_id
+  role    = "roles/dataplex.viewer"
+  member  = var.platform_admin_member
 }
 
 # --- Pub/Sub eventing + DLQ + BQ subscription --------------------------------

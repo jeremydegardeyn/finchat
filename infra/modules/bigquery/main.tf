@@ -145,6 +145,31 @@ resource "google_data_catalog_policy_tag_iam_member" "financial_readers" {
   member     = each.value
 }
 
+# --- Dynamic data masking on PII_FINANCIAL (ADR-0019) -------------------------
+# Returns NULL for PII_FINANCIAL-tagged columns to `maskedReader`s: the analyst
+# tier keeps running aggregate SQL but never sees real values, non-readers are
+# denied, and fine-grained readers (above) see clear values. CLS + masking is the
+# hard, per-user control — enforced regardless of how the table is reached.
+resource "google_bigquery_datapolicy_data_policy" "pii_financial_mask" {
+  project          = var.project_id
+  location         = var.region
+  data_policy_id   = "${var.name_prefix}_${var.env}_pii_financial_mask"
+  policy_tag       = google_data_catalog_policy_tag.tags["pii_financial"].id
+  data_policy_type = "DATA_MASKING_POLICY"
+  data_masking_policy {
+    predefined_expression = "ALWAYS_NULL"
+  }
+}
+
+resource "google_bigquery_datapolicy_data_policy_iam_member" "masked_readers" {
+  for_each       = toset(var.masked_reader_members)
+  project        = var.project_id
+  location       = var.region
+  data_policy_id = google_bigquery_datapolicy_data_policy.pii_financial_mask.data_policy_id
+  role           = "roles/bigquerydatapolicy.maskedReader"
+  member         = each.value
+}
+
 # --- Silver tables (partitioned, clustered, PII policy-tagged) ----------------
 resource "google_bigquery_table" "silver_customer" {
   project             = var.project_id

@@ -21,6 +21,16 @@ variable "privileged_group" {
   description = "Member allowed to read unmasked PII (e.g., group:fraud-ops@datadinosaur.com)."
   default     = ""
 }
+variable "masked_reader_member" {
+  type        = string
+  description = "Analyst-tier human (e.g. user:jdegardeyn@datadinosaur.com) granted maskedReader — sees NULL for PII_FINANCIAL (ADR-0019). Empty = only the anonymous SA is masked."
+  default     = ""
+}
+variable "platform_admin_member" {
+  type        = string
+  description = "Platform Admin human (e.g. user:datadinosaur.noreply@gmail.com) granted dataplex.viewer to browse Data Products and request access. Empty = no grant."
+  default     = ""
+}
 variable "notification_email" {
   type    = string
   default = ""

@@ -39,6 +39,12 @@ variable "financial_reader_members" {
   default     = []
 }
 
+variable "masked_reader_members" {
+  type        = list(string)
+  description = "Members granted bigquerydatapolicy.maskedReader on the PII_FINANCIAL masking policy — they see NULL for protected columns (analyst tier + anonymous SA), ADR-0019."
+  default     = []
+}
+
 variable "eval_writer_members" {
   type        = list(string)
   description = "Members granted dataEditor on the live-eval dataset (BFF writes logs; scorer writes scores)."

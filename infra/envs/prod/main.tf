@@ -49,6 +49,12 @@ module "bigquery" {
   financial_reader_members = [
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
   ]
+  # Analyst tier (human) + anonymous SA see NULL for PII_FINANCIAL via the masking
+  # policy (ADR-0019); fine-grained readers above see clear values, non-readers denied.
+  masked_reader_members = compact([
+    var.masked_reader_member,
+    "serviceAccount:${module.foundation.service_account_emails["analyst_anon"]}",
+  ])
   # Live eval: BFF (txn_api) writes conversation logs; CI/CD SA (the scorer runs via
   # the live-eval scheduled workflow) reads logs + writes scores.
   eval_writer_members = [
@@ -56,6 +62,16 @@ module "bigquery" {
     "serviceAccount:${module.foundation.service_account_emails["cicd"]}",
   ]
   labels = local.labels
+}
+
+# Platform Admin persona: browse the Dataplex Data Products page to request access
+# (then CLS-denied on the actual data — the governance demo). dataplex.viewer covers
+# the first-class dataProducts API and grants NO column data access.
+resource "google_project_iam_member" "platform_admin_dataplex" {
+  count   = var.platform_admin_member == "" ? 0 : 1
+  project = var.project_id
+  role    = "roles/dataplex.viewer"
+  member  = var.platform_admin_member
 }
 
 # --- Pub/Sub eventing + DLQ + BQ subscription --------------------------------
