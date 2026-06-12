@@ -23,6 +23,7 @@ resource "google_cloud_run_v2_service" "this" {
           cpu    = var.cpu
           memory = var.memory
         }
+        startup_cpu_boost = var.cpu_boost
       }
       dynamic "env" {
         for_each = var.env_vars

@@ -138,6 +138,7 @@ module "agent" {
   service_name    = "${var.name_prefix}-${var.env}-agent"
   service_account = module.foundation.service_account_emails["agent"]
   min_instances   = var.run_min_instances
+  memory          = "1Gi" # ADK + Gemini agent; matches the CI/CD `--memory=1Gi` deploy flag.
   env_vars = {
     GCP_PROJECT = var.project_id
     REGION      = var.region

@@ -51,6 +51,11 @@ variable "memory" {
   type    = string
   default = "512Mi"
 }
+variable "cpu_boost" {
+  type        = bool
+  default     = true
+  description = "Allocate extra CPU during container startup only (matches the CI/CD `gcloud run deploy --cpu-boost` flag). Cuts cold-start latency at no idle cost; codified here so Terraform and the deploy pipeline agree instead of drifting."
+}
 
 variable "labels" {
   type    = map(string)
