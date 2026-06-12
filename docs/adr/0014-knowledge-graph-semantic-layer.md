@@ -22,6 +22,8 @@ conversational-AI queries on it:
 - **`kg_relationships`** — the join schema (from/to table + column + relationship) as data;
   the single source of the model's edges.
 - **`kg_nodes` / `kg_edges`** — entity instances and directed relationships (the literal graph).
+  *(Superseded and pruned: once the native `banking_graph` property graph was added — see
+  the amendment below — these views were redundant scaffolding and removed.)*
 - **`customer_360`** — a denormalized, **CLS-safe** per-customer rollup (segment + account /
   transaction / overdraft / loan aggregates; no `full_name`/`email`).
 - The analyst BFF passes Conversational Analytics **both** the raw entities **and** the graph,

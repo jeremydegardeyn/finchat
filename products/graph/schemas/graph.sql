@@ -1,8 +1,9 @@
 -- =============================================================================
 -- FinChat — Knowledge Graph (BigQuery semantic layer)
--- Generates a graph view of the data model (nodes + edges + join relationships)
--- and a denormalized customer_360 so Conversational Analytics has explicit,
--- correct joins. Views only — no data is copied. Replace ${PROJECT}/${ENV}.
+-- A native property graph (banking_graph, queried with GQL) over the operational
+-- entities, the kg_relationships join schema that grounds Conversational Analytics,
+-- and a denormalized customer_360 so CA has explicit, correct joins. Views only —
+-- no data is copied. Replace ${PROJECT}/${ENV}.
 --
 -- Entity-relationship (the data model):
 --   Customer (customer_id)
@@ -59,31 +60,11 @@ SELECT * FROM UNNEST([
   STRUCT('customer_360', 'customer_id', 'dim_customer', 'customer_id', 'Customer360 ROLLS_UP Customer')
 ]);
 
--- ---------- Nodes: one row per entity instance ----------
-CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.kg_nodes` AS
-SELECT customer_id AS node_id, 'Customer' AS node_type,
-       COALESCE(segment, 'customer') AS label,
-       TO_JSON_STRING(STRUCT(segment, created_at)) AS properties
-FROM `${PROJECT}.finchat_silver_${ENV}.customer`
-UNION ALL
-SELECT account_id, 'Account', account_type,
-       TO_JSON_STRING(STRUCT(account_type, currency, status, customer_id))
-FROM `${PROJECT}.finchat_silver_${ENV}.account`
-UNION ALL
-SELECT loan_id, 'Loan', status,
-       TO_JSON_STRING(STRUCT(amount, term_months, status))
-FROM `${PROJECT}.finchat_loans_${ENV}.loan_request`;
-
--- ---------- Edges: directed relationships between nodes ----------
-CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.kg_edges` AS
-SELECT customer_id AS src_id, 'Customer' AS src_type, 'HAS_ACCOUNT' AS relationship,
-       account_id AS dst_id, 'Account' AS dst_type
-FROM `${PROJECT}.finchat_silver_${ENV}.account`
-WHERE customer_id IS NOT NULL
-UNION ALL
-SELECT account_id, 'Account', 'REQUESTED_LOAN', loan_id, 'Loan'
-FROM `${PROJECT}.finchat_loans_${ENV}.loan_request`
-WHERE account_id IS NOT NULL;
+-- The literal graph (entity instances + directed relationships) is now owned by
+-- the NATIVE `banking_graph` property graph above (queried with GQL). The earlier
+-- hand-rolled `kg_nodes` / `kg_edges` views were redundant scaffolding and have
+-- been pruned. `kg_relationships` stays — it is the CA grounding (join schema as
+-- data), a different job from graph traversal.
 
 -- ---------- customer_360: denormalized per-customer rollup (CLS-safe) ----------
 CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.customer_360` AS

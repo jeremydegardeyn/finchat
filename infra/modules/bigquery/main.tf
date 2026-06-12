@@ -53,14 +53,15 @@ resource "google_bigquery_dataset" "loans" {
   labels      = merge(var.labels, { layer = "product", domain = "lending" })
 }
 
-# Knowledge Graph semantic layer (nodes/edges/relationships + customer_360). Views
-# only — pre-joins the medallion entities so Conversational Analytics has explicit,
-# correct joins (e.g. transaction -> account -> customer by customer_id).
+# Knowledge Graph semantic layer: native banking_graph property graph + the
+# kg_relationships join schema + customer_360. Views only — pre-joins the medallion
+# entities so Conversational Analytics has explicit, correct joins (e.g.
+# transaction -> account -> customer by customer_id).
 resource "google_bigquery_dataset" "graph" {
   project     = var.project_id
   dataset_id  = "${var.name_prefix}_graph_${var.env}"
   location    = var.region
-  description = "FinChat knowledge graph: entity nodes, edges, join relationships, customer_360."
+  description = "FinChat knowledge graph: banking_graph property graph, kg_relationships join schema, customer_360."
   labels      = merge(var.labels, { layer = "semantic", domain = "graph" })
 }
 

@@ -173,8 +173,11 @@ relationships made **explicit and machine-readable** to join correctly. The
 | View | Role |
 |---|---|
 | `kg_relationships` | The join schema as data: `account.customer_id→customer.customer_id`; `transaction.account_id→account.account_id`; `overdraft_history.account_id→account.account_id`; `loan_request.account_id→account.account_id` |
-| `kg_nodes` / `kg_edges` | Entity instances + directed relationships (HAS_ACCOUNT, REQUESTED_LOAN) |
 | `customer_360` | Denormalized per-customer rollup (segment + account/transaction/overdraft/loan aggregates) — **CLS-safe** (no `full_name`/`email`) |
+
+> The literal graph (entity instances + directed relationships) lives in the native
+> `banking_graph` property graph; the earlier `kg_nodes` / `kg_edges` views were
+> pruned as redundant once it landed.
 
 **Key modeling point:** a `transaction` carries **only `account_id`** — never
 `customer_id`. `account` is the bridge (`account_id` ↔ transactions/overdrafts/loans;

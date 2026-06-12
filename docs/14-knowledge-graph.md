@@ -57,9 +57,12 @@ paths, relationship patterns — fraud-ring style traversals at enterprise scale
 | View | Shape | Purpose |
 |---|---|---|
 | `kg_relationships` | from_table·from_column → to_table·to_column · relationship | The **join schema** — the edges of the model as data (and the source of the CA system prompt) |
-| `kg_nodes` | node_id · node_type · label · properties(JSON) | Every entity instance (Customer / Account / Loan) |
-| `kg_edges` | src_id·src_type · relationship · dst_id·dst_type | Directed relationships (HAS_ACCOUNT, REQUESTED_LOAN) |
 | `customer_360` | one row per customer: segment + account/transaction/overdraft/loan rollups | **Pre-joined** analytical backbone — per-customer questions need no joins |
+
+> Earlier hand-rolled `kg_nodes` / `kg_edges` views (entity instances + directed
+> relationships) were **pruned** once `banking_graph` arrived — the native property
+> graph owns the literal graph, so those views were redundant scaffolding.
+> `kg_relationships` stays: it grounds CA (join schema as data), a different job.
 
 **Why both?** Conversational Analytics generates **SQL, not GQL** — so the views +
 system-instruction remain the grounding for the analyst chat, while the property graph
@@ -89,15 +92,12 @@ flowchart TB
   end
   subgraph kg["finchat_graph — knowledge graph (views)"]
     REL[kg_relationships<br/>join schema]
-    NOD[kg_nodes]
-    EDG[kg_edges]
     C360[customer_360<br/>pre-joined rollup]
   end
-  cu & ac --> NOD & EDG
   cu & ac & tx & od & ln --> C360
   ac --> REL
   classDef b fill:#1e293b,stroke:#38bdf8,color:#e2e8f0;
-  class REL,NOD,EDG,C360 b;
+  class REL,C360 b;
 ```
 
 ## 3. How conversational AI uses it
