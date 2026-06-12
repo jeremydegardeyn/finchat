@@ -97,7 +97,7 @@ const VIEWS = {
   loans:    { label:"Loans", render: renderCustomerLoans },
   employee: { label:"Loan Officer", render: renderEmployee },
   analyst:  { label:"Analyst", render: renderAnalyst },
-  admin:    { label:"Admin",    render: renderAdmin },
+  admin:    { label:"Platform Admin", render: renderAdmin },
 };
 // Ask-the-Data (free-form Conversational Analytics) is a STAFF capability. The
 // anonymous customer gets only the DaaS-grounded banking assistant (tools), not
@@ -290,13 +290,16 @@ function pushAChat(who,text){ const d=document.createElement("div"); d.className
   d.innerHTML=`<span class="b"></span>`; d.querySelector(".b").textContent=text; el("achat").appendChild(d); el("achat").scrollTop=1e9; return d; }
 
 function renderAnalyst(){
-  view.innerHTML = `
-  <div class="grid">
+  // Catalog discovery is an analyst/approver tool; the Platform Admin screen omits it.
+  const catalogCard = S.persona === "admin" ? "" : `
     <div class="card" style="grid-column:1/-1"><h3>Knowledge Catalog — discover data products by description</h3>
       <div class="row"><input id="catq" style="flex:1" placeholder="e.g. overdraft history, authoritative customer record, credit exposure, knowledge base">
         <button id="catbtn">Search</button></div>
       <div id="catout" class="mut" style="margin-top:10px">Search the Dataplex Universal Catalog by business concept — returns governed assets with owner, PII class, contract, and data-quality.</div>
-    </div>
+    </div>`;
+  view.innerHTML = `
+  <div class="grid">
+    ${catalogCard}
     <div class="card" style="grid-column:1/-1"><h3>Ask the Data <span class="pill">Conversational Analytics</span> <span class="pill">Knowledge Base · RAG</span></h3>
       <div class="mut" style="font-size:12px;margin-bottom:6px">One assistant — it reads your question and routes it to <b>📊 Analytics</b> (queries the data products, shows the SQL) or the <b>📚 Knowledge Base</b> (policy/doc RAG) automatically. The badge on each answer shows which it used.</div>
       <div id="achat" class="chat" style="height:260px"></div>
@@ -305,8 +308,10 @@ function renderAnalyst(){
       <div id="asql" style="margin-top:10px"></div>
     </div>
   </div>`;
-  el("catbtn").onclick = catalogSearch;
-  el("catq").addEventListener("keydown",e=>{ if(e.key==="Enter") catalogSearch(); });
+  if (el("catbtn")) {
+    el("catbtn").onclick = catalogSearch;
+    el("catq").addEventListener("keydown",e=>{ if(e.key==="Enter") catalogSearch(); });
+  }
   el("asend").onclick = analystSend;
   el("amsg").addEventListener("keydown",e=>{ if(e.key==="Enter") analystSend(); });
   const examples = ["how many customers per segment?", "total deposits by customer segment",
@@ -315,7 +320,7 @@ function renderAnalyst(){
   el("aex").innerHTML = `<span class="mut" style="font-size:12px;align-self:center">try:</span>` +
     examples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("");
   el("aex").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("amsg").value=b.textContent; analystSend(); });
-  pushAChat("a","Ask me anything about FinChat — I'll pull metrics from the governed data products or answer from the bank's policy docs, whichever fits. Discover assets with the catalog search above.");
+  pushAChat("a","Ask me anything about FinChat — I'll pull metrics from the governed data products or answer from the bank's policy docs, whichever fits." + (S.persona==="admin" ? "" : " Discover assets with the catalog search above."));
 }
 
 async function catalogSearch(){
@@ -391,7 +396,7 @@ async function renderAdmin() {
   const tile = (x,small)=> `<div><div class="metric${small?' small':''}">${
     (ev.available && x && typeof x.value==="number") ? x.value.toFixed(2) : "—"}</div><div class="mut">${x?x.label:""}</div></div>`;
   const evNote = !ev.available ? "Representative — full framework: Increment 7"
-    : ev.live ? `LIVE · rolling 7d · n=${ev.n}${ev.generated_at?` · last scored ${new Date(ev.generated_at).toISOString().slice(0,16).replace("T"," ")}Z`:""}`
+    : ev.live ? `LIVE · rolling 7d · n=${ev.n}${ev.generated_at?` · last scored ${fmtET(ev.generated_at)}`:""}`
               : `Offline CI-gated (Increment 7)${ev.generated_at?` · ${new Date(ev.generated_at).toISOString().slice(0,10)}`:""} · txn n=${ev.n_txn}, loan n=${ev.n_loan}`;
   view.innerHTML = `<div class="grid">
     <div class="card"><h3>Pipeline Monitor</h3>
@@ -403,9 +408,30 @@ async function renderAdmin() {
     <div class="card"><h3>Evaluations ${ev.live?'<span class="pill ok">LIVE</span>':'<span class="pill">offline</span>'}</h3>
       <div class="row">${tile(m[0])}${tile(m[1])}</div>
       <div class="row" style="margin-top:10px">${tile(m[2],true)}${tile(m[3],true)}</div>
-      <div class="mut" style="margin-top:8px">${evNote}</div></div>
+      <div class="mut" style="margin-top:8px">${evNote}</div>
+      <div class="row" style="margin-top:10px;gap:8px"><button class="ghost" id="evrun">Run evals now</button>
+        <span id="evrunmsg" class="mut" style="font-size:12px;align-self:center"></span></div>
+      <div class="mut" style="font-size:11px;margin-top:4px">Same LLM-as-judge scorer as the scheduled daily job — run on demand.</div></div>
     <div class="card" style="grid-column:1/-1"><h3>Backend health</h3><pre>${JSON.stringify(h,null,2)}</pre></div>
   </div>`;
+  if (el("evrun")) el("evrun").onclick = runEvalsNow;
+}
+// Eastern-time formatter for the Evaluations card (DST-aware via America/New_York).
+function fmtET(iso){ try { return new Date(iso).toLocaleString("en-US",{ timeZone:"America/New_York",
+  year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false }) + " ET"; }
+  catch(e){ return ""; } }
+// Trigger the live-eval scorer on demand (admin), then refresh the card.
+async function runEvalsNow(){
+  const b = el("evrun"), msg = el("evrunmsg"); if(!b) return;
+  const orig = b.textContent; b.disabled = true; b.textContent = "Scoring…";
+  if (msg) msg.textContent = "judging recent turns with Gemini…";
+  const r = await api("eval","run",{ method:"POST" });
+  b.disabled = false; b.textContent = orig;
+  if (r.__demo) { if(msg) msg.textContent = "unavailable in demo mode"; return; }
+  if (r.error) { if(msg) msg.textContent = "error: " + escapeHtml(r.error); return; }
+  if (!r.scored) { if(msg) msg.textContent = "no un-scored turns in the last 7 days"; return; }
+  if (msg) msg.textContent = `scored ${r.scored} of ${r.sampled} — refreshing…`;
+  renderAdmin();
 }
 function stat(name, ok){ return `<div class="row" style="justify-content:space-between"><span>${name}</span><span class="pill ${ok?'ok':'warn'}">${ok?'LIVE':'DEMO'}</span></div>`; }
 
