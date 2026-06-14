@@ -48,12 +48,14 @@ raises capacity + assurance. Everything composes in `infra/envs/enterprise/`.
 ## Build status
 
 - [x] `ENTERPRISE.md` (this index) + `infra/envs/enterprise/` composition
-- [ ] Phase 1 — Foundation (network / CMEK / org policies / VPC-SC)
-- [ ] Phase 2 — Data (BQ reservation / Bigtable / Spanner / AlloyDB / matviews)
-- [ ] Phase 3 — Compute & orchestration (GKE / Composer)
-- [ ] Phase 4 — API & edge (Apigee / edge LB / IAP / Identity Platform)
-- [ ] Phase 5 — AI (Vector Search / Provisioned Throughput)
-- [ ] Phase 6 — Observability (SLOs / dashboards / sinks)
+- [x] Phase 1 — Foundation (network / CMEK / org policies / VPC-SC)
+- [x] Phase 2 — Data (BQ reservation / Bigtable / Spanner / AlloyDB / matviews)
+- [x] Phase 3 — Compute & orchestration (GKE Autopilot + manifests / Composer + DAG)
+- [x] Phase 4 — API & edge (Apigee / edge LB+CDN+Armor / IAP / Identity Platform)
+- [x] Phase 5 — AI (Vector Search; Provisioned Throughput documented)
+- [x] Phase 6 — Observability (audit sink / dashboard / SLO + fast-burn alert / uptime)
+
+All modules `terraform fmt` clean. Not `init`/`validate`'d (no providers/creds) and never applied — reference overlay, as designed.
 
 ## Data mesh (topology note)
 

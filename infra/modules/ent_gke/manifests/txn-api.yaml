@@ -1,0 +1,63 @@
+# Reference workload manifest for the txn-api on GKE Autopilot (NOT applied).
+# Shows the Cloud Run -> GKE translation: Deployment + Service + HPA, with a
+# Workload-Identity-bound KSA and container-native NEG annotation for the LB.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: txn-api
+  namespace: serving
+  annotations:
+    iam.gke.io/gcp-service-account: finchat-enterprise-txn-api@PROJECT.iam.gserviceaccount.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: txn-api
+  namespace: serving
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: txn-api }
+  template:
+    metadata:
+      labels: { app: txn-api }
+    spec:
+      serviceAccountName: txn-api
+      containers:
+        - name: txn-api
+          image: REGION-docker.pkg.dev/PROJECT/finchat-enterprise-images/txn-api:latest
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: txn-api
+  namespace: serving
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}' # container-native NEG for the global LB
+spec:
+  selector: { app: txn-api }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: txn-api
+  namespace: serving
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: txn-api
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 60 }
