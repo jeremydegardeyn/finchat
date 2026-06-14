@@ -1,0 +1,21 @@
+# Enterprise overlay example values. Copy to terraform.tfvars (gitignored) to plan.
+# This overlay is reference-only and not meant to be applied.
+project_id      = "finchat-enterprise"      # host project
+region          = "us-central1"
+org_id          = "000000000000"            # your GCP org id
+domain          = "datadinosaur.com"
+access_policy_id = ""                        # Access Context Manager policy id (enables VPC-SC)
+
+# Network
+subnet_cidr   = "10.10.0.0/20"
+pods_cidr     = "10.20.0.0/16"
+services_cidr = "10.30.0.0/20"
+
+# Placement
+bq_multi_region = "US"
+spanner_config  = "nam3"   # multi-region US (external consistency)
+
+# Cost guardrail (informational — overlay is not applied)
+enable_budget     = true
+billing_account   = "XXXXXX-XXXXXX-XXXXXX"
+budget_amount_usd = 5000
