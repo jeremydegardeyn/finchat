@@ -137,6 +137,50 @@ def products(env: str) -> list[dict]:
                  "desc": "Customer-support knowledge lookup."},
             ],
         },
+        {
+            "id": "customer-360-analytics", "display": "Customer 360 Analytics",
+            "domain": "analytics", "dataset": f"finchat_graph_{env}", "table": "customer_360",
+            "owner": "analytics-product@datadinosaur.com", "steward": STEWARD,
+            "criticality": "HIGH", "certification": "CANDIDATE", "pii": "PII_FINANCIAL",
+            "sla": "<=30m rollup; 99.9% avail", "cost_center": "CC-ANALYTICS",
+            "description": "Curated cross-domain analytics surface powering Conversational "
+                           "Analytics (customer_360 + analyst dim/fact views). Bundles the "
+                           "source tables the CA planner resolves, so an approved analyst gets "
+                           "every read CA needs in one grant; direct & financial PII stay masked "
+                           "unless fine-grained reader.",
+            "contract": {
+                "version": "0.1.0",
+                "guarantees": "Derived rollup; one row per customer_id; financial + direct PII "
+                              "masked (NULL) for the analyst tier via policy-tag data policies.",
+                "freshness": "<=30m", "availability": "99.9%",
+                "deprecation_policy": "Candidate product — contract not yet frozen.",
+            },
+            # Cross-domain: bundles the physical tables CA's planner resolves (not just the
+            # customer_360 view), so one approval confers every read CA needs. These assets
+            # overlap other products by design (e.g. customer is also Customer Master).
+            "assets": [
+                {"dataset": f"finchat_silver_{env}", "table": "customer"},
+                {"dataset": f"finchat_silver_{env}", "table": "account"},
+                {"dataset": f"finchat_silver_{env}", "table": "transaction"},
+                {"dataset": f"finchat_gold_{env}",   "table": "overdraft_history"},
+                {"dataset": f"finchat_loans_{env}",  "table": "loan_request"},
+                {"dataset": f"finchat_graph_{env}",  "table": "customer_360"},
+            ],
+            # Cross-domain grant: route approval through each source domain owner + analytics,
+            # so no single approver unilaterally grants broad read across four domains.
+            "approvers": [
+                "analytics-product@datadinosaur.com",
+                "customer-product@datadinosaur.com",
+                "deposits-product@datadinosaur.com",
+                "risk-product@datadinosaur.com",
+                "lending-product@datadinosaur.com",
+            ],
+            "access_groups": [
+                {"id": "analysts", "display": "Data Science / Analysts",
+                 "group": "data-science@datadinosaur.com", "roles": ["roles/bigquery.dataViewer"],
+                 "desc": "Conversational Analytics over the semantic layer (masked PII)."},
+            ],
+        },
     ]
 
 

@@ -103,7 +103,11 @@ def main():
     print(f"== Data Products bootstrap ({ENV}) ==")
     for p in products(ENV):
         full_id = f"finchat-{ENV}-{p['id']}"
-        name, dataset, table = p["display"], p["dataset"], p["table"]
+        name = p["display"]
+        # A product bundles one or more BigQuery tables as assets. Single-asset
+        # products declare dataset/table; cross-domain products (e.g. Customer 360
+        # Analytics) declare an `assets` list of {dataset, table}.
+        assets = p.get("assets") or [{"dataset": p["dataset"], "table": p["table"]}]
 
         # 1. product ---------------------------------------------------------
         op = _api("POST", f"/dataProducts?dataProductId={full_id}", token, {
@@ -114,41 +118,49 @@ def main():
             continue
 
         # 2. access groups + approver emails (consumers may request access) --
+        #    `approvers` lets a cross-domain product route through every source
+        #    domain owner; defaults to the product owner.
         groups = {g["id"]: {"id": g["id"], "displayName": g["display"],
                             "description": g["desc"], "principal": {"googleGroup": g["group"]}}
                   for g in p["access_groups"]}
+        approvers = p.get("approvers") or [p["owner"]]
         gop = _api("PATCH",
                    f"/dataProducts/{full_id}?updateMask=accessGroups,accessApprovalConfig",
                    token, {"accessGroups": groups,
-                           "accessApprovalConfig": {"approverEmails": [p["owner"]]}})
+                           "accessApprovalConfig": {"approverEmails": approvers}})
         _wait(gop, token, f"  access groups {name}")
 
-        # 3. data asset (co-located BQ table) --------------------------------
-        loc = _dataset_location(dataset, token)
-        if loc and loc != REGION:
-            print(f"  ! {name:24s} asset skipped: {dataset} is in '{loc}' "
-                  f"(product is '{REGION}'); co-locate to attach")
-            continue
-        asset_id = table.replace("_", "-")  # asset ids must match ^[a-z][a-z0-9-]*$
-        resource = (f"//bigquery.googleapis.com/projects/{PROJECT}"
-                    f"/datasets/{dataset}/tables/{table}")
-        aop = _api("POST", f"/dataProducts/{full_id}/dataAssets?dataAssetId={asset_id}",
-                   token, {"resource": resource})
-        if not _wait(aop, token, f"  asset {table}"):
-            continue
-
-        # 4. per-asset IAM granted to each access group (on approval) --------
-        #    Needs real Cloud Identity groups; opt-in via FINCHAT_BIND_ASSET_IAM.
-        iam_note = "IAM binding deferred (set FINCHAT_BIND_ASSET_IAM=1 with real groups)"
-        if BIND_ASSET_IAM:
-            cfgs = {g["id"]: {"iamRoles": g["roles"]} for g in p["access_groups"]}
-            cop = _api("PATCH",
-                       f"/dataProducts/{full_id}/dataAssets/{asset_id}?updateMask=accessGroupConfigs",
-                       token, {"accessGroupConfigs": cfgs})
-            iam_note = "IAM bound" if _wait(cop, token, f"  asset IAM {table}") else "IAM bind failed"
+        # 3 + 4. each asset: attach the co-located BQ table, then bind per-asset
+        #        IAM for every access group (needs real Cloud Identity groups;
+        #        opt-in via FINCHAT_BIND_ASSET_IAM).
+        cfgs = {g["id"]: {"iamRoles": g["roles"]} for g in p["access_groups"]}
+        bound = []
+        for a in assets:
+            dataset, table = a["dataset"], a["table"]
+            loc = _dataset_location(dataset, token)
+            if loc and loc != REGION:
+                print(f"  ! {name:24s} asset {table} skipped: {dataset} is in '{loc}' "
+                      f"(product is '{REGION}'); co-locate to attach")
+                continue
+            asset_id = table.replace("_", "-")  # asset ids must match ^[a-z][a-z0-9-]*$
+            resource = (f"//bigquery.googleapis.com/projects/{PROJECT}"
+                        f"/datasets/{dataset}/tables/{table}")
+            aop = _api("POST", f"/dataProducts/{full_id}/dataAssets?dataAssetId={asset_id}",
+                       token, {"resource": resource})
+            if not _wait(aop, token, f"  asset {table}"):
+                continue
+            if BIND_ASSET_IAM:
+                cop = _api("PATCH",
+                           f"/dataProducts/{full_id}/dataAssets/{asset_id}?updateMask=accessGroupConfigs",
+                           token, {"accessGroupConfigs": cfgs})
+                _wait(cop, token, f"  asset IAM {table}")
+            bound.append(table)
 
         gnames = ", ".join(g["id"] for g in p["access_groups"])
-        print(f"  ✓ {name:24s} -> {dataset}.{table}  [groups: {gnames}; {iam_note}]")
+        iam_note = "IAM bound" if BIND_ASSET_IAM else \
+            "IAM binding deferred (set FINCHAT_BIND_ASSET_IAM=1 with real groups)"
+        print(f"  ✓ {name:24s} -> {len(bound)} asset(s): {', '.join(bound)}  "
+              f"[groups: {gnames}; {iam_note}]")
 
     print("Done. View: https://console.cloud.google.com/dataplex/catalog/data-products"
           f"?project={PROJECT}")
