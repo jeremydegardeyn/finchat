@@ -447,7 +447,14 @@ _ANALYST_SYSTEM_INSTRUCTION = (
     "SUM/AVG return NULL or 0), do NOT report that the data is unavailable, empty, or absent; "
     "instead state that those values are masked by data policy at the user's access level, and "
     "answer with what IS visible (segments, counts, categories, dates). Never infer the "
-    "underlying data is missing from masked NULLs."
+    "underlying data is missing from masked NULLs. "
+    "ALTERNATE AGGREGATION: when a request needs to aggregate a masked numeric column "
+    "(e.g. total or average `amount`), that result is not meaningful at this tier — so "
+    "ALSO compute and present a non-masked alternative that answers the intent using "
+    "UNMASKED columns: counts and distributions, e.g. number of deposit transactions per "
+    "segment, customer counts per segment, or transaction counts by type/month. Offer it "
+    "proactively (e.g. \"I can't total the amounts at your access level, but here is deposit "
+    "activity by segment\") instead of returning an empty or zero sum."
 )
 
 
