@@ -34,6 +34,12 @@
   .pill.REVIEW,.pill.PENDING_APPROVAL,.pill.warn { color:var(--warn); border-color:var(--warn); }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .mut { color:var(--mut); } .right{ text-align:right; }
   pre { background:#0b1220; border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto; font-size:12px; }
+  details.sqlbox { margin:8px 0 2px; }
+  details.sqlbox > summary { font-size:12px; color:var(--mut); cursor:pointer; user-select:none; list-style:none; }
+  details.sqlbox > summary::-webkit-details-marker { display:none; }
+  details.sqlbox > summary::before { content:"\25B8 "; }
+  details.sqlbox[open] > summary::before { content:"\25BE "; }
+  details.sqlbox pre { margin-top:4px; }
   .chat { height:280px; overflow:auto; background:#0b1220; border:1px solid var(--line); border-radius:8px; padding:10px; }
   .msg { margin:6px 0; } .msg.u { text-align:right; } .msg .b { display:inline-block; padding:6px 10px; border-radius:10px; background:var(--panel); }
   .msg.u .b { background:var(--acc); color:#04212e; }
@@ -370,7 +376,7 @@ async function analystSend(){
     : `<span class="pill ok">📊 Analytics</span> `;
   t.querySelector(".b").innerHTML = badge + escapeHtml(r.answer || "(no answer)");
   let html="";
-  if (r.sql) html += `<label>Generated SQL</label><pre>${escapeHtml(r.sql)}</pre>`;
+  if (r.sql) html += `<details class="sqlbox"><summary>Generated SQL</summary><pre>${escapeHtml(r.sql)}</pre></details>`;
   if (r.rows && r.rows.length){ const cols = r.columns && r.columns.length ? r.columns : Object.keys(r.rows[0]);
     html += `<label>Result (${r.rows.length} rows)</label><table><thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join("")}</tr></thead><tbody>${
       r.rows.slice(0,20).map(row=>`<tr>${cols.map(c=>`<td>${fmtCell(row[c])}</td>`).join("")}</tr>`).join("")}</tbody></table>`; }
