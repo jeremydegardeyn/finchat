@@ -42,6 +42,11 @@ BASE = f"https://dataplex.googleapis.com/v1/projects/{PROJECT}/locations/{REGION
 # Identity groups. Off by default (placeholder groups don't resolve); enable in a
 # real org: FINCHAT_BIND_ASSET_IAM=1 python scripts/data_products.py <env>
 BIND_ASSET_IAM = os.getenv("FINCHAT_BIND_ASSET_IAM", "").lower() in ("1", "true", "yes")
+# Data products are a discoverability/governance surface, and all envs share one
+# project — so creating them per-env triplicates the catalog with indistinguishable
+# entries. Restrict to prod by default; to (re)create them for another env, set
+# DATA_PRODUCT_ENVS="dev,test,prod" explicitly. Running for a non-listed env is a no-op.
+DATA_PRODUCT_ENVS = {e.strip() for e in os.getenv("DATA_PRODUCT_ENVS", "prod").split(",") if e.strip()}
 
 
 def _token() -> str:
@@ -99,6 +104,10 @@ def _wait(op: dict, token: str, label: str) -> bool:
 
 
 def main():
+    if ENV not in DATA_PRODUCT_ENVS:
+        print(f"== Data Products: skipped for '{ENV}' — configured envs: "
+              f"{', '.join(sorted(DATA_PRODUCT_ENVS))} (override with DATA_PRODUCT_ENVS). ==")
+        return
     token = _token()
     print(f"== Data Products bootstrap ({ENV}) ==")
     for p in products(ENV):
