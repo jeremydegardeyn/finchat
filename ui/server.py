@@ -438,7 +438,16 @@ _ANALYST_SYSTEM_INSTRUCTION = (
     "Transaction amounts: DEPOSIT is cash in (positive); WITHDRAWAL and FEE reduce balance. "
     "Identify rows by customer_id, account_id, and segment; the semantic layer contains no "
     "names, emails, or account numbers by design — if asked for them, say they are not "
-    "available on the analyst surface."
+    "available on the analyst surface. "
+    "DATA MASKING (critical): protected columns use column-level security with dynamic data "
+    "masking, so for the current user's access tier some financial/numeric values (e.g. "
+    "transaction `amount`, balances) and personal fields can return NULL BY DESIGN. A NULL in "
+    "such a column means the value is MASKED at the user's access level — it is NOT missing, "
+    "empty, or unavailable data, and the table is NOT empty. If amounts come back NULL (so "
+    "SUM/AVG return NULL or 0), do NOT report that the data is unavailable, empty, or absent; "
+    "instead state that those values are masked by data policy at the user's access level, and "
+    "answer with what IS visible (segments, counts, categories, dates). Never infer the "
+    "underlying data is missing from masked NULLs."
 )
 
 
