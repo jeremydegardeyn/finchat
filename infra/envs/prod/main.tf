@@ -49,10 +49,16 @@ module "bigquery" {
   financial_reader_members = [
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
   ]
-  # Analyst tier (human) + anonymous SA see NULL for PII_FINANCIAL via the masking
-  # policy (ADR-0019); fine-grained readers above see clear values, non-readers denied.
+  # Masked tier (NULL for PII_FINANCIAL + PII_DIRECT). Granted to the data-product
+  # access GROUPS, so joining a group via the Dataplex access-request flow confers
+  # the full masked-analyst tier (table dataViewer from the product + maskedReader
+  # here) in one step — no per-person IAM. The anonymous SA covers staff who haven't
+  # propagated an OAuth token yet; var.masked_reader_member is an optional extra
+  # individual (now redundant for anyone in a group).
   masked_reader_members = compact([
     var.masked_reader_member,
+    "group:crm-team@datadinosaur.com",
+    "group:data-science@datadinosaur.com",
     "serviceAccount:${module.foundation.service_account_emails["analyst_anon"]}",
   ])
   # Live eval: BFF (txn_api) writes conversation logs; CI/CD SA (the scorer runs via

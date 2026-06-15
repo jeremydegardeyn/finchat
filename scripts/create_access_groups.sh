@@ -16,7 +16,9 @@ ORG="892617109147"          # datadinosaur.com organization id
 DOMAIN="datadinosaur.com"
 
 # group-local-part : "Display Name"
-GROUPS=(
+# NOTE: do not name this array GROUPS — that's a special bash variable (the
+# current user's numeric GIDs) and assignments to it are silently ignored.
+GROUP_DEFS=(
   "deposit-analysts:Deposit Analysts"
   "data-science:Data Science"
   "crm-team:CRM Team"
@@ -27,7 +29,7 @@ GROUPS=(
   "support-agents:Support Agents"
 )
 
-for entry in "${GROUPS[@]}"; do
+for entry in "${GROUP_DEFS[@]}"; do
   local_part="${entry%%:*}"
   display="${entry#*:}"
   email="${local_part}@${DOMAIN}"

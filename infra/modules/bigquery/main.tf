@@ -170,6 +170,30 @@ resource "google_bigquery_datapolicy_data_policy_iam_member" "masked_readers" {
   member         = each.value
 }
 
+# --- Dynamic data masking on PII_DIRECT (name/email) --------------------------
+# Mirrors the PII_FINANCIAL masking so the analyst tier sees NULL for direct PII
+# (name/email) instead of a hard column-level-security denial. Fine-grained
+# readers (privileged group) still see clear values; the masked tier gets NULLs.
+resource "google_bigquery_datapolicy_data_policy" "pii_direct_mask" {
+  project          = var.project_id
+  location         = var.region
+  data_policy_id   = "${var.name_prefix}_${var.env}_pii_direct_mask"
+  policy_tag       = google_data_catalog_policy_tag.tags["pii_direct"].id
+  data_policy_type = "DATA_MASKING_POLICY"
+  data_masking_policy {
+    predefined_expression = "ALWAYS_NULL"
+  }
+}
+
+resource "google_bigquery_datapolicy_data_policy_iam_member" "masked_readers_direct" {
+  for_each       = toset(var.masked_reader_members)
+  project        = var.project_id
+  location       = var.region
+  data_policy_id = google_bigquery_datapolicy_data_policy.pii_direct_mask.data_policy_id
+  role           = "roles/bigquerydatapolicy.maskedReader"
+  member         = each.value
+}
+
 # --- Silver tables (partitioned, clustered, PII policy-tagged) ----------------
 resource "google_bigquery_table" "silver_customer" {
   project             = var.project_id
