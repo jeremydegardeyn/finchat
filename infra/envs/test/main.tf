@@ -49,8 +49,17 @@ module "bigquery" {
   financial_reader_members = [
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
   ]
+  # Masked tier rides on the data-product access groups (joining a group via the
+  # Dataplex access-request flow confers table dataViewer + maskedReader here).
+  # PII-consuming groups only; ai-platform/support-agents read the KB (no PII tags).
   masked_reader_members = compact([
     var.masked_reader_member,
+    "group:crm-team@datadinosaur.com",
+    "group:data-science@datadinosaur.com",
+    "group:deposit-analysts@datadinosaur.com",
+    "group:risk-analysts@datadinosaur.com",
+    "group:collections-team@datadinosaur.com",
+    "group:underwriting-team@datadinosaur.com",
     "serviceAccount:${module.foundation.service_account_emails["analyst_anon"]}",
   ])
   eval_writer_members = [

@@ -59,6 +59,10 @@ module "bigquery" {
     var.masked_reader_member,
     "group:crm-team@datadinosaur.com",
     "group:data-science@datadinosaur.com",
+    "group:deposit-analysts@datadinosaur.com",
+    "group:risk-analysts@datadinosaur.com",
+    "group:collections-team@datadinosaur.com",
+    "group:underwriting-team@datadinosaur.com",
     "serviceAccount:${module.foundation.service_account_emails["analyst_anon"]}",
   ])
   # Live eval: BFF (txn_api) writes conversation logs; CI/CD SA (the scorer runs via
