@@ -252,15 +252,17 @@ async function renderEmployee() {
     loans.map(l=>{ const rec=(l.risk&&l.risk.recommendation)||l.recommendation||"-"; const rs=(l.risk&&l.risk.risk_score)??l.risk_score??"-";
     return `<tr>
       <td>${l.loan_id}</td><td>${l.customer_name}</td><td class="right">${l.amount}</td><td>${l.term_months}</td>
-      <td><span class="pill ${rec}">${rs} ${rec}</span></td>
-      <td><span class="pill ${l.status}">${l.status}</span></td>
-      <td class="row">
-        <button class="ok" data-d="APPROVE" data-id="${l.loan_id}">Approve</button>
-        <button class="bad" data-d="REJECT" data-id="${l.loan_id}">Reject</button>
-        <button class="warn" data-d="REQUEST_MODIFICATION" data-id="${l.loan_id}">Modify</button>
-        <button class="ghost" data-d="COUNTEROFFER" data-id="${l.loan_id}">Counter</button>
-        <button class="ghost" data-w="${l.loan_id}">Why</button>
-        <button class="ghost" data-a="${l.loan_id}">Audit</button>
+      <td><span class="pill ${rec}" style="white-space:nowrap">${rs} ${rec}</span></td>
+      <td><span class="pill ${l.status}" style="white-space:nowrap">${l.status}</span></td>
+      <td>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;width:330px">
+          <button class="ok" data-d="APPROVE" data-id="${l.loan_id}">Approve</button>
+          <button class="bad" data-d="REJECT" data-id="${l.loan_id}">Reject</button>
+          <button class="warn" data-d="REQUEST_MODIFICATION" data-id="${l.loan_id}">Modify</button>
+          <button class="ghost" data-d="COUNTEROFFER" data-id="${l.loan_id}">Counter</button>
+          <button class="ghost" data-w="${l.loan_id}">Why</button>
+          <button class="ghost" data-a="${l.loan_id}">Audit</button>
+        </div>
       </td></tr>`; }).join("")}</tbody></table>`;
   el("lq").querySelectorAll("button[data-d]").forEach(b=>b.onclick=()=>decide(b.dataset.id,b.dataset.d));
   el("lq").querySelectorAll("button[data-w]").forEach(b=>b.onclick=()=>showWhy(b.dataset.w));
