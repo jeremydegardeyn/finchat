@@ -299,3 +299,15 @@ module "bigtable" {
   ]
   labels = local.labels
 }
+
+module "agent_harness" {
+  count              = var.enable_agent_harness ? 1 : 0
+  source             = "../../modules/agent_harness"
+  project_id         = var.project_id
+  region             = var.region
+  env                = var.env
+  name_prefix        = var.name_prefix
+  run_sa_email       = module.foundation.service_account_emails["agent"]
+  scheduler_sa_email = module.foundation.service_account_emails["workflow"]
+  labels             = local.labels
+}
