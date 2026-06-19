@@ -74,6 +74,12 @@ resource "google_cloud_run_v2_service" "steward" {
         name  = "EVAL_THRESHOLD"
         value = "0.6"
       }
+      env {
+        # In scheduled-stop mode this keeps an escalation's wait inside the daily
+        # on-window so the agent auto-defers instead of holding the DB open.
+        name  = "HUMAN_WAIT_SECONDS"
+        value = tostring(var.human_wait_seconds)
+      }
     }
   }
 
@@ -107,5 +113,49 @@ resource "google_cloud_scheduler_job" "nightly" {
       service_account_email = var.scheduler_sa_email
       audience              = google_cloud_run_v2_service.steward.uri
     }
+  }
+}
+
+# --- Option B: nightly stop/start of the Cloud SQL autosave -------------------
+# Patch the instance's activationPolicy via the Cloud SQL Admin API (ALWAYS=start,
+# NEVER=stop). The scheduler SA needs to modify the instance.
+resource "google_project_iam_member" "scheduler_sql_editor" {
+  count   = var.enable_scheduled_stop ? 1 : 0
+  project = var.project_id
+  role    = "roles/cloudsql.editor"
+  member  = "serviceAccount:${var.scheduler_sa_email}"
+}
+
+resource "google_cloud_scheduler_job" "sql_start" {
+  count     = var.enable_scheduled_stop ? 1 : 0
+  project   = var.project_id
+  region    = var.region
+  name      = "${var.name_prefix}-${var.env}-steward-sql-start"
+  schedule  = var.start_cron
+  time_zone = "America/New_York"
+
+  http_target {
+    uri         = "https://sqladmin.googleapis.com/v1/projects/${var.project_id}/instances/${google_sql_database_instance.steward.name}"
+    http_method = "PATCH"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ settings = { activationPolicy = "ALWAYS" } }))
+    oauth_token { service_account_email = var.scheduler_sa_email }
+  }
+}
+
+resource "google_cloud_scheduler_job" "sql_stop" {
+  count     = var.enable_scheduled_stop ? 1 : 0
+  project   = var.project_id
+  region    = var.region
+  name      = "${var.name_prefix}-${var.env}-steward-sql-stop"
+  schedule  = var.stop_cron
+  time_zone = "America/New_York"
+
+  http_target {
+    uri         = "https://sqladmin.googleapis.com/v1/projects/${var.project_id}/instances/${google_sql_database_instance.steward.name}"
+    http_method = "PATCH"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ settings = { activationPolicy = "NEVER" } }))
+    oauth_token { service_account_email = var.scheduler_sa_email }
   }
 }

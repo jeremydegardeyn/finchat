@@ -113,10 +113,18 @@ Temporal — the recognizable Fortune-500 reference. See [ADR-0021](adr/0021-dur
 
 | Item | Deploy tier | Note |
 |---|---|---|
-| Postgres (autosave) | Cloud SQL `db-f1-micro` | Only new always-on; behind the toggle |
+| Postgres (autosave) | Cloud SQL `db-f1-micro` | ~$10/mo 24/7; **~$3/mo with nightly stop/start** (Option B, `enable_scheduled_stop`); **$0 when the module toggle is off** (instance doesn't exist) |
 | Compute | Cloud Run scale-to-zero | ~zero while asleep |
-| Scheduler / Eventarc | negligible | push-based wake |
+| Scheduler / Eventarc | negligible | push-based wake; Option B adds start/stop jobs |
 | Enterprise 1:1 | Temporal Cloud | documented, not deployed |
+
+**Cost note (Cloud SQL has no scale-to-zero):** the steward is nightly, so the module
+can **start the instance before the run and stop it after** (`enable_scheduled_stop`,
+default on; Cloud SQL Admin API `activationPolicy` ALWAYS/NEVER via two Cloud Scheduler
+jobs). A *stopped* instance still bills storage + backups (~$2–4/mo) — only a
+`terraform destroy` (toggle off) is truly $0. Because a stopped DB can't receive a wake,
+scheduled mode keeps `human_wait_seconds` inside the on-window so escalations
+**auto-defer** to the next run rather than holding the instance open.
 
 ## 9. CIO talking points
 
@@ -132,5 +140,8 @@ Temporal — the recognizable Fortune-500 reference. See [ADR-0021](adr/0021-dur
 ## 10. Open questions
 
 - Cloud SQL vs. a serverless Postgres (Neon/AlloyDB) under the zero-cost rule?
+  (Decided for the sandbox: in-project Cloud SQL + nightly stop/start, so audit data
+  never leaves the project — Neon's true-$0 idle isn't worth breaking the governance story.)
 - One steward workflow per data product, or one fan-out with child runs?
-- Auto-defer policy on human-review timeout (skip vs. block the next window)?
+- Scheduled-stop mode auto-defers escalations to the next window; revisit if the steward
+  ever needs to hold an escalation open for same-day human review (would require 24/7 DB).

@@ -70,5 +70,8 @@ document the enterprise equivalent.
 - DBOS→Temporal is a documented mapping, not an automated migration.
 
 **Follow-ups**
-- Cloud SQL vs. serverless Postgres (Neon/AlloyDB) under the zero-cost rule.
-- Per-product vs. fan-out workflow topology; human-review timeout policy.
+- ~~Cloud SQL vs. serverless Postgres under the zero-cost rule~~ — decided: in-project
+  Cloud SQL with **nightly stop/start** (`enable_scheduled_stop`, ~$3/mo, $0 when the
+  toggle is off) keeps audit data in-project; escalations auto-defer to the next window
+  so a stopped DB never strands a parked run.
+- Per-product vs. fan-out workflow topology.
