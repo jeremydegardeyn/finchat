@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 LOAN_API_URL = os.getenv("LOAN_API_URL", "")
 TXN_API_URL = os.getenv("TXN_API_URL", "")
 AGENT_URL = os.getenv("AGENT_URL", "")
+STEWARD_URL = os.getenv("STEWARD_URL", "")  # durable reconciliation steward (Inc 19 / ADR-0021)
 HERE = os.path.dirname(__file__)
 
 # Analyst persona: Knowledge Catalog discovery + Conversational Analytics (Gemini
@@ -77,7 +78,8 @@ app = FastAPI(title="FinChat UI BFF", version="1.0.0")
 @app.get("/healthz")
 def healthz():
     return {"status": "ok", "backends": {
-        "loan_api": bool(LOAN_API_URL), "txn_api": bool(TXN_API_URL), "agent": bool(AGENT_URL)}}
+        "loan_api": bool(LOAN_API_URL), "txn_api": bool(TXN_API_URL), "agent": bool(AGENT_URL),
+        "steward": bool(STEWARD_URL)}}
 
 
 @app.get("/api/config")
@@ -91,7 +93,8 @@ def config():
             {"id": "admin", "label": "Platform Admin", "views": ["admin"]},
         ],
         "live": {"loan_api": bool(LOAN_API_URL), "txn_api": bool(TXN_API_URL),
-                 "agent": bool(AGENT_URL), "analyst": ANALYST_READY},
+                 "agent": bool(AGENT_URL), "analyst": ANALYST_READY,
+                 "steward": bool(STEWARD_URL)},
         # Identity-resolved personas: when enabled the SPA shows Google Sign-In
         # instead of the persona dropdown (client_id is public by design).
         "auth": {"enabled": _auth_enabled(), "client_id": OAUTH_CLIENT_ID},
@@ -285,6 +288,23 @@ async def loan_proxy(path: str, request: Request):
 @app.api_route("/api/txn/{path:path}", methods=["GET", "POST"])
 async def txn_proxy(path: str, request: Request):
     return await _proxy(TXN_API_URL, path, request)
+
+
+@app.api_route("/api/steward/{path:path}", methods=["GET", "POST"])
+async def steward_proxy(path: str, request: Request):
+    """Durable reconciliation steward (Inc 19 / ADR-0021). Admin (operator) and the
+    employee (approver) can view runs + start them; escalation reviews require the
+    verified approver, whose authenticated email is injected as X-Approver and written
+    to the steward's append-only audit (client-sent values ignored)."""
+    extra = None
+    if _auth_enabled():
+        deny = _require_any(request, ("admin", "employee"))
+        if deny:
+            return deny
+        if path.rstrip("/").endswith("/review"):
+            u = _verify_user(request)
+            extra = {"X-Approver": u["email"]}  # verified identity -> steward audit
+    return await _proxy(STEWARD_URL, path, request, extra_headers=extra)
 
 
 @app.api_route("/api/agent/{path:path}", methods=["GET", "POST"])

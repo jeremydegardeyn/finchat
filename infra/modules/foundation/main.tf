@@ -63,6 +63,11 @@ locals {
       "roles/storage.objectAdmin", # write the Flex Template spec to the dataflow bucket
       "roles/bigquery.jobUser",    # live-eval scorer: query conversation_log
       "roles/aiplatform.user",     # live-eval scorer: Vertex Gen AI Evaluation
+      # Read-only access so the `terraform plan` CI check can refresh state across all
+      # modules (datasets/pubsub/dlp/catalog/etc.). Apply is still run locally; the CI
+      # SA never gets write/editor here.
+      "roles/viewer",
+      "roles/serviceusage.serviceUsageConsumer", # x-goog-user-project quota for plan
     ] }
   }
 

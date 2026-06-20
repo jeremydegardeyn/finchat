@@ -53,6 +53,7 @@ jobs:
             [txn-generator]=products/transactions/generator
             [loan-api]=products/loans/api
             [agent]=products/transactions/agent
+            [steward]=products/steward/harness
             [ui]=ui
           )
           for name in "${!SVC[@]}"; do
@@ -82,8 +83,18 @@ jobs:
           # ADK agent on Cloud Run (scale-to-zero). Gemini via Vertex (agent SA has aiplatform.user).
           deploy agent agent agent \
             "--set-env-vars=GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,KB_DATASET=finchat_kb_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)') --memory=1Gi --no-allow-unauthenticated"
+          # Durable steward — only where the harness infra is applied (the DB-URL
+          # secret exists). TF owns the SQL + secret + Cloud Run shell; here we
+          # deploy the real image + env: DBOS_DATABASE_URL from Secret Manager and
+          # the Cloud SQL connector socket. Runs as the agent SA. Skipped otherwise.
+          if gcloud secrets describe "finchat-${ENV}-steward-db-url" >/dev/null 2>&1; then
+            deploy steward steward agent \
+              "--add-cloudsql-instances=${PROJECT}:${REGION}:finchat-${ENV}-steward --set-secrets=DBOS_DATABASE_URL=finchat-${ENV}-steward-db-url:latest --set-env-vars=EVAL_THRESHOLD=0.6,HUMAN_WAIT_SECONDS=7200 --no-allow-unauthenticated"
+          else
+            echo "steward harness not applied in ${ENV} (no DB-URL secret) — skipping steward deploy"
+          fi
           deploy ui ui txn-api \
-            "--set-env-vars=LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)'),GCP_PROJECT=${PROJECT},MODEL_ARMOR_LOCATION=${REGION},MODEL_ARMOR_TEMPLATE=finchat-${ENV}-armor,SILVER_DATASET=finchat_silver_${ENV},GOLD_DATASET=finchat_gold_${ENV},LOANS_DATASET=finchat_loans_${ENV},GRAPH_DATASET=finchat_graph_${ENV},KB_DATASET=finchat_kb_${ENV},EVAL_DATASET=finchat_eval_${ENV},DATA_AGENT_ID=finchat-${ENV}-analyst,ANON_ANALYST_SA=finchat-${ENV}-analyst-anon@${PROJECT}.iam.gserviceaccount.com,CA_LOCATION=global,VERTEX_LOCATION=${REGION},GOOGLE_OAUTH_CLIENT_ID=240219253111-nj35dnaod2mdccu6d81v98urp9h7se72.apps.googleusercontent.com,APPROVER_EMAILS=jeremy@datadinosaur.com,ANALYST_EMAILS=jdegardeyn@datadinosaur.com,ADMIN_EMAILS=datadinosaur.noreply@gmail.com --allow-unauthenticated"
+            "--set-env-vars=LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)'),GCP_PROJECT=${PROJECT},MODEL_ARMOR_LOCATION=${REGION},MODEL_ARMOR_TEMPLATE=finchat-${ENV}-armor,SILVER_DATASET=finchat_silver_${ENV},GOLD_DATASET=finchat_gold_${ENV},LOANS_DATASET=finchat_loans_${ENV},GRAPH_DATASET=finchat_graph_${ENV},KB_DATASET=finchat_kb_${ENV},EVAL_DATASET=finchat_eval_${ENV},DATA_AGENT_ID=finchat-${ENV}-analyst,ANON_ANALYST_SA=finchat-${ENV}-analyst-anon@${PROJECT}.iam.gserviceaccount.com,CA_LOCATION=global,VERTEX_LOCATION=${REGION},GOOGLE_OAUTH_CLIENT_ID=240219253111-nj35dnaod2mdccu6d81v98urp9h7se72.apps.googleusercontent.com,APPROVER_EMAILS=jeremy@datadinosaur.com,ANALYST_EMAILS=jdegardeyn@datadinosaur.com,ADMIN_EMAILS=datadinosaur.noreply@gmail.com,STEWARD_URL=$(gcloud run services describe finchat-${ENV}-steward --region ${REGION} --format='value(status.url)' 2>/dev/null || true) --allow-unauthenticated"
 
       - name: Build Dataflow Flex Template
         # Non-fatal: needs storage/dataflow perms on the CI/CD SA (granted in

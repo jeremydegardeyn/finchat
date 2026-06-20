@@ -24,6 +24,9 @@ jobs:
       - name: Loan risk-scoring tests
         working-directory: products/loans/api
         run: pytest test_risk.py -q
+      - name: Steward harness reasoning tests (offline)
+        working-directory: products/steward/harness
+        run: pytest test_offline.py -q
       - name: Generator invariant check (<=4 per customer)
         working-directory: products/transactions/generator
         run: |
@@ -77,6 +80,7 @@ jobs:
           - products/transactions/api
           - products/transactions/generator
           - products/loans/api
+          - products/steward/harness
           - ui
     steps:
       - uses: actions/checkout@v5

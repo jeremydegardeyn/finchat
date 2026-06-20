@@ -104,13 +104,14 @@ const VIEWS = {
   employee: { label:"Loan Officer", render: renderEmployee },
   analyst:  { label:"Analyst", render: renderAnalyst },
   admin:    { label:"Platform Admin", render: renderAdmin },
+  steward:  { label:"Steward", render: renderSteward },
 };
 // Ask-the-Data (free-form Conversational Analytics) is a STAFF capability. The
 // anonymous customer gets only the DaaS-grounded banking assistant (tools), not
 // arbitrary SQL over the data products. Staff personas see what their own
 // credentials allow (values / masked / denied), ADR-0019. Anonymous customer
 // splits the assistant chat and loan request/status onto separate tabs.
-function viewsFor(p){ return p==="customer"?["customer","loans"]:p==="employee"?["employee","analyst"]:p==="analyst"?["analyst"]:["admin","analyst"]; }
+function viewsFor(p){ return p==="customer"?["customer","loans"]:p==="employee"?["employee","steward","analyst"]:p==="analyst"?["analyst"]:["admin","steward","analyst"]; }
 let activeTab = "customer";
 
 function setTabs() {
@@ -123,7 +124,7 @@ function setTabs() {
     tabs.querySelectorAll("button").forEach(x=>x.classList.toggle("active",x.dataset.v===activeTab)); draw(); });
   draw();
 }
-function draw(){ VIEWS[activeTab].render(); }
+function draw(){ clearInterval(S._stewardTimer); VIEWS[activeTab].render(); }
 const el = id => document.getElementById(id);
 
 // ---------- explainability: render the loan risk scorecard ----------
@@ -395,6 +396,100 @@ async function analystSend(){
 }
 
 // ===== ADMIN =====
+// ---------- Durable Reconciliation Steward (Inc 19 / ADR-0021) ----------
+const STEWARD_PLAN = ["Gather gold-table partitions for the reconciliation window",
+  "Validate records against the active data contracts",
+  "Detect and flag reconciliation anomalies",
+  "Summarize findings and propose remediation"];
+function stewardScore(task){ return /anomal|flag|remediat|approv/i.test(task)?0.4:0.9; }
+
+function renderSteward(){
+  const live = S.live && S.live.steward;
+  view.innerHTML = `
+    <div class="card"><h3>Reconciliation Steward ${live?'<span class="pill ok">LIVE</span>':'<span class="pill">demo</span>'}</h3>
+      <div class="mut">Durable long-running agent (Inc 19 · <b>ADR-0021</b>): plans data-quality checks against the data contracts, evaluates every step, <b>sleeps at zero cost</b>, and <b>wakes the approver</b> on low-confidence findings. Survives crashes — resumes from the last checkpoint, no lost work.</div>
+      <div class="row" style="margin-top:10px">
+        <input id="stgoal" style="flex:1" value="Reconcile yesterday's ledger and flag anomalies">
+        <button id="ststart">Start run</button>
+        <button class="ghost" id="strefresh">Refresh</button>
+      </div>
+      ${live?"":'<div class="mut" style="margin-top:8px;font-size:12px">Steward backend not deployed (<code>enable_agent_harness</code> off) — showing an illustrative client-side run.</div>'}
+    </div>
+    <div class="card" style="margin-top:16px"><h3>Run status</h3><div id="ststatus" class="mut">No run yet — start one above.</div></div>`;
+  el("ststart").onclick = stewardStart;
+  el("strefresh").onclick = stewardRefresh;
+  if (S.steward && S.steward.demo) stewardRenderDemo();
+  else if (S.steward && S.steward.wid) stewardPoll();
+}
+
+function stewardRender(d){
+  const box = el("ststatus"); if(!box) return;
+  const phase = d.phase || "pending";
+  const pill = phase==="done"?"ok":phase==="awaiting_human"?"warn":"";
+  const who = (S.steward&&S.steward.wid)||(S.steward&&S.steward.demo?"demo run":"");
+  let html = `<div class="row" style="gap:8px"><span class="pill ${pill}">${phase}</span><span class="mut">${escapeHtml(who)}</span></div>`;
+  if(d.plan&&d.plan.length){ html += `<div class="mut" style="margin-top:8px">Plan: ${d.plan.map(escapeHtml).join(" → ")}</div>`; }
+  const hist = d.history||[];
+  html += `<div style="margin-top:10px">` + hist.map(s=>`
+    <div class="row" style="gap:8px"><span class="pill ${(s.score||0)>=0.6?'ok':'bad'}">${(s.score||0).toFixed(2)}</span>
+      <b>${escapeHtml(s.task)}</b><span class="mut">${escapeHtml(s.resolution||'auto')}${s.approver?(' · '+escapeHtml(s.approver)):''}</span></div>
+    <div class="mut" style="margin:2px 0 10px 0">${escapeHtml(s.result||"")}</div>`).join("") + `</div>`;
+  if(phase==="awaiting_human" && d.pending){
+    html += `<div class="card" style="margin-top:8px;border-color:var(--warn)"><b>⏸ Escalation — approver review</b>
+      <div class="mut" style="margin-top:4px">${escapeHtml(d.pending.task)} · score ${d.pending.score} · ${escapeHtml(d.pending.reason||"")}</div>
+      <div class="mut" style="font-size:12px;margin-top:4px">The agent is asleep (zero cost) until you decide — no polling.</div>
+      <div class="row" style="margin-top:8px;gap:8px"><button class="ok" id="stapp">Approve</button><button class="bad" id="strej">Reject</button></div></div>`;
+  }
+  box.innerHTML = html;
+  if(el("stapp")) el("stapp").onclick=()=>stewardReview(true);
+  if(el("strej")) el("strej").onclick=()=>stewardReview(false);
+}
+
+async function stewardStart(){
+  const goal = el("stgoal").value;
+  const r = await api("steward","runs",{method:"POST",body:JSON.stringify({goal})});
+  if(r.__demo){ return stewardDemoStart(goal); }
+  S.steward = { wid: r.workflow_id };
+  stewardPoll();
+}
+function stewardRefresh(){ if(S.steward&&S.steward.demo) stewardRenderDemo(); else if(S.steward&&S.steward.wid) stewardPoll(); }
+async function stewardReview(approved){
+  if(S.steward&&S.steward.demo) return stewardDemoReview(approved);
+  await api("steward",`runs/${S.steward.wid}/review`,{method:"POST",
+    body:JSON.stringify({approved, note: approved?"Reviewed in console":"Rejected in console"})});
+  stewardPoll();
+}
+function stewardPoll(){
+  clearInterval(S._stewardTimer);
+  const tick = async ()=>{
+    if(!S.steward||!S.steward.wid) return;
+    const d = await api("steward",`runs/${S.steward.wid}`);
+    if(d.__demo) return;
+    stewardRender(d);
+    if(d.phase==="done"||d.phase==="awaiting_human") clearInterval(S._stewardTimer);
+  };
+  tick(); S._stewardTimer = setInterval(tick, 1500);
+}
+
+// Client-side simulation mirroring the offline harness heuristic (no backend).
+function stewardDemoStart(goal){ S.steward={demo:true,i:0,hist:[],plan:STEWARD_PLAN,phase:"working"}; stewardDemoStep(); }
+function stewardDemoStep(){
+  const st=S.steward;
+  while(st.i < st.plan.length){
+    const task=st.plan[st.i], score=stewardScore(task);
+    if(score<0.6){ st.phase="awaiting_human"; st.pending={task,score,reason:"low confidence / borderline items — escalate to approver"}; return stewardRenderDemo(); }
+    st.hist.push({task,score,result:"Completed. (tool:run_dq_check) rows reconciled, 0 null-key violations.",resolution:"auto"}); st.i++;
+  }
+  st.phase="done"; st.pending=null; stewardRenderDemo();
+}
+function stewardDemoReview(approved){
+  const st=S.steward, p=st.pending;
+  st.hist.push({task:p.task,score:p.score,result:"[UNCERTAIN] 2 borderline items reviewed.",
+    resolution:approved?"human_approved":"human_rejected", approver:(S.email||"approver@datadinosaur.com")});
+  st.i++; st.pending=null; st.phase="working"; stewardDemoStep();
+}
+function stewardRenderDemo(){ stewardRender({phase:S.steward.phase,plan:S.steward.plan,history:S.steward.hist,pending:S.steward.pending}); }
+
 async function renderAdmin() {
   const h = await (await fetch("/healthz").catch(()=>({json:()=>({})}))).json().catch(()=>({}));
   const live = S.live;

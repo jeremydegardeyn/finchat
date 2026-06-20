@@ -1,0 +1,8 @@
+dbos>=2.0.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+
+# Optional — real Gemini instead of the offline stub. The harness, demo, and tests
+# all run fully offline without this installed.
+google-genai>=0.3.0

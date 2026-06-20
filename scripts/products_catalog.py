@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Single source of truth for the 5 FinChat data products.
+Single source of truth for the FinChat data products.
 
 Both catalog_bootstrap.py (Universal Catalog: glossary, aspects, DQ insights) and
 data_products.py (Data Products API: products, assets, access groups) import this
@@ -179,6 +179,33 @@ def products(env: str) -> list[dict]:
                 {"id": "analysts", "display": "Data Science / Analysts",
                  "group": "data-science@datadinosaur.com", "roles": ["roles/bigquery.dataViewer"],
                  "desc": "Conversational Analytics over the semantic layer (masked PII)."},
+            ],
+        },
+        {
+            "id": "reconciliation-steward", "display": "Reconciliation Steward",
+            "domain": "governance", "dataset": f"finchat_steward_{env}", "table": "steward_status",
+            "owner": "data-governance@datadinosaur.com", "steward": STEWARD,
+            "criticality": "MEDIUM", "certification": "CANDIDATE", "pii": "PUBLIC",
+            "sla": "nightly; 99.5% avail", "cost_center": "CC-GOVERNANCE",
+            "description": "Outputs of the durable reconciliation / data-quality steward "
+                           "(Inc 19 / ADR-0021): per-step evaluator decisions and the "
+                           "append-only audit of nightly checks against the data contracts. "
+                           "Metadata about data quality — carries no customer PII.",
+            "contract": {
+                "version": "0.1.0",
+                "guarantees": "Append-only steward_decision (INSERT-only, reconstructable); "
+                              "eval_score in [0,1]; escalations carry the verified approver; "
+                              "one durable run per nightly window.",
+                "freshness": "nightly", "availability": "99.5%",
+                "deprecation_policy": "Candidate product — contract not yet frozen.",
+            },
+            "access_groups": [
+                {"id": "data-governance", "display": "Data Governance",
+                 "group": "data-governance@datadinosaur.com", "roles": ["roles/bigquery.dataViewer"],
+                 "desc": "Monitor data-quality reconciliation runs and the audit trail."},
+                {"id": "risk-analysts", "display": "Risk Analysts",
+                 "group": "risk-analysts@datadinosaur.com", "roles": ["roles/bigquery.dataViewer"],
+                 "desc": "Review flagged reconciliation anomalies."},
             ],
         },
     ]

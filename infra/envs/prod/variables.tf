@@ -108,3 +108,9 @@ variable "enable_bigtable" {
   description = "Deploy the Bigtable hot-path serving tier (ADR-0017). No scale-to-zero (~$475/mo/node) — default off; develop against the emulator."
   default     = false
 }
+
+variable "enable_agent_harness" {
+  type        = bool
+  description = "Deploy the durable agent harness / reconciliation steward (ADR-0021): Cloud Run (scale-to-zero) + Cloud SQL Postgres. Cloud SQL has no scale-to-zero — default off; develop against a local Postgres."
+  default     = false
+}
