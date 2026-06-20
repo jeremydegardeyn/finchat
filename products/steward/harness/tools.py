@@ -1,102 +1,108 @@
 """Steward tools — the durable agent's hands.
 
-Real data-quality / reconciliation checks against the FinChat gold + silver tables.
-Each check reads BigQuery metadata (`__TABLES__`) for row count + freshness, falling
-back to a `COUNT(*)` for views — cheap (no full scans for base tables) and uses only
-the run SA's existing `bigquery.dataViewer` + `bigquery.jobUser`.
+The steward does NOT re-implement data-quality checks (Dataplex Auto DQ already does
+that, Inc 10). It sits ON TOP of the existing Dataplex DQ datascans: it reads their
+results, and for each FAILED rule drives a remediation-with-approval loop.
 
-Runs fully OFFLINE (no GCP_PROJECT or BigQuery client) by returning a healthy stub, so
-the harness, demo, and tests work without GCP — same discipline as the loan agent.
+Governance posture: the steward never directly rewrites production financial tables.
+It records an approved remediation *order* and re-runs the scan to verify — the owning
+team executes the actual fix. This is the reasoning/orchestration/HITL work that
+scheduled SQL can't do; the checking stays in Dataplex.
+
+Runs OFFLINE (no GCP_PROJECT / no dataplex client) via a representative stub finding,
+so the harness, demo, and tests work without GCP.
 """
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 
-GCP_PROJECT = os.getenv("GCP_PROJECT", "")
-SILVER = os.getenv("SILVER_DATASET", "")
-GOLD = os.getenv("GOLD_DATASET", "")
-LOANS = os.getenv("LOANS_DATASET", "")
-GRAPH = os.getenv("GRAPH_DATASET", "")
-KB = os.getenv("KB_DATASET", "")
-FRESHNESS_MAX_HOURS = float(os.getenv("FRESHNESS_MAX_HOURS", "26"))  # nightly tolerance
+PROJECT = os.getenv("GCP_PROJECT", "")
+REGION = os.getenv("GOOGLE_CLOUD_LOCATION", os.getenv("DATAPLEX_REGION", "us-central1"))
+ENV = os.getenv("ENV", "dev")
+PREFIX = f"finchat-{ENV}"
+# DQ datascans that carry pass/fail rules (profile scans don't). Inc 10 ships one.
+DQ_SCANS = [s.strip() for s in os.getenv("DQ_SCANS", "silver-txn-quality").split(",") if s.strip()]
 
 
-def checks() -> list[tuple[str, str, str, bool]]:
-    """Reconciliation targets: (product_id, dataset, table, expect_fresh).
-
-    Mirrors the data products in scripts/products_catalog.py; kept local so the
-    container stays self-contained.
-    """
-    out: list[tuple[str, str, str, bool]] = []
-    if SILVER:
-        out += [("deposit-transactions", SILVER, "transaction", True),
-                ("customer-master", SILVER, "customer", False)]
-    if GOLD:
-        out += [("overdraft-history", GOLD, "overdraft_history", False)]
-    if LOANS:
-        out += [("loan-master", LOANS, "loan_status", False)]  # serving view
-    if KB:
-        out += [("bank-knowledge-base", KB, "kb_chunks", False)]
-    if GRAPH:
-        out += [("customer-360-analytics", GRAPH, "customer_360", False)]  # view
-    if not out:  # offline / unconfigured — give the planner a representative set
-        out = [("deposit-transactions", "finchat_silver", "transaction", True),
-               ("customer-master", "finchat_silver", "customer", False),
-               ("overdraft-history", "finchat_gold", "overdraft_history", False),
-               ("loan-master", "finchat_loans", "loan_status", False)]
-    return out
-
-
-def _bq_available() -> bool:
-    if not GCP_PROJECT:
+def _dataplex_available() -> bool:
+    if not PROJECT:
         return False
     try:
-        import google.cloud.bigquery  # noqa: F401
+        import google.cloud.dataplex_v1  # noqa: F401
         return True
     except ImportError:
         return False
 
 
-def run_dq_check(dataset: str, table: str, expect_fresh: bool = False) -> dict:
-    """Run a real data-quality check and return {target, ok, row_count, detail}."""
-    target = f"{dataset}.{table}"
-    if not _bq_available():
-        return {"target": target, "ok": True, "row_count": None,
-                "detail": f"(offline stub) {target}: assumed healthy"}
+def _latest_job(ds, scan_id: str):
+    """Newest SUCCEEDED job for a scan -> full job proto (or None). Mirrors
+    scripts/catalog_bootstrap.py::_latest_job."""
+    from google.cloud import dataplex_v1
+    parent = f"projects/{PROJECT}/locations/{REGION}/dataScans/{scan_id}"
+    for j in ds.list_data_scan_jobs(request={"parent": parent}):  # newest first
+        job = ds.get_data_scan_job(request={"name": j.name, "view": "FULL"})
+        if job.state == dataplex_v1.DataScanJob.State.SUCCEEDED:
+            return job
+    return None
 
-    from google.cloud import bigquery
-    client = bigquery.Client(project=GCP_PROJECT)
-    try:
-        meta = list(client.query(
-            f"SELECT row_count, type, last_modified_time "
-            f"FROM `{GCP_PROJECT}.{dataset}.__TABLES__` WHERE table_id = @t",
-            job_config=bigquery.QueryJobConfig(query_parameters=[
-                bigquery.ScalarQueryParameter("t", "STRING", table)])).result())
 
-        if meta and meta[0]["type"] == 1:  # base table — use cheap metadata
-            row_count = meta[0]["row_count"]
-            now_ms = datetime.now(timezone.utc).timestamp() * 1000
-            age_h = (now_ms - meta[0]["last_modified_time"]) / 3.6e6
-        else:  # view / not in __TABLES__ — count rows
-            row_count = list(client.query(
-                f"SELECT COUNT(*) AS n FROM `{GCP_PROJECT}.{dataset}.{table}`"
-            ).result())[0]["n"]
-            age_h = None
+def _stub_finding() -> dict:
+    return {"id": f"{PREFIX}-silver-txn-quality#0", "scan": f"{PREFIX}-silver-txn-quality",
+            "label": "Remediate silver-txn-quality: VALIDITY on amount failed",
+            "dimension": "VALIDITY", "column": "amount",
+            "evaluated": 1000, "passed_count": 987,
+            "failing_rows_query": "SELECT * FROM `…silver.transaction` WHERE amount IS NULL"}
 
-        issues = []
-        if row_count is not None and row_count == 0:
-            issues.append("EMPTY (contract violation)")
-        if expect_fresh and age_h is not None and age_h > FRESHNESS_MAX_HOURS:
-            issues.append(f"STALE ({age_h:.0f}h > {FRESHNESS_MAX_HOURS:.0f}h)")
 
-        detail = f"{row_count if row_count is not None else '?'} rows"
-        if age_h is not None:
-            detail += f", {age_h:.0f}h old"
-        if issues:
-            detail += " — " + ", ".join(issues)
-        return {"target": target, "ok": not issues, "row_count": row_count, "detail": detail}
+def read_findings() -> list[dict]:
+    """Read the latest Dataplex DQ scan results; return one finding per FAILED rule.
+    Empty list = all rules passed (nothing to remediate)."""
+    if not _dataplex_available():
+        return [_stub_finding()]
 
-    except Exception as e:  # missing table / permission / etc. — flag it
-        return {"target": target, "ok": False, "row_count": None,
-                "detail": f"check FAILED: {type(e).__name__}: {e}"}
+    from google.cloud import dataplex_v1
+    ds = dataplex_v1.DataScanServiceClient()
+    findings: list[dict] = []
+    for scan in DQ_SCANS:
+        scan_id = f"{PREFIX}-{scan}"
+        try:
+            job = _latest_job(ds, scan_id)
+        except Exception:
+            continue
+        if not job or not job.data_quality_result:
+            continue
+        for idx, rr in enumerate(job.data_quality_result.rules):
+            if rr.passed:
+                continue
+            rule = rr.rule
+            col = getattr(rule, "column", "") or ""
+            dim = getattr(rule, "dimension", "") or ""
+            findings.append({
+                "id": f"{scan_id}#{idx}", "scan": scan_id,
+                "label": f"Remediate {scan}: {dim or 'rule'} on {col or 'table'} failed",
+                "dimension": dim, "column": col,
+                "evaluated": int(getattr(rr, "evaluated_count", 0) or 0),
+                "passed_count": int(getattr(rr, "passed_count", 0) or 0),
+                "failing_rows_query": getattr(rr, "failing_rows_query", "") or "",
+            })
+    return findings
+
+
+def apply_remediation(finding: dict, proposal: str, decision: dict) -> str:
+    """Exactly-once side effect after approval: record the approved remediation ORDER
+    and re-run the scan to verify. Does NOT mutate financial tables (the owning team
+    executes the fix; the re-scan confirms it)."""
+    approver = decision.get("approver", "")
+    note = decision.get("note", "")
+    rerun = "(offline) scan re-run skipped"
+    if _dataplex_available():
+        try:
+            from google.cloud import dataplex_v1
+            ds = dataplex_v1.DataScanServiceClient()
+            ds.run_data_scan(request={
+                "name": f"projects/{PROJECT}/locations/{REGION}/dataScans/{finding['scan']}"})
+            rerun = f"re-ran {finding['scan']} to verify"
+        except Exception as e:
+            rerun = f"scan re-run failed: {type(e).__name__}"
+    out = f"Remediation ORDER approved by {approver or 'approver'}: {proposal[:160]} | {rerun}"
+    return out + (f" | note: {note}" if note else "")

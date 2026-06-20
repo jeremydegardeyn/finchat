@@ -13,32 +13,40 @@ single human-in-the-loop callback, where long-running state lives in the *Workfl
 execution* + BigQuery. That is correct for a regulated, auditable approval path.
 
 It is the wrong shape for an **open-ended, long-running agent** — one that plans its
-own work at runtime, self-corrects, runs for hours or days, sleeps at zero cost, and
-wakes on events. Increment 19 adds that **general durable-agent engine** and uses it to
-ship a new data product: an **Autonomous Reconciliation / Data-Quality Steward**.
+own work at runtime, runs for hours or days, sleeps at zero cost, and pauses for humans.
+Increment 19 adds that **general durable-agent engine** and uses it to ship a new data
+product: a **Data-Quality Remediation Steward**.
 
 The loan workflow is, conceptually, a *special case* of this engine (a fixed plan with
 one gate). We keep both — the rigid route where the path must be fixed, the durable
 agent where the agent must decide.
 
-## 2. What the steward does
+## 2. What the steward does (and explicitly does NOT)
+
+**It is not a DQ engine.** Dataplex Auto DQ (Inc 10) already runs the data-quality
+checks on a schedule — that's the right tool, and re-implementing it in an agent would
+be pure overhead. The steward sits **on top of** those datascans and orchestrates the
+part scheduled SQL can't: a **remediation-with-approval workflow**.
 
 Each night (Cloud Scheduler) the steward:
 
-1. **Plans** which data-quality / reconciliation checks to run against the active
-   Dataplex **data contracts** (`contracts/*.yaml`, [docs/16](16-contracts.md)) and the
-   Medallion gold tables.
-2. **Generates** each check (a BigQuery / DaaS call via an ADK tool), one durable step
-   at a time.
-3. **Evaluates** each result against the contract using the **live-eval LLM-judge**
-   ([ADR-0015](adr/0015-live-evaluation.md)), inline as a gate.
-4. On low confidence → **escalates** to the **verified GIS approver**
-   ([ADR-0016](adr/0016-identity-resolved-personas.md)) via a durable signal, and
-   **sleeps** (zero cost) until the human responds — or a timeout auto-defers.
-5. **Sleeps** between checks / until the next window, then resumes.
-6. Writes an **append-only audit** row per step decision (same pattern as
-   `approval_decision`) and publishes status as a durable event for the Admin UI.
+1. **Reads** the latest **Dataplex DQ scan results** (Inc 10) and builds its work list
+   from the rules that **failed** — no failures, nothing to do.
+2. **Proposes** a conservative remediation *order* per failing rule (Gemini via Vertex),
+   using the rule + Dataplex's failing-rows query as context — one durable step at a time.
+3. **Assesses** the blast radius / risk as a recommendation for the approver.
+4. **Always escalates** (remediation is a side effect on financial data) to the
+   **verified GIS approver** ([ADR-0016](adr/0016-identity-resolved-personas.md)) and
+   **sleeps** (zero cost) until they decide — or a timeout auto-defers to the next window.
+5. **On approval**, records the remediation order and **re-runs the scan to verify**
+   — **exactly-once**, even across a crash. It never rewrites production financial
+   tables; the owning team executes the fix and the re-scan confirms it.
+6. **Summarizes** the run and publishes status as a durable event for the UI.
 
+**Why this needs a durable agent and scheduled SQL doesn't suffice:** the checking is
+declarative and stays in Dataplex; the *remediation* is a branching, long-running,
+human-in-the-loop, exactly-once process — hand-rolling that on Scheduler + SQL means
+rebuilding a durable-execution engine (state machine + queue + retries + idempotency).
 Everything except the harness layer already exists in FinChat.
 
 ## 3. What's actually new vs. the loan workflow

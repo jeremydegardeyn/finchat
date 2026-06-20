@@ -1,44 +1,52 @@
-"""GENERATOR — executes ONE task (the 'act' step).
+"""GENERATOR — proposes a remediation for a failing DQ rule, and rolls up the run.
 
-For a reconciliation task it runs the real BigQuery data-quality check for that
-product's table; for the summary task it rolls up the findings (Gemini-on-Vertex if
-available, else a deterministic rollup). Stateless: everything arrives as arguments,
-so the durable engine can replay it after a crash.
+Read-only: it produces a remediation *order* (text) for the approver to sign off; it
+does not act. Uses Gemini via Vertex when available, else a conservative template.
 """
 from __future__ import annotations
 
-import re
-
 from llm import complete, llm_available
-from tools import checks, run_dq_check
 
-_TARGET = re.compile(r"\(([^.()]+)\.([^.()]+)\)")
+_PROMPT = """You are a banking data-steward agent. A Dataplex data-quality rule failed.
+Dimension={dimension}  column={column}  scan={scan}
+Rows passed: {passed}/{evaluated}
+Failing-rows query: {frq}
+
+Propose a concrete, CONSERVATIVE remediation order (what the owning team should do) in
+2-3 sentences. Never propose directly mutating production financial tables — prefer
+quarantine of bad rows, an upstream fix + backfill, then re-running the scan to verify.
+"""
 
 
-def run_step(task: str, history: list[dict]) -> str:
-    m = _TARGET.search(task)
-    if m:
-        ds, tbl = m.group(1), m.group(2)
-        expect_fresh = next((f for _pid, d, t, f in checks() if d == ds and t == tbl), False)
-        find = run_dq_check(ds, tbl, expect_fresh)
-        # [VIOLATION] marks a failing check so the evaluator scores it low -> escalate.
-        prefix = "OK" if find["ok"] else "[VIOLATION]"
-        return f"{prefix} {find['target']}: {find['detail']}"
+def propose(finding: dict, history: list[dict]) -> str:
+    if llm_available():
+        try:
+            return complete(_PROMPT.format(
+                dimension=finding.get("dimension", ""), column=finding.get("column", ""),
+                scan=finding.get("scan", ""), passed=finding.get("passed_count", "?"),
+                evaluated=finding.get("evaluated", "?"),
+                frq=finding.get("failing_rows_query", "(none)")))
+        except Exception:
+            pass
+    ev, pc = finding.get("evaluated", 0), finding.get("passed_count", 0)
+    n_bad = max(0, ev - pc)
+    return (f"Quarantine the {n_bad} failing row(s) on {finding.get('column') or 'the table'}, "
+            f"request an upstream backfill from the owning team, then re-run "
+            f"{finding.get('scan')} to verify. (dimension: {finding.get('dimension')})")
 
-    if "summar" in task.lower():
-        violations = [h for h in history if "[VIOLATION]" in (h.get("result") or "")]
-        if llm_available():
-            try:
-                ctx = "\n".join(f"- {h['task']}: {h['result']}" for h in history) or "(none)"
-                return complete(
-                    "Summarize this nightly data reconciliation for a banking platform in "
-                    "2-3 sentences. Call out any contract violations and recommend next steps.\n"
-                    f"{ctx}")
-            except Exception:
-                pass
-        if violations:
-            return (f"{len(violations)} contract violation(s): "
-                    + "; ".join(h["result"] for h in violations))
-        return "All data products passed their contract checks."
 
-    return f"Noted: {task}"
+def summarize(history: list[dict]) -> str:
+    n = len(history)
+    applied = sum(1 for h in history if h.get("resolution") == "applied")
+    if n == 0:
+        return "No open data-quality findings — all Dataplex DQ rules passed; nothing to remediate."
+    if llm_available():
+        try:
+            ctx = "\n".join(f"- {h['task']} -> {h.get('resolution')}" for h in history)
+            return complete(
+                "Summarize this nightly data-quality remediation run for a banking platform "
+                f"in 2-3 sentences (findings, what was approved, what was deferred):\n{ctx}")
+        except Exception:
+            pass
+    return (f"{n} failing rule(s); {applied} remediation order(s) approved, "
+            f"{n - applied} deferred/rejected.")
