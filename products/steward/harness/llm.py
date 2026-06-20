@@ -1,8 +1,9 @@
-"""LLM wrapper with an OFFLINE fallback (mirrors the rest of FinChat).
+"""LLM wrapper — Gemini via **Vertex AI**, consistent with the rest of FinChat.
 
-The harness, demo, and tests run deterministically with no key. If GEMINI_API_KEY
-is set and google-genai is installed, real Gemini calls are made instead. This is
-the single swap point for the model provider.
+FinChat does not use a Gemini API key; agents and live-eval call Gemini through Vertex
+using the service account (GOOGLE_GENAI_USE_VERTEXAI=TRUE + the SA's aiplatform.user
+role). This wrapper does the same. A GEMINI_API_KEY path is kept only as a local-dev
+convenience. With neither configured, callers fall back to deterministic offline logic.
 """
 from __future__ import annotations
 
@@ -11,8 +12,13 @@ import os
 MODEL = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
 
 
+def _vertex_enabled() -> bool:
+    return (os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").upper() in ("1", "TRUE", "YES")
+            and bool(os.getenv("GOOGLE_CLOUD_PROJECT")))
+
+
 def llm_available() -> bool:
-    if not os.getenv("GEMINI_API_KEY"):
+    if not (_vertex_enabled() or os.getenv("GEMINI_API_KEY")):
         return False
     try:
         import google.genai  # noqa: F401
@@ -23,8 +29,16 @@ def llm_available() -> bool:
 
 def complete(prompt: str) -> str:
     """Return model text, or raise so callers fall back to offline logic."""
-    from google import genai  # lazy import; only when available
+    from google import genai
 
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    if _vertex_enabled():
+        client = genai.Client(
+            vertexai=True,
+            project=os.environ["GOOGLE_CLOUD_PROJECT"],
+            location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        )
+    else:
+        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
     resp = client.models.generate_content(model=MODEL, contents=prompt)
     return (resp.text or "").strip()

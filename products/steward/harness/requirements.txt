@@ -2,7 +2,9 @@ dbos>=2.0.0
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.6
+google-cloud-bigquery>=3.0   # real data-quality / reconciliation checks
 
-# Optional — real Gemini instead of the offline stub. The harness, demo, and tests
-# all run fully offline without this installed.
+# Gemini via Vertex AI (no API key) — used by the evaluator/summary when running on
+# Cloud Run (GOOGLE_GENAI_USE_VERTEXAI=TRUE). The harness, demo, and tests all run
+# fully offline without it.
 google-genai>=0.3.0
