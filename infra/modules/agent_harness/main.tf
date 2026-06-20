@@ -88,6 +88,19 @@ resource "google_project_iam_member" "run_cloudsql_client" {
   member  = "serviceAccount:${var.run_sa_email}"
 }
 
+# The steward reads Dataplex DQ scan results and re-runs scans to verify remediations.
+resource "google_project_iam_member" "run_datascan_viewer" {
+  project = var.project_id
+  role    = "roles/dataplex.dataScanDataViewer" # read DQ job results (rules, counts)
+  member  = "serviceAccount:${var.run_sa_email}"
+}
+
+resource "google_project_iam_member" "run_datascan_editor" {
+  project = var.project_id
+  role    = "roles/dataplex.dataScanEditor" # run_data_scan to verify after remediation
+  member  = "serviceAccount:${var.run_sa_email}"
+}
+
 # --- The durable agent: Cloud Run shell (CI/CD owns image + env) --------------
 resource "google_cloud_run_v2_service" "steward" {
   project             = var.project_id

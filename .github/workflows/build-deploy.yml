@@ -89,7 +89,7 @@ jobs:
           # the Cloud SQL connector socket. Runs as the agent SA. Skipped otherwise.
           if gcloud secrets describe "finchat-${ENV}-steward-db-url" >/dev/null 2>&1; then
             deploy steward steward agent \
-              "--add-cloudsql-instances=${PROJECT}:${REGION}:finchat-${ENV}-steward --set-secrets=DBOS_DATABASE_URL=finchat-${ENV}-steward-db-url:latest --set-env-vars=EVAL_THRESHOLD=0.6,HUMAN_WAIT_SECONDS=7200,ENV=${ENV},GCP_PROJECT=${PROJECT},SILVER_DATASET=finchat_silver_${ENV},GOLD_DATASET=finchat_gold_${ENV},LOANS_DATASET=finchat_loans_${ENV},GRAPH_DATASET=finchat_graph_${ENV},KB_DATASET=finchat_kb_${ENV},GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION} --no-allow-unauthenticated"
+              "--add-cloudsql-instances=${PROJECT}:${REGION}:finchat-${ENV}-steward --set-secrets=DBOS_DATABASE_URL=finchat-${ENV}-steward-db-url:latest --set-env-vars=HUMAN_WAIT_SECONDS=7200,ENV=${ENV},GCP_PROJECT=${PROJECT},DQ_SCANS=silver-txn-quality,GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION} --no-allow-unauthenticated"
           else
             echo "steward harness not applied in ${ENV} (no DB-URL secret) — skipping steward deploy"
           fi

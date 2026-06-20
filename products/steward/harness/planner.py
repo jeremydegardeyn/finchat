@@ -1,18 +1,15 @@
-"""PLANNER — turns the steward's goal into a runtime task list.
+"""PLANNER — builds the run's work list from the live Dataplex DQ results.
 
-For reconciliation the plan is derived deterministically from the data products to
-check (more auditable than asking an LLM to invent the route): one task per product
-+ a summary. The harness may still rewrite it (insert a corrective task) when the
-evaluator rejects a step.
+The plan is *derived from reality*: one remediation task per currently-failing DQ
+rule (read from Dataplex), not a fixed checklist. No open findings -> empty plan ->
+the steward correctly does nothing but report a clean bill of health.
 """
 from __future__ import annotations
 
-from tools import checks
+from tools import read_findings
 
 
-def make_plan(goal: str) -> list[str]:
-    # Embed the BigQuery target as "(dataset.table)" so the generator can run the
-    # real check for each product; keep the text human-readable for the UI/audit.
-    tasks = [f"Reconcile {pid} ({ds}.{tbl})" for pid, ds, tbl, _ in checks()]
-    tasks.append("Summarize reconciliation findings")
-    return tasks
+def plan(goal: str) -> list[dict]:
+    # Highest failure rate first (most rows affected -> most urgent).
+    findings = read_findings()
+    return sorted(findings, key=lambda f: (f.get("passed_count", 0) - (f.get("evaluated", 0))))

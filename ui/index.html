@@ -397,19 +397,16 @@ async function analystSend(){
 
 // ===== ADMIN =====
 // ---------- Durable Reconciliation Steward (Inc 19 / ADR-0021) ----------
-const STEWARD_PLAN = ["Gather gold-table partitions for the reconciliation window",
-  "Validate records against the active data contracts",
-  "Detect and flag reconciliation anomalies",
-  "Summarize findings and propose remediation"];
-function stewardScore(task){ return /anomal|flag|remediat|approv/i.test(task)?0.4:0.9; }
+const STEWARD_PLAN = ["Remediate silver-txn-quality: VALIDITY on amount failed",
+  "Remediate silver-txn-quality: UNIQUENESS on idempotency_key failed"];
 
 function renderSteward(){
   const live = S.live && S.live.steward;
   view.innerHTML = `
-    <div class="card"><h3>Reconciliation Steward ${live?'<span class="pill ok">LIVE</span>':'<span class="pill">demo</span>'}</h3>
-      <div class="mut">Durable long-running agent (Inc 19 · <b>ADR-0021</b>): plans data-quality checks against the data contracts, evaluates every step, <b>sleeps at zero cost</b>, and <b>wakes the approver</b> on low-confidence findings. Survives crashes — resumes from the last checkpoint, no lost work.</div>
+    <div class="card"><h3>Remediation Steward ${live?'<span class="pill ok">LIVE</span>':'<span class="pill">demo</span>'}</h3>
+      <div class="mut">Durable agent (Inc 19 · <b>ADR-0021</b>) that orchestrates <b>remediation-with-approval</b> on top of the Dataplex DQ scans: reads failing rules, proposes a fix, <b>durably waits for the approver</b>, then records the order + re-runs the scan to verify. Sleeps at zero cost; survives crashes. It does not re-run the checks (Dataplex does) and never rewrites financial tables.</div>
       <div class="row" style="margin-top:10px">
-        <input id="stgoal" style="flex:1" value="Reconcile yesterday's ledger and flag anomalies">
+        <input id="stgoal" style="flex:1" value="Remediate open data-quality findings">
         <button id="ststart">Start run</button>
         <button class="ghost" id="strefresh">Refresh</button>
       </div>
@@ -475,17 +472,20 @@ function stewardPoll(){
 function stewardDemoStart(goal){ S.steward={demo:true,i:0,hist:[],plan:STEWARD_PLAN,phase:"working"}; stewardDemoStep(); }
 function stewardDemoStep(){
   const st=S.steward;
-  while(st.i < st.plan.length){
-    const task=st.plan[st.i], score=stewardScore(task);
-    if(score<0.6){ st.phase="awaiting_human"; st.pending={task,score,reason:"low confidence / borderline items — escalate to approver"}; return stewardRenderDemo(); }
-    st.hist.push({task,score,result:"Completed. (tool:run_dq_check) rows reconciled, 0 null-key violations.",resolution:"auto"}); st.i++;
+  if(st.i < st.plan.length){  // remediation is a side effect -> every one needs approval
+    st.phase="awaiting_human";
+    st.pending={task:st.plan[st.i], score:0.45,
+      reason:"remediation = side effect on financial data — approver sign-off required"};
+    return stewardRenderDemo();
   }
   st.phase="done"; st.pending=null; stewardRenderDemo();
 }
 function stewardDemoReview(approved){
   const st=S.steward, p=st.pending;
-  st.hist.push({task:p.task,score:p.score,result:"[UNCERTAIN] 2 borderline items reviewed.",
-    resolution:approved?"human_approved":"human_rejected", approver:(S.email||"approver@datadinosaur.com")});
+  st.hist.push({task:p.task, score:p.score,
+    result: approved ? "Remediation ORDER approved: quarantine failing rows + request upstream backfill, then re-ran the scan to verify."
+                     : "Rejected — referred to the owning team to investigate.",
+    resolution: approved?"applied":"rejected", approver:(S.email||"approver@datadinosaur.com")});
   st.i++; st.pending=null; st.phase="working"; stewardDemoStep();
 }
 function stewardRenderDemo(){ stewardRender({phase:S.steward.phase,plan:S.steward.plan,history:S.steward.hist,pending:S.steward.pending}); }
