@@ -22,7 +22,9 @@ resource "google_sql_database_instance" "steward" {
   deletion_protection = false # sandbox: allow teardown; enterprise: true
 
   settings {
-    tier              = var.db_tier
+    tier    = var.db_tier
+    edition = "ENTERPRISE" # shared-core tiers (db-f1-micro/db-g1-small) require ENTERPRISE, not ENTERPRISE_PLUS
+
     availability_type = "ZONAL"
     disk_size         = 10
     disk_autoresize   = true
