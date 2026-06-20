@@ -13,8 +13,8 @@ and [ADR-0021](../../../docs/adr/0021-durable-agent-harness.md).
 |---|---|
 | `harness.py` | The durable loop (DBOS workflow + steps, sleep, signals, status) |
 | `planner.py` / `generator.py` / `evaluator.py` | The three reasoning roles |
-| `tools.py` | Steward tools (DaaS / BigQuery DQ / contract checks — offline stub) |
-| `llm.py` | Gemini wrapper + offline fallback (single provider swap point) |
+| `tools.py` | Real BigQuery data-quality / reconciliation checks (row count + freshness; offline-safe stub when no GCP_PROJECT) |
+| `llm.py` | Gemini **via Vertex AI** (no API key; offline fallback) |
 | `main.py` | FastAPI front door (start / status / review) |
 | `test_offline.py` | Offline unit tests for the reasoning logic |
 

@@ -1,34 +1,44 @@
-"""GENERATOR — executes ONE task (the 'act' step). May call tools.
+"""GENERATOR — executes ONE task (the 'act' step).
 
-Stateless: everything it needs arrives as arguments, so the durable engine can
-replay it after a crash without side-effect drift.
+For a reconciliation task it runs the real BigQuery data-quality check for that
+product's table; for the summary task it rolls up the findings (Gemini-on-Vertex if
+available, else a deterministic rollup). Stateless: everything arrives as arguments,
+so the durable engine can replay it after a crash.
 """
 from __future__ import annotations
 
+import re
+
 from llm import complete, llm_available
-from tools import run_dq_check
+from tools import checks, run_dq_check
 
-_PROMPT = """You are executing one step of a data-quality steward's plan.
-Prior step results:
-{history}
-
-Do this task and report the result in 1-3 sentences:
-{task}
-"""
+_TARGET = re.compile(r"\(([^.()]+)\.([^.()]+)\)")
 
 
 def run_step(task: str, history: list[dict]) -> str:
-    if llm_available():
-        try:
-            ctx = "\n".join(f"- {h['task']}: {h['result']}" for h in history) or "(none)"
-            return complete(_PROMPT.format(history=ctx, task=task))
-        except Exception:
-            pass  # fall through to offline behavior
+    m = _TARGET.search(task)
+    if m:
+        ds, tbl = m.group(1), m.group(2)
+        expect_fresh = next((f for _pid, d, t, f in checks() if d == ds and t == tbl), False)
+        find = run_dq_check(ds, tbl, expect_fresh)
+        # [VIOLATION] marks a failing check so the evaluator scores it low -> escalate.
+        prefix = "OK" if find["ok"] else "[VIOLATION]"
+        return f"{prefix} {find['target']}: {find['detail']}"
 
-    t = task.lower()
-    # Tasks needing genuine judgment emit an [UNCERTAIN] marker -> the evaluator
-    # scores them low -> the harness escalates to the human approver.
-    if any(k in t for k in ("anomal", "flag", "remediat", "approv")):
-        return (f"[UNCERTAIN] Worked '{task}'. {run_dq_check('reconciliation')} "
-                f"2 items are borderline and need human judgment.")
-    return f"Completed '{task}'. {run_dq_check('reconciliation')}"
+    if "summar" in task.lower():
+        violations = [h for h in history if "[VIOLATION]" in (h.get("result") or "")]
+        if llm_available():
+            try:
+                ctx = "\n".join(f"- {h['task']}: {h['result']}" for h in history) or "(none)"
+                return complete(
+                    "Summarize this nightly data reconciliation for a banking platform in "
+                    "2-3 sentences. Call out any contract violations and recommend next steps.\n"
+                    f"{ctx}")
+            except Exception:
+                pass
+        if violations:
+            return (f"{len(violations)} contract violation(s): "
+                    + "; ".join(h["result"] for h in violations))
+        return "All data products passed their contract checks."
+
+    return f"Noted: {task}"
