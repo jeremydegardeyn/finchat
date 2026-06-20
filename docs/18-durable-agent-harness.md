@@ -69,6 +69,14 @@ Consistent with FinChat's serverless-substitution strategy ([ADR-0002](adr/0002-
 - **Compute:** the steward runs on **Cloud Run** scale-to-zero ([ADR-0010](adr/0010-agents-on-cloud-run.md)).
   During `DBOS.sleep`/`recv` the instance can be evicted; on the next wake the workflow
   recovers from Postgres.
+- **Secrets & connectivity (turnkey):** the DB password is generated (`random_password`)
+  and stored in **Secret Manager** — never in tfvars/code; Cloud Run reads it as
+  `DBOS_DATABASE_URL` and connects via the **Cloud SQL connector** (unix socket), so no
+  public IP appears in the connection string and Cloud Run egress IPs need no
+  allow-listing. TF owns the SQL + secret + Cloud Run **shell**; CI/CD owns the image +
+  env (`ignore_changes`), exactly like the other services. **Deploy = set
+  `enable_agent_harness=true` → `terraform apply` → one gated `build-deploy` run** (no
+  password handling, no env-clobber). Enterprise hardening: private IP + Direct VPC egress.
 - **Wake triggers (all push, no polling):** Cloud Scheduler (nightly), Pub/Sub→Eventarc
   (a new gold partition lands), and the BFF approver review → `DBOS.send` (generalizes
   the loan callback).

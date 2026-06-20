@@ -303,5 +303,9 @@ module "agent_harness" {
   name_prefix        = var.name_prefix
   run_sa_email       = module.foundation.service_account_emails["agent"]
   scheduler_sa_email = module.foundation.service_account_emails["workflow"]
-  labels             = local.labels
+  invoker_members = [
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+    "serviceAccount:${module.foundation.service_account_emails["workflow"]}",
+  ]
+  labels = local.labels
 }

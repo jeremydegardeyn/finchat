@@ -1,9 +1,16 @@
 ###############################################################################
 # Agent Harness module — durable long-running agent serving tier (ADR-0021).
 # DEFAULT OFF. Deploy tier = DBOS on Cloud Run (scale-to-zero) backed by a small
-# Cloud SQL Postgres (the durable "autosave"). Cloud SQL has no scale-to-zero, so
-# the sandbox keeps enable_agent_harness=false and develops against a local Postgres.
-# Enterprise 1:1 = Temporal (documented, not deployed) — see ADR-0021.
+# Cloud SQL Postgres (the durable "autosave"). Turnkey:
+#   - the DB password is generated (random_password) and stored in Secret Manager
+#     — never in tfvars/code;
+#   - Cloud Run connects via the Cloud SQL CONNECTOR (unix socket), so no public
+#     IP appears in the connection string and Cloud Run egress IPs need no
+#     allow-listing;
+#   - TF owns the SQL, the secret, and the Cloud Run *shell*; CI/CD owns the image
+#     + runtime env (ignore_changes), exactly like the other services.
+# Cloud SQL has no scale-to-zero, so the sandbox keeps enable_agent_harness=false
+# and develops against a local Postgres. Enterprise 1:1 = Temporal (ADR-0021).
 ###############################################################################
 
 # --- Durable state store: the agent's autosave -------------------------------
@@ -21,7 +28,7 @@ resource "google_sql_database_instance" "steward" {
     disk_autoresize   = true
 
     ip_configuration {
-      ipv4_enabled = true # sandbox simplicity; enterprise: private IP + connector
+      ipv4_enabled = true # reached only via the Cloud SQL connector; no authorized networks
     }
 
     backup_configuration {
@@ -38,22 +45,54 @@ resource "google_sql_database" "steward" {
   instance = google_sql_database_instance.steward.name
 }
 
+resource "random_password" "db" {
+  length  = 32
+  special = false # URL-safe — embedded in the connection string below
+}
+
 resource "google_sql_user" "steward" {
   project  = var.project_id
   name     = "steward"
   instance = google_sql_database_instance.steward.name
-  password = var.db_password
+  password = random_password.db.result
 }
 
-# --- The durable agent: Cloud Run, scale-to-zero -----------------------------
-# While DBOS.sleep()/recv() is parked the instance can be evicted (zero cost);
-# the workflow recovers from Postgres on the next request/wake.
+# --- DB connection string in Secret Manager (connector socket, no public IP) --
+resource "google_secret_manager_secret" "db_url" {
+  project   = var.project_id
+  secret_id = "${var.name_prefix}-${var.env}-steward-db-url"
+  labels    = var.labels
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "db_url" {
+  secret      = google_secret_manager_secret.db_url.id
+  secret_data = "postgresql://steward:${random_password.db.result}@/finchat_steward?host=/cloudsql/${google_sql_database_instance.steward.connection_name}"
+}
+
+# The steward reads the DB-URL secret and connects through the Cloud SQL connector.
+resource "google_secret_manager_secret_iam_member" "run_accessor" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.db_url.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.run_sa_email}"
+}
+
+resource "google_project_iam_member" "run_cloudsql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${var.run_sa_email}"
+}
+
+# --- The durable agent: Cloud Run shell (CI/CD owns image + env) --------------
 resource "google_cloud_run_v2_service" "steward" {
   project             = var.project_id
   name                = "${var.name_prefix}-${var.env}-steward"
   location            = var.region
   deletion_protection = false
-  ingress             = "INGRESS_TRAFFIC_ALL"
+  ingress             = "INGRESS_TRAFFIC_ALL" # auth via IAM, not network
 
   template {
     service_account = var.run_sa_email
@@ -63,36 +102,47 @@ resource "google_cloud_run_v2_service" "steward" {
       max_instance_count = 2
     }
 
-    containers {
-      image = var.image
+    # Cloud SQL connector — exposes the instance as a unix socket at /cloudsql/<conn>.
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.steward.connection_name]
+      }
+    }
 
-      env {
-        name  = "DBOS_DATABASE_URL"
-        value = "postgresql://steward:${var.db_password}@${google_sql_database_instance.steward.public_ip_address}:5432/finchat_steward"
-      }
-      env {
-        name  = "EVAL_THRESHOLD"
-        value = "0.6"
-      }
-      env {
-        # In scheduled-stop mode this keeps an escalation's wait inside the daily
-        # on-window so the agent auto-defers instead of holding the DB open.
-        name  = "HUMAN_WAIT_SECONDS"
-        value = tostring(var.human_wait_seconds)
+    containers {
+      image = var.image # placeholder until CI deploys the real steward image
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
       }
     }
   }
 
   labels = var.labels
+
+  lifecycle {
+    # CI/CD owns runtime deploys (image + env incl. the DBOS_DATABASE_URL secret +
+    # the Cloud SQL connector). TF provisions the shell but never fights it.
+    ignore_changes = [
+      template[0].containers[0].image,
+      template[0].containers[0].env,
+      template[0].containers[0].volume_mounts,
+      template[0].volumes,
+      client,
+      client_version,
+    ]
+  }
 }
 
-# Cloud Scheduler invokes the steward (OIDC); requires run.invoker.
-resource "google_cloud_run_v2_service_iam_member" "scheduler_invoker" {
+# Invokers: the BFF SA (proxies /api/steward/*) and the scheduler SA (nightly run).
+resource "google_cloud_run_v2_service_iam_member" "invokers" {
+  for_each = toset(var.invoker_members)
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.steward.name
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${var.scheduler_sa_email}"
+  member   = each.value
 }
 
 # --- Wake trigger: nightly schedule (push, not polling) ----------------------

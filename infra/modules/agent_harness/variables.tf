@@ -11,8 +11,8 @@ variable "name_prefix" {
 
 variable "image" {
   type        = string
-  description = "Steward harness container image (products/steward/harness)."
-  default     = "us-docker.pkg.dev/cloudrun/container/hello" # placeholder until CI builds it
+  description = "Initial image for the Cloud Run shell. CI/CD overwrites it (ignore_changes), so the placeholder is only what runs until the first deploy."
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
 
 variable "db_tier" {
@@ -21,21 +21,20 @@ variable "db_tier" {
   default     = "db-f1-micro"
 }
 
-variable "db_password" {
-  type        = string
-  sensitive   = true
-  description = "Password for the steward Postgres user (provide via tfvars/secret, never commit)."
-  default     = "change-me-in-tfvars"
-}
-
 variable "run_sa_email" {
   type        = string
-  description = "Service account the steward Cloud Run service runs as."
+  description = "Service account the steward Cloud Run service runs as (reads the DB-URL secret + connects via the Cloud SQL connector)."
 }
 
 variable "scheduler_sa_email" {
   type        = string
-  description = "Service account Cloud Scheduler uses to invoke the steward (OIDC)."
+  description = "Service account Cloud Scheduler uses to invoke the steward (OIDC) and to start/stop Cloud SQL."
+}
+
+variable "invoker_members" {
+  type        = list(string)
+  description = "Members granted run.invoker on the steward (e.g. the BFF SA + the scheduler SA)."
+  default     = []
 }
 
 variable "schedule_cron" {
@@ -51,10 +50,9 @@ variable "schedule_goal" {
 
 # --- Option B: scheduled stop/start of the Cloud SQL "autosave" ---------------
 # Cloud SQL has no scale-to-zero. The steward is nightly, so we START the instance
-# just before the run and STOP it after the window — paying compute only ~1 of 24h
-# (stopped ≈ storage/backups only, ~$2-4/mo). A stopped instance cannot receive a
-# wake, so in scheduled mode escalations must AUTO-DEFER to the next window
-# (human_wait_seconds keeps the agent inside the daily window).
+# before the run and STOP it after the window — paying compute ~1 of 24h (stopped
+# ≈ storage/backups only, ~$2-4/mo). A stopped DB can't receive a wake, so CI sets
+# HUMAN_WAIT_SECONDS small enough that escalations AUTO-DEFER to the next window.
 variable "enable_scheduled_stop" {
   type        = bool
   description = "Start Cloud SQL before the nightly run and stop it after (Option B). Set false for 24/7."
@@ -71,12 +69,6 @@ variable "stop_cron" {
   type        = string
   description = "Stop the Cloud SQL instance after the run window (leave room for same-window review)."
   default     = "0 5 * * *"
-}
-
-variable "human_wait_seconds" {
-  type        = number
-  description = "How long an escalation waits before auto-deferring. In scheduled-stop mode keep this inside the on-window (default 2h)."
-  default     = 7200
 }
 
 variable "labels" {
