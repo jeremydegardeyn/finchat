@@ -1,0 +1,87 @@
+<svg viewBox="0 0 840 560" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <title>Remote MCP client federated to Workspace / Cloud Identity via an OAuth proxy</title>
+  <desc>Sequence diagram: a hosted MCP client (e.g. Claude) self-registers with the OAuth proxy via dynamic client registration, the proxy redirects the user to Google Workspace / Cloud Identity which authenticates and asserts the hosted-domain claim, the proxy mints its own scoped access token, and the client then calls the MCP resource server's tools directly with that bearer token.</desc>
+
+  <rect x="0" y="0" width="840" height="560" fill="#ffffff"/>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="26" font-size="16" font-weight="700" fill="#0f172a">Remote MCP access — federated to Workspace / Cloud Identity</text>
+
+  <!-- lifeline headers -->
+  <rect x="35" y="44" width="150" height="46" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="110" y="66" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">MCP client</text>
+  <text x="110" y="82" text-anchor="middle" font-size="10.5" fill="#64748b">Claude / partner agent</text>
+
+  <rect x="255" y="44" width="150" height="46" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.8"/>
+  <text x="330" y="66" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">OAuth proxy</text>
+  <text x="330" y="82" text-anchor="middle" font-size="10.5" fill="#64748b">DCR + token mint</text>
+
+  <rect x="480" y="44" width="150" height="46" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="555" y="66" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Cloud Identity</text>
+  <text x="555" y="82" text-anchor="middle" font-size="10.5" fill="#64748b">Google Workspace IdP</text>
+
+  <rect x="670" y="44" width="150" height="46" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.8"/>
+  <text x="745" y="66" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">MCP server</text>
+  <text x="745" y="82" text-anchor="middle" font-size="10.5" fill="#64748b">resource server · tools</text>
+
+  <!-- lifelines -->
+  <g stroke="#cbd5e1" stroke-width="1.3" stroke-dasharray="3 4">
+    <line x1="110" y1="90" x2="110" y2="496"/>
+    <line x1="330" y1="90" x2="330" y2="496"/>
+    <line x1="555" y1="90" x2="555" y2="496"/>
+    <line x1="745" y1="90" x2="745" y2="496"/>
+  </g>
+
+  <g font-size="11.5" fill="#0f172a" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+    <!-- 1 register -->
+    <line x1="110" y1="128" x2="324" y2="128" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="217" y="122" text-anchor="middle"><tspan font-weight="700">1</tspan>  discover + register (DCR)</text>
+    <line x1="330" y1="150" x2="116" y2="150" stroke="#475569" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <text x="217" y="165" text-anchor="middle" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">client_id</text>
+
+    <!-- 2 authorize -->
+    <line x1="110" y1="196" x2="324" y2="196" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="217" y="190" text-anchor="middle"><tspan font-weight="700">2</tspan>  /authorize</text>
+
+    <!-- 3 redirect -->
+    <line x1="330" y1="232" x2="549" y2="232" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="442" y="226" text-anchor="middle"><tspan font-weight="700">3</tspan>  redirect to Google login</text>
+
+    <!-- 4 self: sign-in + hd -->
+    <path d="M555,256 h54 v30 h-48" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="616" y="268" font-size="11"><tspan font-weight="700">4</tspan>  user signs in</text>
+    <text x="616" y="283" font-size="10.5" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">verify hd = bank-domain</text>
+
+    <!-- 5 code back -->
+    <line x1="549" y1="312" x2="336" y2="312" stroke="#475569" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <text x="442" y="306" text-anchor="middle"><tspan font-weight="700">5</tspan>  auth code + ID token</text>
+
+    <!-- 6 proxy token -->
+    <line x1="330" y1="348" x2="116" y2="348" stroke="#475569" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <text x="223" y="342" text-anchor="middle"><tspan font-weight="700">6</tspan>  scoped, short-lived token</text>
+
+    <!-- 7 tool call direct -->
+    <line x1="110" y1="402" x2="739" y2="402" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+    <text x="425" y="396" text-anchor="middle"><tspan font-weight="700">7</tspan>  call tool  +  Authorization: Bearer &lt;token&gt;</text>
+
+    <!-- 8 self validate -->
+    <path d="M745,426 h54 v30 h-48" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="745" y="438" font-size="11" text-anchor="end"><tspan font-weight="700">8</tspan>  validate · map to IAM · audit  </text>
+
+    <line x1="739" y1="478" x2="116" y2="478" stroke="#475569" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <text x="425" y="472" text-anchor="middle" fill="#64748b" font-size="10.5">tool result</text>
+  </g>
+
+  <!-- legend -->
+  <g font-size="11" fill="#64748b" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+    <rect x="35" y="520" width="16" height="14" rx="3" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="58" y="531">In-platform (OAuth proxy + MCP resource server)</text>
+    <rect x="360" y="520" width="16" height="14" rx="3" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+    <text x="383" y="531">External (MCP client · Workspace / Cloud Identity)</text>
+  </g>
+</svg>
