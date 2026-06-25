@@ -17,6 +17,10 @@ import os
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
+# Analyst grounding facts (perimeter + join model) are compiled from the OKF bundle
+# in knowledge/ by scripts/compile_okf.py — single source of truth, no drift.
+from _okf_context import ANALYST_PERIMETER, ANALYST_JOIN_BULLETS
+
 LOAN_API_URL = os.getenv("LOAN_API_URL", "")
 TXN_API_URL = os.getenv("TXN_API_URL", "")
 AGENT_URL = os.getenv("AGENT_URL", "")
@@ -425,34 +429,36 @@ def _analyst_tables() -> list[dict]:
     curated serving surfaces — the graph dataset's dim/fact views (which structurally
     omit identifier columns like account_number/full_name), the customer_360 rollup,
     and the gold/loans products. NO silver tables: the medallion contract is that
-    silver is canonical, not a consumption layer. KB is excluded (RAG route)."""
+    silver is canonical, not a consumption layer. KB is excluded (RAG route).
+
+    The allow-list itself comes from the OKF bundle (ANALYST_PERIMETER, compiled from
+    knowledge/playbooks/analyst-perimeter.md) so it can't drift from the documented
+    perimeter or the join model below."""
+    role_dataset = {"graph": GRAPH_DATASET, "gold": GOLD_DATASET, "loans": LOANS_DATASET}
     t = []
-    if GRAPH_DATASET:
-        t += [{"projectId": GCP_PROJECT, "datasetId": GRAPH_DATASET, "tableId": x}
-              for x in ("dim_customer", "dim_account", "fact_transaction",
-                        "customer_360", "kg_relationships")]
-    if GOLD_DATASET:
-        t.append({"projectId": GCP_PROJECT, "datasetId": GOLD_DATASET, "tableId": "overdraft_history"})
-    if LOANS_DATASET:
-        t.append({"projectId": GCP_PROJECT, "datasetId": LOANS_DATASET, "tableId": "loan_status"})
+    for role, tables in ANALYST_PERIMETER.items():
+        dataset = role_dataset.get(role, "")
+        if not dataset:
+            continue
+        t += [{"projectId": GCP_PROJECT, "datasetId": dataset, "tableId": tbl} for tbl in tables]
     return t
 
 
 # Knowledge-graph join model — teaches Conversational Analytics the correct joins
 # (it previously couldn't link transaction->customer because transactions carry
-# only account_id). Mirrors finchat_graph_<env>.kg_relationships.
+# only account_id). The join bullets are compiled from the OKF bundle
+# (ANALYST_JOIN_BULLETS, knowledge/playbooks/analyst-join-paths.md), which mirrors
+# finchat_graph_<env>.kg_relationships — one source of truth for all three.
 _ANALYST_SYSTEM_INSTRUCTION = (
     "You are a banking data analyst assistant for FinChat. HARD SCOPE RULE: write SQL "
     "ONLY against the exact tables provided in your context (the curated views in the "
     "finchat_graph, finchat_gold and finchat_loans datasets). NEVER reference any "
     "finchat_silver_*, finchat_bronze_*, finchat_kb_* or finchat_eval_* dataset — those "
     "queries will be denied. The data model is a graph — ALWAYS join using these keys:\n"
-    "- dim_account.customer_id = dim_customer.customer_id (an Account BELONGS_TO a Customer)\n"
-    "- fact_transaction.account_id = dim_account.account_id (a Transaction OCCURS_ON an "
-    "Account; transactions have NO customer_id, so to attribute a transaction to a "
-    "customer join fact_transaction -> dim_account -> dim_customer)\n"
-    "- overdraft_history.account_id = dim_account.account_id\n"
-    "- loan_status relates to accounts via the lending product\n"
+    + ANALYST_JOIN_BULLETS +
+    "Transactions have NO customer_id, so to attribute a transaction to a customer, join "
+    "fact_transaction -> dim_account -> dim_customer. loan_status relates to accounts via "
+    "the lending product. "
     "For per-customer questions, PREFER the pre-joined `customer_360` view (one row per "
     "customer with account/transaction/overdraft/loan rollups) instead of joining manually. "
     "Transaction amounts: DEPOSIT is cash in (positive); WITHDRAWAL and FEE reduce balance. "

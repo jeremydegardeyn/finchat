@@ -24,6 +24,9 @@ jobs:
       - name: Loan risk-scoring tests
         working-directory: products/loans/api
         run: pytest test_risk.py -q
+      - name: OKF context — perimeter + drift guard
+        working-directory: ui
+        run: pip install pyyaml && pytest test_okf_context.py -q
       - name: Steward harness reasoning tests (offline)
         working-directory: products/steward/harness
         run: pytest test_offline.py -q
