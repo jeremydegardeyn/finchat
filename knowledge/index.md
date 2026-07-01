@@ -21,7 +21,7 @@ Conversational Analytics router and the RAG / ADK agents.
 ## Data products
 
 - [Banking Transactions](datasets/transactions.md) — streaming ledger, BigQuery Medallion.
-- Loan Approval — long-running agentic HITL workflow (see [`loan_request`](tables/loan_request.md)).
+- Loan Approval — long-running agentic HITL workflow (see [`loan_request`](tables/loan-request.md)).
 
 ## Layers
 
