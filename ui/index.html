@@ -310,7 +310,7 @@ function renderAnalyst(){
   <div class="grid">
     ${catalogCard}
     <div class="card" style="grid-column:1/-1"><h3>Ask the Data <span class="pill">Conversational Analytics</span> <span class="pill">Knowledge Base · RAG</span></h3>
-      <div class="mut" style="font-size:12px;margin-bottom:6px">One assistant — it reads your question and routes it to <b>📊 Analytics</b> (queries the data products, shows the SQL) or the <b>📚 Knowledge Base</b> (policy/doc RAG) automatically. The badge on each answer shows which it used.</div>
+      <div class="mut" style="font-size:12px;margin-bottom:6px">One assistant — it reads your question and routes it to <b>📊 Analytics</b> (queries the data products, shows the SQL), the <b>📚 Knowledge Base</b> (policy/doc RAG), or the <b>📖 Data Model</b> (metric definitions, table/view semantics, join paths) automatically. The badge on each answer shows which it used.</div>
       <div id="achat" class="chat" style="height:260px"></div>
       <div class="row" style="margin-top:8px"><input id="amsg" style="flex:1" placeholder="ask anything — e.g. 'total deposits by segment'  ·  'what are the overdraft fees?'"><button id="asend">Ask</button></div>
       <div id="aex" class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
@@ -376,6 +376,8 @@ async function analystSend(){
   if (r.error) { t.querySelector(".b").textContent = "Error: " + escapeHtml(r.error) + (r.detail?` — ${escapeHtml(r.detail)}`:""); return; }
   const badge = r.mode === "kb"
     ? `<span class="pill ok">📚 Knowledge Base</span> `
+    : r.mode === "okf"
+    ? `<span class="pill ok">📖 Data Model</span> `
     : `<span class="pill ok">📊 Analytics</span> `;
   t.querySelector(".b").innerHTML = badge + escapeHtml(r.answer || "(no answer)");
   let html="";
