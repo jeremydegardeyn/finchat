@@ -32,8 +32,21 @@ def test_join_bullets_cover_the_three_hop():
     assert "dim_account.customer_id = dim_customer.customer_id" in b
 
 
+def test_knowledge_corpus_grounds_the_concept_docs():
+    k = _okf_context.ANALYST_KNOWLEDGE
+    # Every descriptive layer contributes at least one section header.
+    for d in ("datasets/", "tables/", "views/", "metrics/", "graph/"):
+        assert f"### {d}" in k
+    # It carries semantics the raw schema can't (a metric name, the graph view).
+    assert "### metrics/overdraft-ratio.md" in k and "### views/customer-360.md" in k
+    # The playbooks contribute NO section (they compile to perimeter/joins, not corpus);
+    # a doc may still *reference* a playbook by path in its prose, so match the header form.
+    assert "### playbooks/" not in k and "### index.md" not in k
+
+
 def test_committed_module_is_not_stale():
     """Drift guard: regenerating from knowledge/ must reproduce the committed module."""
     fresh = compile_okf.build()
     assert fresh["perimeter"] == _okf_context.ANALYST_PERIMETER
     assert fresh["join_bullets"] == _okf_context.ANALYST_JOIN_BULLETS
+    assert fresh["concept_corpus"] == _okf_context.ANALYST_KNOWLEDGE

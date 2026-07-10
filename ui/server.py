@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 # Analyst grounding facts (perimeter + join model) are compiled from the OKF bundle
 # in knowledge/ by scripts/compile_okf.py — single source of truth, no drift.
-from _okf_context import ANALYST_PERIMETER, ANALYST_JOIN_BULLETS
+from _okf_context import ANALYST_PERIMETER, ANALYST_JOIN_BULLETS, ANALYST_KNOWLEDGE
 
 LOAN_API_URL = os.getenv("LOAN_API_URL", "")
 TXN_API_URL = os.getenv("TXN_API_URL", "")
@@ -649,6 +649,39 @@ async def _run_kb(q: str) -> dict:
     return {"mode": "kb", "answer": data.get("response") or "(no answer)"}
 
 
+async def _run_okf(q: str) -> dict:
+    """Answer DATA-MODEL / semantics questions (what a metric means, what a view
+    contains, how tables join) grounded ONLY on the OKF concept corpus compiled from
+    knowledge/ (ANALYST_KNOWLEDGE). Read-only knowledge: it explains the model, it
+    never emits or runs SQL — the CA route owns querying, this route owns meaning.
+
+    The grounding block is large, static, and identical on every call — a natural fit
+    for Vertex context caching; add an explicit CachedContent only if call volume ever
+    justifies it (at ~a few thousand tokens the per-call cost is already negligible)."""
+    token = _access_token()
+    if not token:
+        return {"mode": "okf", "error": "semantics model unavailable"}
+    prompt = (
+        "You explain a bank's DATA MODEL to an analyst, using ONLY the knowledge below. "
+        "Cover metric definitions, table/view semantics, and join paths. If the answer is "
+        "not in the knowledge, say so plainly — never invent columns, joins, or metrics. "
+        "Do NOT write SQL; describe the model.\n\n"
+        f"=== FINCHAT KNOWLEDGE ===\n{ANALYST_KNOWLEDGE}\n=== END KNOWLEDGE ===\n\n"
+        f"Question: {q}"
+    )
+    url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
+           f"/locations/{VERTEX_LOCATION}/publishers/google/models/gemini-2.5-flash:generateContent")
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}}
+    try:
+        r = await _client().post(url, json=body, headers={"Authorization": f"Bearer {token}"},
+                                 timeout=30.0)
+        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        return {"mode": "okf", "error": f"semantics unavailable: {type(e).__name__}"}
+    return {"mode": "okf", "answer": txt or "(no answer)"}
+
+
 _KB_WORDS = ("fee", "polic", "hour", "branch", "atm", " open", "close", "term", "condition",
              "privacy", "eligib", "require", "interest", "rate", "offer", "document", "contact",
              "support", "location", "how do i", "what is a", "limit", "disclosure")
@@ -656,35 +689,48 @@ _AN_WORDS = ("how many", "count", "number of", "total", "sum", "average", "avg",
              " most ", "least", "list ", "per segment", "by segment", "per customer", "distribution",
              "breakdown", "customers with", "which customer", "trend", "over time", "compare",
              "percentage", "ratio", "largest", "smallest", "highest", "lowest", "how much")
+_SEM_WORDS = ("what does", "what is a ", "definition", "defined", "define", "mean", "how is ",
+              "calculated", "computed", "what columns", "what fields", "schema", "join",
+              "related to", "what's in", "what is in", "contain", "which view", "which table",
+              "data model", "column mean")
 
 
 def _heuristic_intent(q: str) -> str:
     ql = q.lower()
-    kb = sum(w in ql for w in _KB_WORDS)
-    an = sum(w in ql for w in _AN_WORDS)
-    return "kb" if kb > an else "analytics"
+    scores = {
+        "kb": sum(w in ql for w in _KB_WORDS),
+        "analytics": sum(w in ql for w in _AN_WORDS),
+        "semantics": sum(w in ql for w in _SEM_WORDS),
+    }
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "analytics"
 
 
 async def _classify_intent(q: str) -> str:
     """Decide ANALYTICS vs KB via Gemini (Vertex), falling back to a keyword
     heuristic if the model isn't reachable (e.g. SA lacks aiplatform.user)."""
     prompt = (
-        "You route a bank analyst's question to one of two tools. Reply with ONE word.\n"
-        "ANALYTICS = a quantitative question about the bank's DATA (counts, sums, averages, "
+        "You route a bank analyst's question to one of three tools. Reply with ONE word.\n"
+        "ANALYTICS = a quantitative question about the bank's DATA VALUES (counts, sums, averages, "
         "lists, per-segment/per-customer metrics over transactions, accounts, customers, loans, "
         "overdrafts).\n"
         "KB = a question answerable from the bank's POLICY/PRODUCT DOCUMENTS (fees, policies, "
         "branch hours, terms, eligibility, rates offered, how-to).\n"
-        f"Question: {q}\nAnswer (ANALYTICS or KB):")
+        "SEMANTICS = a question about the DATA MODEL ITSELF — what a metric means, how it is "
+        "defined/calculated, what a table or view contains, or how tables join. (Not a data "
+        "value; not a policy.)\n"
+        f"Question: {q}\nAnswer (ANALYTICS, KB, or SEMANTICS):")
     try:
         token = _access_token()
         url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
                f"/locations/{VERTEX_LOCATION}/publishers/google/models/gemini-2.5-flash:generateContent")
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0, "maxOutputTokens": 4}}
+                "generationConfig": {"temperature": 0, "maxOutputTokens": 8}}
         r = await _client().post(url, json=body, headers={"Authorization": f"Bearer {token}"},
                                  timeout=15.0)
         txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].upper()
+        if "SEMANTIC" in txt:
+            return "semantics"
         if "KB" in txt and "ANALYTIC" not in txt:
             return "kb"
         if "ANALYTIC" in txt:
@@ -723,8 +769,9 @@ async def analyst_chat(request: Request):
 @app.post("/api/analyst/ask")
 async def analyst_ask(request: Request):
     """One analyst assistant: classify the question (Gemini, heuristic fallback) and
-    route to Conversational Analytics OR the Knowledge Base RAG accordingly. Returns
-    {mode, answer, ...} so the UI shows which tool answered."""
+    route to Conversational Analytics (data values), the Knowledge Base RAG (policy/
+    product docs), or the OKF semantics grounding (data-model meaning) accordingly.
+    Returns {mode, answer, ...} so the UI shows which tool answered."""
     deny = _require_any(request, _ASK_PERSONAS)
     if deny:
         return deny
@@ -736,7 +783,9 @@ async def analyst_ask(request: Request):
     _t0 = _time.perf_counter()
     mode = await _classify_intent(q)
     utok = request.headers.get("X-User-Access-Token") or None
-    res = await (_run_kb(q) if mode == "kb" else _run_ca(q, user_token=utok))
+    res = await (_run_ca(q, user_token=utok) if mode == "analytics"
+                 else _run_kb(q) if mode == "kb"
+                 else _run_okf(q))
     _latency_ms = int((_time.perf_counter() - _t0) * 1000)
     # Capture for live eval; for analytics the generated SQL + rows are the grounding context.
     ctx = None
