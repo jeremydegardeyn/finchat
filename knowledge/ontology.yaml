@@ -19,6 +19,12 @@ version: 0.1
 # --- CLASSES: the domain entities, each bound to its curated analyst view ------
 # `view` = the de-identified semantic view name (never the physical silver table);
 # `dataset` = the perimeter role (graph|gold|loans) mapped to an env dataset at runtime.
+# `classification:` references a term in the SEPARATE column-level-security TAXONOMY
+# (the google_data_catalog_taxonomy "classification" in infra/modules/bigquery/main.tf:
+# PII_DIRECT | PII_FINANCIAL | CONFIDENTIAL). The taxonomy owns the term DEFINITIONS and
+# their masking policy; the ontology owns the ASSIGNMENT (which column is which). Inc 21's
+# drift guard asserts every reference is a real term AND that these assignments match the
+# policy tags deployed on the silver columns — one source of truth for CLS, not two.
 classes:
   Customer:
     view: dim_customer
@@ -26,8 +32,8 @@ classes:
     key: customer_id
     properties:
       - {name: customer_id, type: string, role: identifier}
-      - {name: full_name,   type: string, pii: true, masking: dynamic}
-      - {name: email,       type: string, pii: true, masking: dynamic}
+      - {name: full_name,   type: string, classification: PII_DIRECT}
+      - {name: email,       type: string, classification: PII_DIRECT}
       - {name: segment,     type: enum, values: [retail, premium, business]}
 
   Account:
@@ -37,7 +43,7 @@ classes:
     properties:
       - {name: account_id,     type: string, role: identifier}
       - {name: customer_id,    type: string, role: foreign_key, references: Customer}
-      - {name: account_number, type: string, pii: true, masking: dynamic}
+      - {name: account_number, type: string, classification: PII_FINANCIAL}
       - {name: account_type,   type: enum, values: [checking, savings]}
       - {name: status,         type: string}
 
@@ -50,8 +56,10 @@ classes:
       - {name: transaction_id, type: string, role: identifier}
       - {name: account_id,     type: string, role: foreign_key, references: Account}
       - {name: txn_type,       type: enum, values: [DEPOSIT, WITHDRAWAL, FEE]}
-      - {name: amount,         type: money, masking: column_level,
+      - {name: amount,         type: money, classification: PII_FINANCIAL,
          sign: {DEPOSIT: "+", WITHDRAWAL: "-", FEE: "-"}}
+      - {name: counterparty_account, type: string, classification: PII_FINANCIAL,
+         note: "off the analyst fact_transaction by design"}
       - {name: event_time,     type: timestamp}
 
   OverdraftProfile:

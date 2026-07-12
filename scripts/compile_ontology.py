@@ -27,6 +27,9 @@ import yaml  # build-time only
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ONTOLOGY = ROOT / "knowledge" / "ontology.yaml"
 GRAPH_SQL = ROOT / "products" / "graph" / "schemas" / "graph.sql"
+# The column-level-security taxonomy lives here (Terraform); the ontology references
+# its terms via `classification:`. Inc 21 drift guard validates against this file.
+TAXONOMY_TF = ROOT / "infra" / "modules" / "bigquery" / "main.tf"
 
 # Markers delimiting the generated kg_relationships body inside graph.sql.
 _BEGIN = "-- >>> generated from knowledge/ontology.yaml (scripts/compile_ontology.py) — do not edit by hand"
@@ -62,6 +65,39 @@ def _rows(model: dict) -> list[dict]:
             "verb": r["verb"],
         })
     return rows
+
+
+def ontology_classifications(model: dict) -> set:
+    """{(column, TERM)} the ontology ASSIGNS — the CLS assignment it owns."""
+    out = set()
+    for c in model["classes"].values():
+        for p in c["properties"]:
+            if "classification" in p:
+                out.add((p["name"], p["classification"]))
+    return out
+
+
+def taxonomy_terms() -> set:
+    """The DEFINED terms in the Terraform classification taxonomy (uppercased),
+    e.g. {PII_DIRECT, PII_FINANCIAL, CONFIDENTIAL}."""
+    text = TAXONOMY_TF.read_text(encoding="utf-8")
+    m = re.search(
+        r'resource\s+"google_data_catalog_policy_tag"\s+"tags".*?for_each\s*=\s*\{(.*?)\n\s*\}',
+        text, re.S)
+    if not m:
+        raise ValueError("could not locate the policy-tag taxonomy in the Terraform")
+    return {k.upper() for k in re.findall(r'^\s*([a-z_]+)\s*=', m.group(1), re.M)}
+
+
+def deployed_column_tags() -> set:
+    """{(column, TERM)} actually DEPLOYED as BigQuery policy tags on the silver
+    columns — the taxonomy's side of the CLS assignment."""
+    text = TAXONOMY_TF.read_text(encoding="utf-8")
+    pairs = re.findall(
+        r'"(\w+)",\s*type = "[A-Z0-9]+".*?policyTags = \{ names = '
+        r'\[google_data_catalog_policy_tag\.tags\["(\w+)"\]',
+        text)
+    return {(col, tag.upper()) for col, tag in pairs}
 
 
 def perimeter(model: dict) -> dict:

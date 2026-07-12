@@ -40,3 +40,19 @@ This is a **pragmatic YAML ontology**, deliberately not OWL/RDF with a reasoner.
 At enterprise scale you would push further: express the ontology in OWL/SKOS for cross-domain interop, run a reasoner to *infer* relationships and check consistency, and generate not just grounding + graph DDL but also dbt relationship tests, Dataplex catalog aspects, and enforced (not merely documented) metrics. The architecture here — **one authored model, many generated projections, CI-guarded** — is the same; only the formality of the model and the number of projections grow.
 
 Like OKF, the ontology **documents and grounds**; it does not **enforce**. IAM and column-level security remain the enforcement plane. The ontology now *generates* the perimeter and the PII/masking annotations that configure that policy — tightening the loop rather than replacing it.
+
+## Classification taxonomy (Inc 21)
+
+A **taxonomy** is a hierarchical classification — a controlled vocabulary. The column-level-security taxonomy (`google_data_catalog_taxonomy` "classification" with `PII_DIRECT`, `PII_FINANCIAL`, `CONFIDENTIAL`, in `infra/modules/bigquery/main.tf`) is exactly that, and it is a separate governed artifact: it is owned centrally and shared across products, so it stays in Terraform, not folded into the ontology.
+
+The split of responsibility:
+
+- The taxonomy owns the **term definitions** and their masking policy (what `PII_FINANCIAL` means and that it masks to NULL for the analyst tier).
+- The ontology owns the **assignment** — which column carries which term — via `classification: PII_FINANCIAL` on the property. It *references* a taxonomy term; it does not re-describe it (the earlier ad-hoc `pii:`/`masking:` fields were a third copy and are gone).
+
+Two drift guards in `scripts/test_ontology.py` make this a real single source of truth:
+
+- every `classification:` the ontology references must be a defined term in the Terraform taxonomy, and
+- the ontology's `(column, term)` assignments must equal the policy tags actually deployed on the silver columns.
+
+So the ontology and the deployed column-level security can no longer disagree about what is sensitive. Note this is assignment-level: masking policy still lives in the taxonomy, and view-omission (a column absent from the analyst surface entirely, like `account_number`) is a separate decision from masking-in-place (a column present but nulled for the analyst tier, like `amount`) — the classification drives the latter, not the former.

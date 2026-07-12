@@ -47,6 +47,21 @@ def test_graph_view_region_is_in_sync():
     assert text[b:e] == onto.render_graph_region(MODEL)
 
 
+def test_classification_terms_exist_in_the_taxonomy():
+    """Every `classification:` the ontology references must be a real term in the
+    Terraform CLS taxonomy — the ontology cannot invent a sensitivity class."""
+    used = {term for _, term in onto.ontology_classifications(MODEL)}
+    assert used, "ontology declares no classifications — expected PII assignments"
+    assert used <= onto.taxonomy_terms()
+
+
+def test_ontology_classifications_match_deployed_policy_tags():
+    """The CLS assignment the ontology owns must equal the policy tags actually
+    deployed on the silver columns. This is the SSOT link for column-level security:
+    the ontology and the Terraform can no longer disagree on what is sensitive."""
+    assert onto.ontology_classifications(MODEL) == onto.deployed_column_tags()
+
+
 def test_graph_view_and_join_bullets_share_the_same_join_model():
     """Both projections come from the same relationships, so the (from,to,key) tuples
     must line up one-to-one."""
