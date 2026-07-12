@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import pathlib
 
-import yaml  # build-time only; the generated module has no third-party imports.
+import compile_ontology  # sibling module in scripts/ (perimeter + join model SSOT)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "knowledge"
@@ -30,14 +30,6 @@ OUT = ROOT / "ui" / "_okf_context.py"
 # ground the analyst KB/semantics route. NOT playbooks (those compile to perimeter/joins)
 # and NOT index.md (a manifest). Order is layer-by-layer for readable grounding.
 CONCEPT_DIRS = ("datasets", "tables", "views", "metrics", "graph")
-
-
-def _frontmatter(path: pathlib.Path) -> dict:
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        raise ValueError(f"{path}: missing YAML frontmatter")
-    _, fm, _body = text.split("---", 2)  # body may contain '---'; maxsplit keeps it whole
-    return yaml.safe_load(fm) or {}
 
 
 def _doc_body(path: pathlib.Path) -> str:
@@ -61,14 +53,15 @@ def _concept_corpus() -> str:
 
 
 def build() -> dict:
-    """Parse the SSOT concepts into the values rendered into _okf_context.py."""
-    perimeter = _frontmatter(BUNDLE / "playbooks" / "analyst-perimeter.md")["perimeter"]
-    joins = _frontmatter(BUNDLE / "playbooks" / "analyst-join-paths.md")["joins"]
-    bullets = "".join(
-        f"- {j['from']}.{j['from_key']} = {j['to']}.{j['to_key']} ({j['rel']})\n"
-        for j in joins
-    )
-    return {"perimeter": perimeter, "join_bullets": bullets, "concept_corpus": _concept_corpus()}
+    """Project the ontology SSOT + concept docs into the values rendered into
+    _okf_context.py. Perimeter and the join model come from knowledge/ontology.yaml
+    (via compile_ontology); the knowledge corpus from the descriptive concept docs."""
+    model = compile_ontology.load()
+    return {
+        "perimeter": compile_ontology.perimeter(model),
+        "join_bullets": compile_ontology.join_bullets(model),
+        "concept_corpus": _concept_corpus(),
+    }
 
 
 def render(data: dict) -> str:
@@ -86,6 +79,9 @@ def render(data: dict) -> str:
 
 
 def main() -> None:
+    # One command regenerates every ontology projection: the graph join view first,
+    # then the OKF grounding module.
+    compile_ontology.main()
     OUT.write_text(render(build()), encoding="utf-8")
     print(f"wrote {OUT.relative_to(ROOT)}")
 

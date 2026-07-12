@@ -1,0 +1,99 @@
+# =============================================================================
+# FinChat Bank Ontology — the conceptual single source of truth (Inc 20).
+#
+# One authored model. scripts/compile_ontology.py projects it into THREE artifacts
+# that were previously hand-kept and drifted apart:
+#   1. the OKF analyst grounding      -> ui/_okf_context.py (perimeter + join bullets)
+#   2. the BigQuery graph join view   -> products/graph/schemas/graph.sql (kg_relationships)
+#   3. the analyst semantic perimeter -> the CA table allow-list
+# CI drift guards (ui/test_okf_context.py, scripts/test_ontology.py) keep every
+# projection faithful to this file, so the copies can no longer silently diverge.
+#
+# This is a pragmatic YAML ontology, not OWL/RDF: classes, relationships (object
+# properties), metrics (derived properties), and axioms (constraints). A reasoner
+# is deliberately out of scope for FinChat — see docs/20-ontology.md.
+# =============================================================================
+namespace: https://finchat.datadinosaur.com/ontology#
+version: 0.1
+
+# --- CLASSES: the domain entities, each bound to its curated analyst view ------
+# `view` = the de-identified semantic view name (never the physical silver table);
+# `dataset` = the perimeter role (graph|gold|loans) mapped to an env dataset at runtime.
+classes:
+  Customer:
+    view: dim_customer
+    dataset: graph
+    key: customer_id
+    properties:
+      - {name: customer_id, type: string, role: identifier}
+      - {name: full_name,   type: string, pii: true, masking: dynamic}
+      - {name: email,       type: string, pii: true, masking: dynamic}
+      - {name: segment,     type: enum, values: [retail, premium, business]}
+
+  Account:
+    view: dim_account
+    dataset: graph
+    key: account_id
+    properties:
+      - {name: account_id,     type: string, role: identifier}
+      - {name: customer_id,    type: string, role: foreign_key, references: Customer}
+      - {name: account_number, type: string, pii: true, masking: dynamic}
+      - {name: account_type,   type: enum, values: [checking, savings]}
+      - {name: status,         type: string}
+
+  Transaction:
+    view: fact_transaction
+    dataset: graph
+    key: transaction_id
+    note: "Carries only account_id — no customer_id. This is the join problem the graph solves."
+    properties:
+      - {name: transaction_id, type: string, role: identifier}
+      - {name: account_id,     type: string, role: foreign_key, references: Account}
+      - {name: txn_type,       type: enum, values: [DEPOSIT, WITHDRAWAL, FEE]}
+      - {name: amount,         type: money, masking: column_level,
+         sign: {DEPOSIT: "+", WITHDRAWAL: "-", FEE: "-"}}
+      - {name: event_time,     type: timestamp}
+
+  OverdraftProfile:
+    view: overdraft_history
+    dataset: gold
+    key: account_id
+    properties:
+      - {name: account_id,       type: string, role: foreign_key, references: Account}
+      - {name: overdraft_events, type: int}
+      - {name: lowest_balance,   type: money}
+
+  Loan:
+    view: loan_status
+    dataset: loans
+    key: loan_id
+    properties:
+      - {name: loan_id,    type: string, role: identifier}
+      - {name: account_id, type: string, role: foreign_key, references: Account}
+      - {name: status,     type: enum, values: [requested, in_review, approved, denied]}
+
+# --- DERIVED VIEWS: curated surfaces in the perimeter that aren't base classes --
+derived_views:
+  - {view: customer_360,     dataset: graph, note: "pre-joined per-customer rollup"}
+  - {view: kg_relationships, dataset: graph, note: "the join model as data — this ontology projects it"}
+
+# --- RELATIONSHIPS: object properties == the join model (the single source) -----
+# `from`/`to` name classes; the compiler resolves them to views + keys. A relationship
+# whose endpoint is a derived view (not a class) carries an explicit from_view/to_view.
+relationships:
+  - {verb: BELONGS_TO, from: Account,          to: Customer, from_key: customer_id, to_key: customer_id, cardinality: many-to-one}
+  - {verb: OCCURS_ON,  from: Transaction,      to: Account,  from_key: account_id,  to_key: account_id,  cardinality: many-to-one}
+  - {verb: SUMMARIZES, from: OverdraftProfile, to: Account,  from_key: account_id,  to_key: account_id,  cardinality: one-to-one}
+  - {verb: ROLLS_UP,   from: Customer360,      to: Customer, from_key: customer_id, to_key: customer_id, cardinality: one-to-one, from_view: customer_360}
+
+# --- METRICS: derived properties with canonical definitions ---------------------
+# Documentation-grade here; pair with dbt / CA metrics for ENFORCED semantics.
+metrics:
+  overdraft_ratio:        {of: OverdraftProfile, grain: Account, definition: "overdraft_events / active_days"}
+  net_transaction_amount: {of: Transaction,      grain: Account, definition: "SUM(amount * sign(txn_type))  -- DEPOSIT +, WITHDRAWAL/FEE -"}
+
+# --- AXIOMS: constraints a validator (or, at enterprise, a reasoner) can enforce -
+axioms:
+  - "every Account BELONGS_TO exactly one Customer"
+  - "a NULL money value means access-restricted (masked), NOT missing"
+  - "the analyst perimeter excludes every pii:true property by construction"

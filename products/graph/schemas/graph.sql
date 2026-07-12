@@ -51,14 +51,17 @@ CREATE OR REPLACE VIEW `${PROJECT}.finchat_graph_${ENV}.kg_relationships` AS
 -- NOTE: names reference the SEMANTIC views (dim_/fact_), never physical silver
 -- tables — this content grounds the NL model, and teaching it silver names makes
 -- it generate out-of-perimeter SQL that IAM then (correctly) denies.
+-- The rows below are the ontology join model (knowledge/ontology.yaml); CI drift
+-- guard scripts/test_ontology.py fails the build if they diverge from it.
+-- >>> generated from knowledge/ontology.yaml (scripts/compile_ontology.py) — do not edit by hand
 SELECT * FROM UNNEST([
-  STRUCT('dim_account'       AS from_table, 'customer_id' AS from_column,
-         'dim_customer'      AS to_table,   'customer_id' AS to_column,
-         'Account BELONGS_TO Customer'      AS relationship),
+  STRUCT('dim_account' AS from_table, 'customer_id' AS from_column, 'dim_customer' AS to_table, 'customer_id' AS to_column, 'Account BELONGS_TO Customer' AS relationship),
   STRUCT('fact_transaction', 'account_id', 'dim_account', 'account_id', 'Transaction OCCURS_ON Account'),
   STRUCT('overdraft_history', 'account_id', 'dim_account', 'account_id', 'OverdraftProfile SUMMARIZES Account'),
   STRUCT('customer_360', 'customer_id', 'dim_customer', 'customer_id', 'Customer360 ROLLS_UP Customer')
-]);
+])
+-- <<< end generated
+;
 
 -- The literal graph (entity instances + directed relationships) is now owned by
 -- the NATIVE `banking_graph` property graph above (queried with GQL). The earlier

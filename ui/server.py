@@ -431,9 +431,9 @@ def _analyst_tables() -> list[dict]:
     and the gold/loans products. NO silver tables: the medallion contract is that
     silver is canonical, not a consumption layer. KB is excluded (RAG route).
 
-    The allow-list itself comes from the OKF bundle (ANALYST_PERIMETER, compiled from
-    knowledge/playbooks/analyst-perimeter.md) so it can't drift from the documented
-    perimeter or the join model below."""
+    The allow-list itself comes from the ontology SSOT (ANALYST_PERIMETER, compiled
+    from knowledge/ontology.yaml) so it can't drift from the join model below or the
+    kg_relationships graph view — all three are projections of the same ontology (Inc 20)."""
     role_dataset = {"graph": GRAPH_DATASET, "gold": GOLD_DATASET, "loans": LOANS_DATASET}
     t = []
     for role, tables in ANALYST_PERIMETER.items():
@@ -446,9 +446,9 @@ def _analyst_tables() -> list[dict]:
 
 # Knowledge-graph join model — teaches Conversational Analytics the correct joins
 # (it previously couldn't link transaction->customer because transactions carry
-# only account_id). The join bullets are compiled from the OKF bundle
-# (ANALYST_JOIN_BULLETS, knowledge/playbooks/analyst-join-paths.md), which mirrors
-# finchat_graph_<env>.kg_relationships — one source of truth for all three.
+# only account_id). The join bullets are compiled from the ontology SSOT
+# (ANALYST_JOIN_BULLETS, knowledge/ontology.yaml `relationships:`), the same source
+# that generates finchat_graph_<env>.kg_relationships — one source of truth for all three.
 _ANALYST_SYSTEM_INSTRUCTION = (
     "You are a banking data analyst assistant for FinChat. HARD SCOPE RULE: write SQL "
     "ONLY against the exact tables provided in your context (the curated views in the "

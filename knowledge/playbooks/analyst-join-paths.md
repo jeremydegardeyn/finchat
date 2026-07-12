@@ -5,24 +5,9 @@ description: Canonical join keys passed to Conversational Analytics so it genera
 resource: https://console.cloud.google.com/bigquery?p=strongsville-city-schools&d=finchat_graph_prod&t=kg_relationships
 tags: [analyst, joins, grounding, conversational-analytics]
 timestamp: 2026-06-25T00:00:00Z
-# Machine-readable SSOT — compiled into the CA system instruction's join bullets
-# by scripts/compile_okf.py. Semantic (dim_/fact_) names only — never silver.
-joins:
-  - from: dim_account
-    from_key: customer_id
-    to: dim_customer
-    to_key: customer_id
-    rel: an Account BELONGS_TO a Customer
-  - from: fact_transaction
-    from_key: account_id
-    to: dim_account
-    to_key: account_id
-    rel: a Transaction OCCURS_ON an Account
-  - from: overdraft_history
-    from_key: account_id
-    to: dim_account
-    to_key: account_id
-    rel: an OverdraftProfile SUMMARIZES an Account
+# SSOT moved to knowledge/ontology.yaml (Inc 20): the join model now lives there as
+# `relationships:` and is projected into the CA join bullets (ui/_okf_context.py) AND
+# the kg_relationships view. This playbook is now human documentation only.
 ---
 
 # Analyst Join Paths

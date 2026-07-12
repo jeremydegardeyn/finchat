@@ -5,12 +5,9 @@ description: The only relational surface conversational analytics may touch — 
 resource: https://console.cloud.google.com/bigquery?p=strongsville-city-schools&d=finchat_graph_prod
 tags: [governance, security, analyst, adr-0018]
 timestamp: 2026-06-25T00:00:00Z
-# Machine-readable SSOT — compiled into ui/_okf_context.py by scripts/compile_okf.py.
-# Keys are dataset roles (graph|gold|loans) mapped to env datasets at runtime.
-perimeter:
-  graph: [dim_customer, dim_account, fact_transaction, customer_360, kg_relationships]
-  gold: [overdraft_history]
-  loans: [loan_status]
+# SSOT moved to knowledge/ontology.yaml (Inc 20): the perimeter is now derived from
+# each class's `dataset:` role + the `derived_views:` list, projected into
+# ANALYST_PERIMETER (ui/_okf_context.py). This playbook is now human documentation only.
 ---
 
 # Analyst Semantic Perimeter (ADR-0018)
