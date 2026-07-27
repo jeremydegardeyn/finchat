@@ -17,6 +17,13 @@ _TIMEOUT = 8.0
 # RAG knowledge base (BigQuery vector store).
 PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT", "")
 KB_DATASET = os.getenv("KB_DATASET", "")
+# Hybrid retrieval knobs. k_each = depth per retriever (dense and sparse) before fusion;
+# k_cand = how many fused candidates reach the reranker; top_n = what the agent sees.
+KB_K_EACH = int(os.getenv("KB_K_EACH", "8"))
+KB_K_CANDIDATES = int(os.getenv("KB_K_CANDIDATES", "8"))
+KB_TOP_N = int(os.getenv("KB_TOP_N", "4"))
+# Kill switch: unset to fall back to fusion order (retrieval keeps working without it).
+KB_RERANK = os.getenv("KB_RERANK", "1") not in ("0", "false", "False", "")
 
 
 def _id_token(audience: str):
@@ -169,26 +176,66 @@ def search_knowledge_base(query: str) -> list[dict]:
         return [{"error": "knowledge base not configured"}]
     try:
         from google.cloud import bigquery
+        import retrieval
+
         client = bigquery.Client(project=PROJECT)
-        sql = f"""
-          SELECT base.title AS title, base.category AS category, base.content AS content
-          FROM VECTOR_SEARCH(
-            TABLE `{PROJECT}.{KB_DATASET}.kb_chunks`, 'embedding',
-            (SELECT ml_generate_embedding_result AS embedding
-             FROM ML.GENERATE_EMBEDDING(
-               MODEL `{PROJECT}.{KB_DATASET}.embedding_model`,
-               (SELECT @q AS content),
-               STRUCT(TRUE AS flatten_json_output))),
-            top_k => 4, distance_type => 'COSINE')
-        """
-        job = client.query(sql, job_config=bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("q", "STRING", query)],
-            maximum_bytes_billed=2 * 1024**3,
-        ))
-        return [{"title": r["title"], "category": r["category"], "content": r["content"]}
-                for r in job.result()]
+        job = client.query(
+            retrieval.hybrid_sql(PROJECT, KB_DATASET),
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("q", "STRING", query),
+                    bigquery.ScalarQueryParameter("k_each", "INT64", KB_K_EACH),
+                    bigquery.ScalarQueryParameter("k_cand", "INT64", KB_K_CANDIDATES),
+                ],
+                maximum_bytes_billed=2 * 1024**3,
+            ),
+        )
+        candidates = [
+            {"doc_id": r["doc_id"], "title": r["title"], "category": r["category"],
+             "content": r["content"], "in_dense": r["in_dense"], "in_sparse": r["in_sparse"]}
+            for r in job.result()
+        ]
     except Exception as e:
         return [{"error": f"knowledge base unavailable: {type(e).__name__}"}]
+
+    if not candidates:
+        return []
+    ranked = _rerank(query, candidates)[:KB_TOP_N]
+    # `retriever` is returned for observability: it shows when sparse rescued an exact
+    # token the embedding missed, rather than us merely asserting that hybrid helps.
+    return [{"title": c["title"], "category": c["category"], "content": c["content"],
+             "retriever": ("hybrid" if c["in_dense"] and c["in_sparse"]
+                           else "dense" if c["in_dense"] else "sparse")}
+            for c in ranked]
+
+
+def _rerank(query: str, candidates: list[dict]) -> list[dict]:
+    """Cross-encode query against each candidate with Gemini Flash, best first.
+
+    Reranking is the biggest precision win in a retrieval pipeline because the model sees
+    the question and the passage together, unlike embeddings computed independently.
+    Any failure degrades to the fused order — retrieval must never break on the reranker.
+    """
+    if not KB_RERANK or len(candidates) < 2:
+        return candidates
+    try:
+        import retrieval
+        from google import genai
+        client = genai.Client(vertexai=True, project=PROJECT,
+                              location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=retrieval.rerank_prompt(query, candidates),
+            config={"temperature": 0, "max_output_tokens": 64},
+        )
+        order = retrieval.parse_rerank(getattr(resp, "text", "") or "", len(candidates))
+        if not order:
+            return candidates
+        reranked = [candidates[i] for i in order]
+        # keep anything the reranker dropped, after the ones it kept
+        return reranked + [c for i, c in enumerate(candidates) if i not in set(order)]
+    except Exception:
+        return candidates
 
 
 def get_account_summary(account_id: str) -> dict:

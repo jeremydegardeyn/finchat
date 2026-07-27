@@ -29,6 +29,9 @@ jobs:
       - name: OKF context — perimeter + drift guard
         working-directory: ui
         run: pip install pyyaml && pytest test_okf_context.py -q
+      - name: Hybrid retrieval — BM25 / RRF / rerank parsing (offline)
+        working-directory: products/transactions/agent
+        run: pytest test_retrieval.py -q
       - name: Steward harness reasoning tests (offline)
         working-directory: products/steward/harness
         run: pytest test_offline.py -q
