@@ -56,3 +56,26 @@ Two drift guards in `scripts/test_ontology.py` make this a real single source of
 - the ontology's `(column, term)` assignments must equal the policy tags actually deployed on the silver columns.
 
 So the ontology and the deployed column-level security can no longer disagree about what is sensitive. Note this is assignment-level: masking policy still lives in the taxonomy, and view-omission (a column absent from the analyst surface entirely, like `account_number`) is a separate decision from masking-in-place (a column present but nulled for the analyst tier, like `amount`) — the classification drives the latter, not the former.
+
+## Enterprise layers (Inc 22)
+
+Inc 20/21 made the bundle a correct *semantic* layer. A bank expects four more layers around it, so Inc 22 added them — and compiled the parts that should reach the agent rather than leaving them as prose nobody reads.
+
+| Layer | Added | Compiled to |
+|---|---|---|
+| **Semantic** | `glossary/` (business terms + synonyms, owners, review dates); `reference/code-sets.md` | `ANALYST_GLOSSARY`; code-sets table **generated** from ontology enums |
+| **Accountability** | `stewardship.md`; `owner`/`steward`/`tier` on every class | `CONCEPT_STEWARDSHIP` |
+| **Trust** | `quality/slos.md`; `lineage.md`; `limitations.md` | `limitations.md` + `lineage.md` join the grounding corpus |
+| **Control** | `policies/data-handling.md`; `compliance/regulatory-map.md` | — (human/auditor artifacts) |
+| **Agent safety** | `playbooks/refusal-escalation.md`; `golden-queries.yaml` | `ANALYST_REFUSAL_BULLETS`, injected into every agent system instruction |
+| **Lifecycle** | `CHANGELOG.md`; `reviewed`/`review_by` frontmatter | — |
+
+Three design decisions worth recording:
+
+1. **The glossary is wired, not decorative.** Terms and synonyms compile into `ANALYST_GLOSSARY` and are injected so the agent resolves "revenue" to `net_transaction_amount` instead of inventing a definition. A glossary nothing consumes is exactly the artifact this project exists to avoid.
+2. **`Household` is deliberately `modelled: false`.** It is the concept people ask for most and the one we cannot compute (no entity, and Retail/Wealth disagree on the rule). Pairing the term with a `refuse` golden query makes the knowledge layer *prevent* a confident wrong answer — the most convincing single demonstration in the bundle.
+3. **Refusal is an outcome, not a route.** The classifier emits `analytics|kb|semantics`; refusal happens inside whichever tool handles the question, driven by the injected rules. The golden set records `route: refuse` as expected *behaviour*.
+
+New drift guards in `scripts/test_ontology.py`: the code-sets doc must match a fresh projection; every class needs an owner, steward and valid tier; golden queries must have valid routes, in-perimeter tables and real refusal ids; glossary terms must map to assets that exist; refusal rules must carry both a prohibition and a user-facing line.
+
+**Still only stated, not enforced:** the regulatory map and quality SLOs are hand-maintained, and agents do not yet read live quality-scan status at query time. Both are named as gaps in their own files rather than left implicit.

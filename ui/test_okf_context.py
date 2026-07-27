@@ -44,9 +44,32 @@ def test_knowledge_corpus_grounds_the_concept_docs():
     assert "### playbooks/" not in k and "### index.md" not in k
 
 
+def test_glossary_is_compiled_with_synonyms():
+    """Inc 22: business vocabulary reaches the agent, including the unmodelled terms it
+    must decline rather than guess at."""
+    g = {x["term"]: x for x in _okf_context.ANALYST_GLOSSARY}
+    assert "Active Customer" in g and g["Active Customer"]["status"] == "certified"
+    # "revenue" must resolve to the canonical metric, not be re-derived
+    assert "revenue" in g["Net Revenue"]["synonyms"]
+    assert "net_transaction_amount" in g["Net Revenue"]["maps_to"]
+    # Household is deliberately NOT modelled — the agent must refuse, not compute
+    assert g["Household"]["modelled"] is False
+    assert sum(len(x["synonyms"]) for x in _okf_context.ANALYST_GLOSSARY) >= 10
+
+
+def test_refusal_rules_reach_the_prompt():
+    """The compiled bullets are what actually constrain the model at runtime."""
+    b = _okf_context.ANALYST_REFUSAL_BULLETS
+    assert b.count("\n") == len(_okf_context.ANALYST_REFUSALS["rules"])
+    assert "masked" in b.lower() and "advice" in b.lower()
+
+
 def test_committed_module_is_not_stale():
     """Drift guard: regenerating from knowledge/ must reproduce the committed module."""
     fresh = compile_okf.build()
     assert fresh["perimeter"] == _okf_context.ANALYST_PERIMETER
     assert fresh["join_bullets"] == _okf_context.ANALYST_JOIN_BULLETS
     assert fresh["concept_corpus"] == _okf_context.ANALYST_KNOWLEDGE
+    assert fresh["glossary"] == _okf_context.ANALYST_GLOSSARY
+    assert fresh["refusals"] == _okf_context.ANALYST_REFUSALS
+    assert fresh["stewardship"] == _okf_context.CONCEPT_STEWARDSHIP

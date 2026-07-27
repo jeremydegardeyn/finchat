@@ -30,6 +30,9 @@ classes:
     view: dim_customer
     dataset: graph
     key: customer_id
+    owner: customer-product@datadinosaur.com
+    steward: data-steward@datadinosaur.com
+    tier: certified
     properties:
       - {name: customer_id, type: string, role: identifier}
       - {name: full_name,   type: string, classification: PII_DIRECT}
@@ -40,6 +43,9 @@ classes:
     view: dim_account
     dataset: graph
     key: account_id
+    owner: deposits-product@datadinosaur.com
+    steward: data-steward@datadinosaur.com
+    tier: certified
     properties:
       - {name: account_id,     type: string, role: identifier}
       - {name: customer_id,    type: string, role: foreign_key, references: Customer}
@@ -51,6 +57,9 @@ classes:
     view: fact_transaction
     dataset: graph
     key: transaction_id
+    owner: deposits-product@datadinosaur.com
+    steward: data-steward@datadinosaur.com
+    tier: certified
     note: "Carries only account_id — no customer_id. This is the join problem the graph solves."
     properties:
       - {name: transaction_id, type: string, role: identifier}
@@ -66,6 +75,9 @@ classes:
     view: overdraft_history
     dataset: gold
     key: account_id
+    owner: deposits-product@datadinosaur.com
+    steward: data-steward@datadinosaur.com
+    tier: certified
     properties:
       - {name: account_id,       type: string, role: foreign_key, references: Account}
       - {name: overdraft_events, type: int}
@@ -75,6 +87,9 @@ classes:
     view: loan_status
     dataset: loans
     key: loan_id
+    owner: lending-product@datadinosaur.com
+    steward: data-steward@datadinosaur.com
+    tier: curated
     properties:
       - {name: loan_id,    type: string, role: identifier}
       - {name: account_id, type: string, role: foreign_key, references: Account}
@@ -104,4 +119,4 @@ metrics:
 axioms:
   - "every Account BELONGS_TO exactly one Customer"
   - "a NULL money value means access-restricted (masked), NOT missing"
-  - "the analyst perimeter excludes every pii:true property by construction"
+  - "the analyst perimeter excludes every classified (PII_*) property by construction"

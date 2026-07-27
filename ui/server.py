@@ -19,7 +19,8 @@ from fastapi.responses import FileResponse, JSONResponse
 
 # Analyst grounding facts (perimeter + join model) are compiled from the OKF bundle
 # in knowledge/ by scripts/compile_okf.py — single source of truth, no drift.
-from _okf_context import ANALYST_PERIMETER, ANALYST_JOIN_BULLETS, ANALYST_KNOWLEDGE
+from _okf_context import (ANALYST_PERIMETER, ANALYST_JOIN_BULLETS, ANALYST_KNOWLEDGE,
+                          ANALYST_GLOSSARY, ANALYST_REFUSAL_BULLETS)
 
 LOAN_API_URL = os.getenv("LOAN_API_URL", "")
 TXN_API_URL = os.getenv("TXN_API_URL", "")
@@ -480,8 +481,27 @@ _ANALYST_SYSTEM_INSTRUCTION = (
     "UNMASKED columns: counts and distributions, e.g. number of deposit transactions per "
     "segment, customer counts per segment, or transaction counts by type/month. Offer it "
     "proactively (e.g. \"I can't total the amounts at your access level, but here is deposit "
-    "activity by segment\") instead of returning an empty or zero sum."
+    "activity by segment\") instead of returning an empty or zero sum. "
+    # Inc 22: agent-safety rules compiled from knowledge/playbooks/refusal-escalation.md.
+    "\nREFUSAL RULES (these override helpfulness):\n" + ANALYST_REFUSAL_BULLETS
 )
+
+
+def _glossary_lines() -> str:
+    """Business vocabulary for prompt grounding: the terms users say, what they map to,
+    and which are deliberately NOT modelled (so the agent declines instead of guessing)."""
+    out = []
+    for g in ANALYST_GLOSSARY:
+        syn = f" (also: {', '.join(g['synonyms'])})" if g["synonyms"] else ""
+        if not g["modelled"]:
+            out.append(f"- {g['term']}{syn}: NOT MODELLED — decline and name the owner.")
+        else:
+            maps = f" → {', '.join(g['maps_to'])}" if g["maps_to"] else ""
+            out.append(f"- {g['term']}{syn}{maps} [{g['status']}]")
+    return "\n".join(out)
+
+
+_ANALYST_GLOSSARY_BLOCK = _glossary_lines()
 
 
 def _access_token() -> str:
@@ -666,6 +686,9 @@ async def _run_okf(q: str) -> dict:
         "Cover metric definitions, table/view semantics, and join paths. If the answer is "
         "not in the knowledge, say so plainly — never invent columns, joins, or metrics. "
         "Do NOT write SQL; describe the model.\n\n"
+        "REFUSAL RULES (these override helpfulness):\n" + ANALYST_REFUSAL_BULLETS + "\n"
+        "BUSINESS VOCABULARY — resolve the user's wording to these terms first:\n"
+        f"{_ANALYST_GLOSSARY_BLOCK}\n\n"
         f"=== FINCHAT KNOWLEDGE ===\n{ANALYST_KNOWLEDGE}\n=== END KNOWLEDGE ===\n\n"
         f"Question: {q}"
     )

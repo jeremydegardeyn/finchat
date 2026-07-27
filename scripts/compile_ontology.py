@@ -30,10 +30,15 @@ GRAPH_SQL = ROOT / "products" / "graph" / "schemas" / "graph.sql"
 # The column-level-security taxonomy lives here (Terraform); the ontology references
 # its terms via `classification:`. Inc 21 drift guard validates against this file.
 TAXONOMY_TF = ROOT / "infra" / "modules" / "bigquery" / "main.tf"
+# Inc 22: the reference code sets are a projection of the ontology's enums.
+CODE_SETS_MD = ROOT / "knowledge" / "reference" / "code-sets.md"
 
 # Markers delimiting the generated kg_relationships body inside graph.sql.
 _BEGIN = "-- >>> generated from knowledge/ontology.yaml (scripts/compile_ontology.py) — do not edit by hand"
 _END = "-- <<< end generated"
+# Markers for the generated code-set table inside the markdown reference doc.
+_MD_BEGIN = "<!-- >>> generated from knowledge/ontology.yaml (scripts/compile_ontology.py) — do not edit by hand -->"
+_MD_END = "<!-- <<< end generated -->"
 
 
 def load(path: pathlib.Path = ONTOLOGY) -> dict:
@@ -142,6 +147,52 @@ def kg_select_sql(model: dict) -> str:
     return "\n".join(lines)
 
 
+def code_sets(model: dict) -> list[tuple[str, str, list]]:
+    """(class, field, values) for every enumerated property — the reference code sets."""
+    out = []
+    for cname, c in model["classes"].items():
+        for prop in c["properties"]:
+            if prop.get("type") == "enum" and prop.get("values"):
+                out.append((cname, prop["name"], list(prop["values"])))
+    return out
+
+
+def render_code_sets_md(model: dict) -> str:
+    lines = [_MD_BEGIN, "| Concept | Field | Permitted values |", "|---|---|---|"]
+    for cname, field, values in code_sets(model):
+        vals = " · ".join(f"`{v}`" for v in values)
+        lines.append(f"| {cname} | `{field}` | {vals} |")
+    lines.append(_MD_END)
+    return "\n".join(lines)
+
+
+def _region(text: str, begin: str, end: str) -> tuple[int, int]:
+    b = text.index(begin)
+    e = text.index(end, b)
+    return b, e + len(end)
+
+
+def sync_code_sets_md(model: dict | None = None) -> bool:
+    """Rewrite the generated code-set table in knowledge/reference/code-sets.md."""
+    model = model or load()
+    text = CODE_SETS_MD.read_text(encoding="utf-8")
+    b, e = _region(text, _MD_BEGIN, _MD_END)
+    new = text[:b] + render_code_sets_md(model) + text[e:]
+    if new != text:
+        CODE_SETS_MD.write_text(new, encoding="utf-8")
+        return True
+    return False
+
+
+def stewardship(model: dict) -> dict:
+    """class -> {owner, steward, tier} — the accountability layer, per concept."""
+    return {
+        name: {"owner": c.get("owner", ""), "steward": c.get("steward", ""),
+               "tier": c.get("tier", "curated")}
+        for name, c in model["classes"].items()
+    }
+
+
 def _graph_region(text: str) -> tuple[int, int]:
     b = text.index(_BEGIN)
     e = text.index(_END, b)
@@ -166,8 +217,11 @@ def sync_graph_sql(model: dict | None = None) -> bool:
 
 
 def main() -> None:
-    changed = sync_graph_sql()
+    model = load()
+    changed = sync_graph_sql(model)
     print(f"graph.sql kg_relationships: {'updated' if changed else 'already in sync'}")
+    changed = sync_code_sets_md(model)
+    print(f"reference/code-sets.md:     {'updated' if changed else 'already in sync'}")
 
 
 if __name__ == "__main__":
