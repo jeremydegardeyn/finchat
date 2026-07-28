@@ -13,8 +13,31 @@ import pytest
 
 import retrieval
 
-CORPUS = pathlib.Path(__file__).resolve().parent / "kb" / "corpus.jsonl"
+HERE = pathlib.Path(__file__).resolve().parent
+CORPUS = HERE / "kb" / "corpus.jsonl"
 DOCS = [json.loads(line) for line in CORPUS.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+# --- packaging guard -----------------------------------------------------------
+# Modules that deliberately do NOT ship in the runtime image. Anything not listed here
+# must be in the Dockerfile COPY — adding a file forces a conscious choice between the two.
+NOT_IN_IMAGE = {
+    "deploy.py",   # operator script: `python deploy.py --project ...`, run from a workstation
+}
+
+
+def test_every_runtime_module_is_copied_into_the_image():
+    """The Dockerfile COPYs modules by name, so a new file that is not listed is simply
+    absent at runtime and fails to import — which is how retrieval.py silently took the
+    knowledge base down after Inc 23. This guard fails the build instead.
+    """
+    dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+    copied = " ".join(ln for ln in dockerfile.splitlines() if ln.strip().startswith("COPY"))
+    missing = [
+        p.name for p in sorted(HERE.glob("*.py"))
+        if not p.name.startswith("test_") and p.name not in NOT_IN_IMAGE and p.name not in copied
+    ]
+    assert not missing, f"not COPYed into the agent image: {missing}"
 
 
 # --- tokenisation: the whole reason sparse retrieval helps here -----------------
@@ -102,8 +125,27 @@ def test_parse_rerank_is_robust(text, n, expected):
 # --- SQL shape -----------------------------------------------------------------
 def test_hybrid_sql_contains_both_retrievers_and_fusion():
     sql = retrieval.hybrid_sql("proj", "ds")
-    for fragment in ("VECTOR_SEARCH", "ML.GENERATE_EMBEDDING", "bm25", "LOGICAL_OR",
-                     "@q", "@k_each", "@k_cand"):
+    for fragment in ("VECTOR_SEARCH", "ML.GENERATE_EMBEDDING", "bm25", "LOGICAL_OR", "@q"):
         assert fragment in sql, f"missing {fragment}"
-    # parameterised, never string-interpolated user input
-    assert "format(" not in sql.lower()
+
+
+def test_hybrid_sql_parameterises_the_query_text_only():
+    """The user's question must always travel as @q. The k values are ints we control and
+    are interpolated as literals because VECTOR_SEARCH's top_k needs a literal."""
+    sql = retrieval.hybrid_sql("proj", "ds", k_each=5, k_cand=6)
+    assert "@q" in sql
+    assert "top_k => 5" in sql and "LIMIT 6" in sql
+    assert "@k_each" not in sql and "@k_cand" not in sql
+
+
+def test_hybrid_sql_coerces_k_values_to_int():
+    """Belt and braces: k values reach the SQL text, so they must never be raw strings."""
+    sql = retrieval.hybrid_sql("proj", "ds", k_each="7", k_cand="9")
+    assert "top_k => 7" in sql and "LIMIT 9" in sql
+
+
+def test_hybrid_sql_has_no_identifier_collisions():
+    """CTEs named the same as their columns (tf/df) parse but are a trap — keep them apart."""
+    sql = retrieval.hybrid_sql("proj", "ds")
+    assert "tf_count" in sql and "df_count" in sql
+    assert "tfreq" in sql and "dfreq" in sql

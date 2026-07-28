@@ -130,14 +130,19 @@ def parse_rerank(text: str, n: int) -> list[int]:
     return out
 
 
-def hybrid_sql(project: str, dataset: str) -> str:
+def hybrid_sql(project: str, dataset: str, k_each: int = 8, k_cand: int = 8) -> str:
     """One BigQuery job: dense VECTOR_SEARCH + BM25 sparse + RRF fusion.
 
     Deliberately one query rather than two round trips — fewer jobs, less latency, and
     the fusion happens where the data already is.
+
+    `k_each`/`k_cand` are interpolated as literals, not query parameters: VECTOR_SEARCH's
+    `top_k =>` argument expects a literal. They are ints coerced here, never user input,
+    so there is no injection surface — the actual query text stays parameterised via @q.
     """
     tbl = f"`{project}.{dataset}.kb_chunks`"
     model = f"`{project}.{dataset}.embedding_model`"
+    k_each, k_cand = int(k_each), int(k_cand)
     return f"""
     WITH
     qtok AS (
@@ -152,20 +157,22 @@ def hybrid_sql(project: str, dataset: str) -> str:
       FROM {tbl}
     ),
     stats AS (SELECT COUNT(*) AS n_docs, AVG(ARRAY_LENGTH(toks)) AS avgdl FROM docs),
-    tf AS (
-      SELECT d.doc_id, q.tok, ARRAY_LENGTH(d.toks) AS dl,
-             (SELECT COUNT(*) FROM UNNEST(d.toks) AS t WHERE t = q.tok) AS tf
+    tfreq AS (
+      SELECT d.doc_id AS doc_id, q.tok AS tok, ARRAY_LENGTH(d.toks) AS dl,
+             (SELECT COUNT(*) FROM UNNEST(d.toks) AS t WHERE t = q.tok) AS tf_count
       FROM docs d CROSS JOIN qtok q
     ),
-    df AS (SELECT tok, COUNTIF(tf > 0) AS df FROM tf GROUP BY tok),
+    dfreq AS (
+      SELECT tok, COUNTIF(tf_count > 0) AS df_count FROM tfreq GROUP BY tok
+    ),
     bm25 AS (
-      SELECT tf.doc_id,
-             SUM(LN(1 + (s.n_docs - df.df + 0.5) / (df.df + 0.5))
-                 * (tf.tf * ({K1} + 1))
-                 / (tf.tf + {K1} * (1 - {B} + {B} * tf.dl / s.avgdl))) AS score
-      FROM tf JOIN df USING (tok) CROSS JOIN stats s
-      WHERE tf.tf > 0
-      GROUP BY tf.doc_id
+      SELECT tfreq.doc_id AS doc_id,
+             SUM(LN(1 + (stats.n_docs - dfreq.df_count + 0.5) / (dfreq.df_count + 0.5))
+                 * (tfreq.tf_count * ({K1} + 1))
+                 / (tfreq.tf_count + {K1} * (1 - {B} + {B} * tfreq.dl / stats.avgdl))) AS score
+      FROM tfreq JOIN dfreq USING (tok) CROSS JOIN stats
+      WHERE tfreq.tf_count > 0
+      GROUP BY tfreq.doc_id
     ),
     sparse AS (
       SELECT doc_id, ROW_NUMBER() OVER (ORDER BY score DESC, doc_id) AS rnk FROM bm25
@@ -177,22 +184,24 @@ def hybrid_sql(project: str, dataset: str) -> str:
         (SELECT ml_generate_embedding_result AS embedding
          FROM ML.GENERATE_EMBEDDING({model}, (SELECT @q AS content),
                                     STRUCT(TRUE AS flatten_json_output))),
-        top_k => @k_each, distance_type => 'COSINE')
+        top_k => {k_each}, distance_type => 'COSINE')
+    ),
+    ranked AS (
+      SELECT doc_id, 'dense' AS src, 1 / ({RRF_K} + rnk) AS w FROM dense
+      UNION ALL
+      SELECT doc_id, 'sparse' AS src, 1 / ({RRF_K} + rnk) AS w
+      FROM sparse WHERE rnk <= {k_each}
     ),
     fused AS (
       SELECT doc_id,
              SUM(w) AS rrf,
              LOGICAL_OR(src = 'dense')  AS in_dense,
              LOGICAL_OR(src = 'sparse') AS in_sparse
-      FROM (
-        SELECT doc_id, 'dense' AS src, 1 / ({RRF_K} + rnk) AS w FROM dense
-        UNION ALL
-        SELECT doc_id, 'sparse', 1 / ({RRF_K} + rnk) FROM sparse WHERE rnk <= @k_each
-      )
+      FROM ranked
       GROUP BY doc_id
     )
     SELECT d.doc_id, d.title, d.category, d.content, f.rrf, f.in_dense, f.in_sparse
     FROM fused f JOIN {tbl} d USING (doc_id)
     ORDER BY f.rrf DESC
-    LIMIT @k_cand
+    LIMIT {k_cand}
     """

@@ -4,7 +4,9 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY agent.py tools.py server.py ./
+# NOTE: this COPY names every module explicitly — a new file that is not listed here is
+# simply absent at runtime and fails to import. retrieval.py was missed exactly that way.
+COPY agent.py tools.py server.py retrieval.py ./
 # Use Vertex AI as the Gemini backend (no API key; uses the runtime SA).
 ENV GOOGLE_GENAI_USE_VERTEXAI=TRUE
 ENV PORT=8083
