@@ -28,9 +28,16 @@ from __future__ import annotations
 import math
 import re
 
-# Keeps $, %, and internal dots attached so "$225", "8.99%", "44107" and "e-statements"
-# survive tokenisation — the whole point of having a sparse retriever.
-_TOKEN_RE = re.compile(r"\$?[a-z0-9][a-z0-9.\-]*%?")
+# THE tokenisation rule — one definition, used by the Python tokenizer AND interpolated
+# into the BigQuery SQL, so the two can never drift. They did once: the SQL kept trailing
+# punctuation ("44107." from "OH 44107.") while Python stripped it, so a zip query matched
+# nothing server-side while the offline test passed.
+#
+# Keeps $, %, and internal dots/hyphens so "$225", "8.99%", "44107" and "e-statements"
+# survive — the whole point of having a sparse retriever — but requires a token to END on
+# an alphanumeric (or %), which drops sentence punctuation.
+TOKEN_PATTERN = r"\$?[a-z0-9](?:[a-z0-9.\-]*[a-z0-9])?%?"
+_TOKEN_RE = re.compile(TOKEN_PATTERN)
 
 # BM25 parameters (Robertson/Sparck-Jones defaults).
 K1 = 1.2
@@ -39,8 +46,13 @@ RRF_K = 60          # standard reciprocal-rank-fusion damping constant
 
 
 def tokenize(text: str) -> list[str]:
-    """Lowercase, then extract terms preserving currency/percent/zip forms."""
-    return [t.strip(".-") for t in _TOKEN_RE.findall((text or "").lower()) if len(t.strip(".-")) > 1]
+    """Lowercase, then extract terms preserving currency/percent/zip forms.
+
+    No post-stripping: TOKEN_PATTERN already excludes trailing punctuation, so this stays
+    byte-identical to what the SQL produces. Any cleanup added here and not there would
+    silently reintroduce the mismatch.
+    """
+    return [t for t in _TOKEN_RE.findall((text or "").lower()) if len(t) > 1]
 
 
 def bm25_rank(query: str, docs: list[dict]) -> list[tuple[str, float]]:
@@ -147,13 +159,13 @@ def hybrid_sql(project: str, dataset: str, k_each: int = 8, k_cand: int = 8) -> 
     WITH
     qtok AS (
       SELECT DISTINCT tok
-      FROM UNNEST(REGEXP_EXTRACT_ALL(LOWER(@q), r'\\$?[a-z0-9][a-z0-9.\\-]*%?')) AS tok
+      FROM UNNEST(REGEXP_EXTRACT_ALL(LOWER(@q), r'{TOKEN_PATTERN}')) AS tok
       WHERE LENGTH(tok) > 1
     ),
     docs AS (
       SELECT doc_id, title, category, content,
              REGEXP_EXTRACT_ALL(LOWER(CONCAT(title, ' ', content)),
-                                r'\\$?[a-z0-9][a-z0-9.\\-]*%?') AS toks
+                                r'{TOKEN_PATTERN}') AS toks
       FROM {tbl}
     ),
     stats AS (SELECT COUNT(*) AS n_docs, AVG(ARRAY_LENGTH(toks)) AS avgdl FROM docs),
@@ -182,7 +194,7 @@ def hybrid_sql(project: str, dataset: str, k_each: int = 8, k_cand: int = 8) -> 
       FROM VECTOR_SEARCH(
         TABLE {tbl}, 'embedding',
         (SELECT ml_generate_embedding_result AS embedding
-         FROM ML.GENERATE_EMBEDDING({model}, (SELECT @q AS content),
+         FROM ML.GENERATE_EMBEDDING(MODEL {model}, (SELECT @q AS content),
                                     STRUCT(TRUE AS flatten_json_output))),
         top_k => {k_each}, distance_type => 'COSINE')
     ),

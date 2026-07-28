@@ -8,6 +8,7 @@ Run: `pytest test_retrieval.py -q`
 """
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -47,10 +48,31 @@ def test_every_runtime_module_is_copied_into_the_image():
     ("44107", "44107"),
     ("NSF", "nsf"),
     ("Allpoint", "allpoint"),
+    ("e-statements", "e-statements"),
 ])
 def test_tokenizer_preserves_exact_forms(text, expected):
     """Currency, percent and zip forms must survive — splitting them is what loses them."""
     assert expected in retrieval.tokenize(text)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Lakewood, OH 44107.", "44107"),      # sentence-final period
+    ("the fee is $35.", "$35"),
+    ("open 9-5,", "9-5"),
+])
+def test_tokenizer_drops_trailing_punctuation(text, expected):
+    """A doc token of "44107." never matches a query token of "44107". This exact mismatch
+    made zip-code search silently return nothing server-side while offline tests passed."""
+    assert expected in retrieval.tokenize(text)
+
+
+def test_python_and_sql_share_one_token_pattern():
+    """The tokenizer exists twice — in Python and inside the BigQuery SQL. They MUST come
+    from the same constant; independently maintained copies already drifted once."""
+    sql = retrieval.hybrid_sql("proj", "ds")
+    literals = re.findall(r"r'([^']+)'", sql)
+    assert literals, "no regex literal found in the SQL"
+    assert all(lit == retrieval.TOKEN_PATTERN for lit in literals), literals
 
 
 def test_tokenizer_drops_single_chars():
@@ -127,6 +149,12 @@ def test_hybrid_sql_contains_both_retrievers_and_fusion():
     sql = retrieval.hybrid_sql("proj", "ds")
     for fragment in ("VECTOR_SEARCH", "ML.GENERATE_EMBEDDING", "bm25", "LOGICAL_OR", "@q"):
         assert fragment in sql, f"missing {fragment}"
+
+
+def test_generate_embedding_uses_the_model_keyword():
+    """BigQuery rejects ML.GENERATE_EMBEDDING without the MODEL keyword — dropping it made
+    the whole hybrid query fail at runtime while every offline test still passed."""
+    assert "ML.GENERATE_EMBEDDING(MODEL `proj.ds.embedding_model`" in retrieval.hybrid_sql("proj", "ds")
 
 
 def test_hybrid_sql_parameterises_the_query_text_only():
