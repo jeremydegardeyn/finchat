@@ -47,8 +47,8 @@ Two content rules:
   model can cite where an answer came from without a second lookup.
 
 ```
-architecture      182      docs/*.md
-decision-record   159      docs/adr/*.md
+architecture      184      docs/*.md
+decision-record   154      docs/adr/*.md
 governance         77      knowledge/**/*.md
 product            27      products/*/README.md
 overview            8      README.md
