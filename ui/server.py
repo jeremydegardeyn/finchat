@@ -38,6 +38,7 @@ GOLD_DATASET = os.getenv("GOLD_DATASET", "")
 LOANS_DATASET = os.getenv("LOANS_DATASET", "")
 GRAPH_DATASET = os.getenv("GRAPH_DATASET", "")  # knowledge graph (customer_360, kg_*)
 EVAL_DATASET = os.getenv("EVAL_DATASET", "")    # live-eval: conversation_log capture
+KB_DATASET = os.getenv("KB_DATASET", "")        # kb_chunks (customer) + platform_chunks (docs/24)
 DATA_AGENT_ID = os.getenv("DATA_AGENT_ID", "")  # persistent Gemini Data Agent (ADR-0018)
 # Anonymous analytics tier (ADR-0019): unauthenticated Ask-the-Data runs as this
 # low-privilege SA (masked reader, NO fine-grained read) via impersonation — never

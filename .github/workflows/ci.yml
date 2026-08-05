@@ -17,7 +17,17 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install test deps
-        run: pip install pytest
+        run: pip install pytest pyflakes
+
+      # Catches undefined names before they become a runtime NameError in a code path
+      # nobody exercised. KB_DATASET shipped to prod referenced-but-never-defined and
+      # only surfaced when a user asked a platform question; pyflakes flagged all three
+      # occurrences in under a second. Scoped to undefined-name errors deliberately -
+      # a style linter here would be noise nobody reads.
+      - name: Static check — undefined names
+        run: |
+          python -m pyflakes ui/*.py scripts/*.py products/*/*/*.py products/*/*/*/*.py             2>/dev/null | grep -E "undefined name" && {
+              echo "::error::undefined name(s) found — see above"; exit 1; } || true
       - name: Pipeline transform tests (Beam-free)
         working-directory: products/transactions/pipeline
         run: pytest test_transforms.py -q
