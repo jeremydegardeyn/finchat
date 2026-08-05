@@ -989,76 +989,11 @@ async def _run_platform(q: str) -> dict:
             "sources": sorted({r["source_path"] for r in rows})}
 
 
-_PLATFORM_WORDS = ("adr", "architecture", "how does finchat", "how is finchat", "why did we",
-                   "why was", "runbook", "deploy", "terraform", "module", "repo",
-                   "gateway", "registry", "pipeline", "ci ", "cicd", "eval harness",
-                   "increment", "reference implementation", "decision record", "codebase",
-                   "implemented", "supported", "what does finchat",
-                   # Added after the router silently fell back for a full session: these
-                   # only appear when someone is asking about the SYSTEM, never about the
-                   # bank's data. The heuristic has to stand on its own, because the day
-                   # it is reached is the day the model path is already failing.
-                   "for finchat", "in finchat", "of finchat", "finchat's",
-                   "auth pattern", "authentication", "sign-in", "sign in", "oauth",
-                   "token budget", "budget", "rate limit", "quota", "service account",
-                   "identity", "persona", "permission", "iam", "scope",
-                   "agent", "canary", "drift", "pinning", "model version",
-                   "bigtable", "spanner", "firestore", "cloud run", "bigquery omni",
-                   "schema of", "how do you", "how do we", "does finchat", "can finchat")
-
-_KB_WORDS = ("fee", "polic", "hour", "branch", "atm", " open", "close", "term", "condition",
-             "privacy", "eligib", "require", "interest", "rate", "offer", "document", "contact",
-             "support", "location", "how do i", "what is a", "limit", "disclosure")
-_AN_WORDS = ("how many", "count", "number of", "total", "sum", "average", "avg", "median", "top ",
-             " most ", "least", "list ", "per segment", "by segment", "per customer", "distribution",
-             "breakdown", "customers with", "which customer", "trend", "over time", "compare",
-             "percentage", "ratio", "largest", "smallest", "highest", "lowest", "how much")
-_SEM_WORDS = ("what does", "what is a ", "definition", "defined", "define", "mean", "how is ",
-              "calculated", "computed", "what columns", "what fields", "schema", "join",
-              "related to", "what's in", "what is in", "contain", "which view", "which table",
-              "data model", "column mean")
-
-
-def _hits(ql: str, words) -> int:
-    """Count keyword matches on WORD BOUNDARIES, not raw substrings.
-
-    Naive `w in ql` matched "count" inside "dim_account", so any question mentioning an
-    account scored as analytics — including "how do fact_transaction and dim_account
-    join", which is plainly a semantics question.
-
-    The boundary is enforced at the START of the keyword only, never the end. Several
-    entries are deliberate stems — "fee" for fees, "polic" for policy/policies, "eligib"
-    for eligible/eligibility — so a trailing boundary would break them and lose more than
-    it fixed. Leading-only kills the false positive ("count" preceded by "ac" fails) while
-    keeping stems working.
-    """
-    import re as _re
-    n = 0
-    for w in words:
-        if _re.search(r"(?<![a-z0-9_])" + _re.escape(w.strip()), ql):
-            n += 1
-    return n
-
-
-def _heuristic_intent(q: str) -> str:
-    ql = q.lower()
-    scores = {
-        "kb": _hits(ql, _KB_WORDS),
-        "analytics": _hits(ql, _AN_WORDS),
-        "semantics": _hits(ql, _SEM_WORDS),
-        # Weighted x2: platform terms are specific ("adr", "terraform", "runbook") where
-        # KB/analytics terms are common words, so an unweighted tie goes the wrong way.
-        "platform": 2 * _hits(ql, _PLATFORM_WORDS),
-    }
-    best = max(scores, key=scores.get)
-    if scores[best] > 0:
-        return best
-    # Nothing matched. Defaulting to analytics is a real choice with a real cost: it is
-    # why "what is the auth pattern for finchat" came back as a data query. Kept as the
-    # default because it is the most common analyst intent, but logged — a fallback that
-    # fires constantly means the router above is broken, and that should be visible.
-    print(f"intent heuristic: no keyword match, defaulting to analytics for {q[:80]!r}")
-    return "analytics"
+# Keyword routing lives in intent.py so it is testable without FastAPI — see the note
+# there on why that mattered.
+from intent import (KB_WORDS as _KB_WORDS, AN_WORDS as _AN_WORDS,  # noqa: E402,F401
+                    SEM_WORDS as _SEM_WORDS, PLATFORM_WORDS as _PLATFORM_WORDS,
+                    heuristic_intent as _heuristic_intent, hits as _hits)
 
 
 async def _classify_intent(q: str) -> str:

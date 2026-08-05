@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import server  # noqa: E402
+import intent  # noqa: E402
 
 CASES = [
     ("what is my remaining token budget", "platform"),
@@ -37,13 +37,13 @@ CASES = [
 
 @pytest.mark.parametrize("q,want", CASES)
 def test_heuristic_routes_without_the_model(q, want):
-    assert server._heuristic_intent(q) == want
+    assert intent.heuristic_intent(q) == want
 
 
 def test_platform_questions_are_not_swallowed_by_the_analytics_default():
     """The specific regression: system questions answered as data queries."""
     for q in ("what is my remaining token budget", "whatis the auth pattern for finchat"):
-        assert server._heuristic_intent(q) == "platform"
+        assert intent.heuristic_intent(q) == "platform"
 
 
 def test_classifier_asks_for_no_thinking_tokens():
