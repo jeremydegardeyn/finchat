@@ -993,7 +993,18 @@ _PLATFORM_WORDS = ("adr", "architecture", "how does finchat", "how is finchat", 
                    "why was", "runbook", "deploy", "terraform", "module", "repo",
                    "gateway", "registry", "pipeline", "ci ", "cicd", "eval harness",
                    "increment", "reference implementation", "decision record", "codebase",
-                   "implemented", "supported", "what does finchat")
+                   "implemented", "supported", "what does finchat",
+                   # Added after the router silently fell back for a full session: these
+                   # only appear when someone is asking about the SYSTEM, never about the
+                   # bank's data. The heuristic has to stand on its own, because the day
+                   # it is reached is the day the model path is already failing.
+                   "for finchat", "in finchat", "of finchat", "finchat's",
+                   "auth pattern", "authentication", "sign-in", "sign in", "oauth",
+                   "token budget", "budget", "rate limit", "quota", "service account",
+                   "identity", "persona", "permission", "iam", "scope",
+                   "agent", "canary", "drift", "pinning", "model version",
+                   "bigtable", "spanner", "firestore", "cloud run", "bigquery omni",
+                   "schema of", "how do you", "how do we", "does finchat", "can finchat")
 
 _KB_WORDS = ("fee", "polic", "hour", "branch", "atm", " open", "close", "term", "condition",
              "privacy", "eligib", "require", "interest", "rate", "offer", "document", "contact",
@@ -1008,18 +1019,46 @@ _SEM_WORDS = ("what does", "what is a ", "definition", "defined", "define", "mea
               "data model", "column mean")
 
 
+def _hits(ql: str, words) -> int:
+    """Count keyword matches on WORD BOUNDARIES, not raw substrings.
+
+    Naive `w in ql` matched "count" inside "dim_account", so any question mentioning an
+    account scored as analytics — including "how do fact_transaction and dim_account
+    join", which is plainly a semantics question.
+
+    The boundary is enforced at the START of the keyword only, never the end. Several
+    entries are deliberate stems — "fee" for fees, "polic" for policy/policies, "eligib"
+    for eligible/eligibility — so a trailing boundary would break them and lose more than
+    it fixed. Leading-only kills the false positive ("count" preceded by "ac" fails) while
+    keeping stems working.
+    """
+    import re as _re
+    n = 0
+    for w in words:
+        if _re.search(r"(?<![a-z0-9_])" + _re.escape(w.strip()), ql):
+            n += 1
+    return n
+
+
 def _heuristic_intent(q: str) -> str:
     ql = q.lower()
     scores = {
-        "kb": sum(w in ql for w in _KB_WORDS),
-        "analytics": sum(w in ql for w in _AN_WORDS),
-        "semantics": sum(w in ql for w in _SEM_WORDS),
+        "kb": _hits(ql, _KB_WORDS),
+        "analytics": _hits(ql, _AN_WORDS),
+        "semantics": _hits(ql, _SEM_WORDS),
         # Weighted x2: platform terms are specific ("adr", "terraform", "runbook") where
         # KB/analytics terms are common words, so an unweighted tie goes the wrong way.
-        "platform": 2 * sum(w in ql for w in _PLATFORM_WORDS),
+        "platform": 2 * _hits(ql, _PLATFORM_WORDS),
     }
     best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "analytics"
+    if scores[best] > 0:
+        return best
+    # Nothing matched. Defaulting to analytics is a real choice with a real cost: it is
+    # why "what is the auth pattern for finchat" came back as a data query. Kept as the
+    # default because it is the most common analyst intent, but logged — a fallback that
+    # fires constantly means the router above is broken, and that should be visible.
+    print(f"intent heuristic: no keyword match, defaulting to analytics for {q[:80]!r}")
+    return "analytics"
 
 
 async def _classify_intent(q: str) -> str:
@@ -1046,7 +1085,7 @@ async def _classify_intent(q: str) -> str:
     try:
         gw = _gw_complete(prompt, agent_id="analyst_intent_router",
                           workload_class="classification",
-                          owner="platform-ai@datadinosaur.com", max_output_tokens=8)
+                          owner="platform-ai@datadinosaur.com", max_output_tokens=16)
         if gw:
             txt = (gw[0] or "").upper()
             # PLATFORM is checked first: it is the most specific intent, and a question
@@ -1067,11 +1106,25 @@ async def _classify_intent(q: str) -> str:
         token = _access_token()
         url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
                f"/locations/{VERTEX_LOCATION}/publishers/google/models/{ROUTER_MODEL}:generateContent")
+        # thinkingBudget=0 is load-bearing, not a tweak. Gemini 2.5 Flash is a THINKING
+        # model: with maxOutputTokens=8 it spent the entire allowance on reasoning tokens,
+        # hit MAX_TOKENS, and returned a candidate with NO parts at all. Reading
+        # ["parts"][0] then raised KeyError, the except swallowed it, and every question
+        # silently fell through to the keyword heuristic — which defaults to "analytics".
+        # A one-word classification needs no reasoning; the headroom is for safety.
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0, "maxOutputTokens": 8}}
+                "generationConfig": {"temperature": 0, "maxOutputTokens": 16,
+                                     "thinkingConfig": {"thinkingBudget": 0}}}
         r = await _client().post(url, json=body, headers={"Authorization": f"Bearer {token}"},
                                  timeout=15.0)
-        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].upper()
+        cand = (r.json().get("candidates") or [{}])[0]
+        parts = (cand.get("content") or {}).get("parts") or []
+        if not parts:
+            # Say so. The silent version of this cost a full debugging session.
+            print(f"intent router: no text returned (finishReason="
+                  f"{cand.get('finishReason')}); falling back to keywords")
+            raise ValueError("no candidate text")
+        txt = (parts[0].get("text") or "").upper()
         if "PLATFORM" in txt:
             return "platform"
         if "SEMANTIC" in txt:

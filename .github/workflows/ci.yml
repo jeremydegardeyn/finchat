@@ -46,6 +46,9 @@ jobs:
       - name: UI image — every runtime module is COPYed
         working-directory: ui
         run: pytest test_ui_image.py -q
+      - name: Analyst intent router — routing + no-thinking guard
+        working-directory: ui
+        run: pytest test_intent_router.py -q
       - name: Model pinning + canary drift control tests (ADR-0022)
         run: pytest scripts/test_canary_eval.py -q
       - name: Canary wiring smoke (no live endpoint)
