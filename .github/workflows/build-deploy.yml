@@ -64,6 +64,17 @@ jobs:
             echo "::endgroup::"
           done
 
+      # The platform-docs corpus is a build artifact of the repo, so it goes stale the
+      # moment an ADR lands. docs/24 flagged this as a known gap and it proved itself
+      # within the hour: two new docs and a corrected ADR were unsearchable until someone
+      # remembered to re-run the script. Embedding ~455 chunks costs cents, so refreshing
+      # unconditionally is cheaper than reasoning about whether it is needed.
+      - name: Refresh platform docs corpus (ADR-0024 / docs-24)
+        continue-on-error: true   # never block a deploy on the search corpus
+        run: |
+          pip install --quiet google-cloud-bigquery
+          bash products/transactions/agent/kb/setup_platform_rag.sh "${ENV}"
+
       - name: Deploy Cloud Run services
         env:
           # Model pins (ADR-0022). Set these as repo/environment variables to move a call

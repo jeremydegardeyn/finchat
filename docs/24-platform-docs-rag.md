@@ -82,8 +82,14 @@ Re-run after documentation changes:
 ./products/transactions/agent/kb/setup_platform_rag.sh prod
 ```
 
-Embedding ~450 chunks costs cents, so re-running is cheaper than reasoning about whether
-it is needed. This is deliberately not wired into CI yet — see the limits below.
+Embedding ~455 chunks costs cents, so re-running is cheaper than reasoning about whether
+it is needed.
+
+**This now runs on every deploy** (`build-deploy.yml`, `continue-on-error`), because the
+gap below proved itself within an hour of being written down: two new docs and a corrected
+ADR sat unsearchable until someone remembered the script. The step never blocks a deploy —
+a stale search corpus is a worse outcome than a failed one, but not worse than a failed
+deployment.
 
 ## Verifying retrieval
 
@@ -103,9 +109,10 @@ distances 0.289–0.309.
 
 ## Known limits
 
-- **No CI refresh.** A merged ADR is not searchable until someone re-runs the script. The
-  honest fix is a build-deploy step; until then the corpus can lag the repo, and an answer
-  can be confidently out of date. This is the most likely way it misleads.
+- ~~**No CI refresh.**~~ **Closed** — `build-deploy.yml` refreshes the corpus on every
+  deploy. Residual risk: the step is `continue-on-error`, so a silent failure leaves the
+  corpus stale without failing anything. Check `platform_chunks` row count if an answer
+  looks dated.
 - **No hybrid retrieval or reranking.** The customer KB has BM25 + RRF + a cross-encoder
   rerank; this path is dense-only. Exact-token questions ("what does `DRIFT-3` do") are
   the weak case — dense embeddings are poor at rare literal tokens, which is exactly why
