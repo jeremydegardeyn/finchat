@@ -61,3 +61,9 @@ variable "labels" {
   type    = map(string)
   default = {}
 }
+
+variable "cpu_idle" {
+  type        = bool
+  description = "Allocate CPU only during requests. True keeps idle cost at ~$0; false bills continuously for a service that scales to zero anyway."
+  default     = true
+}

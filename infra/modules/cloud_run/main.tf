@@ -24,6 +24,10 @@ resource "google_cloud_run_v2_service" "this" {
           memory = var.memory
         }
         startup_cpu_boost = var.cpu_boost
+        # Allocate CPU only while a request is in flight. This is the basis of the
+        # near-zero idle cost premise (ADR-0002) and was previously left unset, so
+        # Terraform cleared whatever the live service had. State it explicitly.
+        cpu_idle = var.cpu_idle
       }
       dynamic "env" {
         for_each = var.env_vars
