@@ -775,6 +775,81 @@ async def _run_okf(q: str) -> dict:
             "model_requested": SEMANTICS_MODEL, "model_served": _served_version(payload)}
 
 
+async def _run_platform(q: str) -> dict:
+    """Answer 'how does FinChat work' from the repo's own documentation (docs/24).
+
+    A separate corpus from the customer KB by design: that one answers fees and branch
+    hours, and the Banking Assistant grounds customer answers in whatever it returns.
+    Repo docs live in platform_chunks and are reachable from the analyst/admin surface
+    only.
+    """
+    token = _access_token()
+    if not (token and GCP_PROJECT and KB_DATASET):
+        return {"mode": "platform", "error": "platform docs not configured"}
+
+    sql = f"""
+      SELECT base.title AS title, base.category AS category,
+             base.source_path AS source_path, base.content AS content
+      FROM VECTOR_SEARCH(
+        TABLE `{GCP_PROJECT}.{KB_DATASET}.platform_chunks`, 'embedding',
+        (SELECT ml_generate_embedding_result AS embedding
+         FROM ML.GENERATE_EMBEDDING(
+           MODEL `{GCP_PROJECT}.{KB_DATASET}.embedding_model`,
+           (SELECT @q AS content),
+           STRUCT(TRUE AS flatten_json_output))),
+        top_k => 6, distance_type => 'COSINE')
+    """
+    try:
+        from google.cloud import bigquery
+        client = bigquery.Client(project=GCP_PROJECT)
+        job = client.query(sql, job_config=bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("q", "STRING", q)]))
+        rows = [dict(r) for r in job.result()]
+    except Exception as e:
+        return {"mode": "platform", "error": f"platform search unavailable: {type(e).__name__}"}
+
+    if not rows:
+        return {"mode": "platform", "answer": "Nothing in the repo documentation covers that.",
+                "sources": []}
+
+    snippets = "\n\n---\n\n".join(
+        f"[{r['source_path']}] {r['title']}\n{r['content'][:2500]}" for r in rows)
+    prompt = (
+        "You answer questions about the FinChat platform for an engineer or architect, "
+        "using ONLY the repository documentation below. Cite the source path in "
+        "parentheses after each claim, e.g. (docs/adr/0023-agent-registry-and-identity.md). "
+        "If the documentation does not cover it, say so plainly rather than inferring — "
+        "a confident wrong answer about our own architecture is worse than no answer.\n\n"
+        f"=== REPOSITORY DOCUMENTATION ===\n{snippets}\n=== END ===\n\n"
+        f"Question: {q}")
+
+    gw = _gw_complete(prompt, agent_id="platform_docs_assistant",
+                      workload_class="grounded_generation",
+                      owner="platform-ai@datadinosaur.com", max_output_tokens=1500)
+    if gw:
+        text, _, _ = gw
+    else:
+        url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
+               f"/locations/{VERTEX_LOCATION}/publishers/google/models/{SEMANTICS_MODEL}:generateContent")
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1500}}
+        try:
+            r = await _client().post(url, json=body,
+                                     headers={"Authorization": f"Bearer {token}"}, timeout=45.0)
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            return {"mode": "platform", "error": f"platform answer unavailable: {type(e).__name__}"}
+
+    return {"mode": "platform", "answer": text or "(no answer)",
+            "sources": sorted({r["source_path"] for r in rows})}
+
+
+_PLATFORM_WORDS = ("adr", "architecture", "how does finchat", "how is finchat", "why did we",
+                   "why was", "runbook", "deploy", "terraform", "module", "repo",
+                   "gateway", "registry", "pipeline", "ci ", "cicd", "eval harness",
+                   "increment", "reference implementation", "decision record", "codebase",
+                   "implemented", "supported", "what does finchat")
+
 _KB_WORDS = ("fee", "polic", "hour", "branch", "atm", " open", "close", "term", "condition",
              "privacy", "eligib", "require", "interest", "rate", "offer", "document", "contact",
              "support", "location", "how do i", "what is a", "limit", "disclosure")
@@ -794,6 +869,9 @@ def _heuristic_intent(q: str) -> str:
         "kb": sum(w in ql for w in _KB_WORDS),
         "analytics": sum(w in ql for w in _AN_WORDS),
         "semantics": sum(w in ql for w in _SEM_WORDS),
+        # Weighted x2: platform terms are specific ("adr", "terraform", "runbook") where
+        # KB/analytics terms are common words, so an unweighted tie goes the wrong way.
+        "platform": 2 * sum(w in ql for w in _PLATFORM_WORDS),
     }
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else "analytics"
@@ -803,7 +881,7 @@ async def _classify_intent(q: str) -> str:
     """Decide ANALYTICS vs KB via Gemini (Vertex), falling back to a keyword
     heuristic if the model isn't reachable (e.g. SA lacks aiplatform.user)."""
     prompt = (
-        "You route a bank analyst's question to one of three tools. Reply with ONE word.\n"
+        "You route a bank analyst's question to one of four tools. Reply with ONE word.\n"
         "ANALYTICS = a quantitative question about the bank's DATA VALUES (counts, sums, averages, "
         "lists, per-segment/per-customer metrics over transactions, accounts, customers, loans, "
         "overdrafts).\n"
@@ -812,7 +890,11 @@ async def _classify_intent(q: str) -> str:
         "SEMANTICS = a question about the DATA MODEL ITSELF — what a metric means, how it is "
         "defined/calculated, what a table or view contains, or how tables join. (Not a data "
         "value; not a policy.)\n"
-        f"Question: {q}\nAnswer (ANALYTICS, KB, or SEMANTICS):")
+        "PLATFORM = a question about how the FinChat PLATFORM ITSELF is built or operated — "
+        "architecture, an ADR or design decision, a service, module, pipeline, the gateway, "
+        "the agent registry, CI/CD, Terraform, runbooks, or what the platform supports. "
+        "(About the SYSTEM, not the bank's data or the bank's policies.)\n"
+        f"Question: {q}\nAnswer (ANALYTICS, KB, SEMANTICS, or PLATFORM):")
     # Governed path first. Intent routing is the highest-volume, cheapest call site, so
     # it is also the one the gateway clamps to the standard tier — a one-word answer must
     # never reach a premium model.
@@ -822,6 +904,11 @@ async def _classify_intent(q: str) -> str:
                           owner="platform-ai@datadinosaur.com", max_output_tokens=8)
         if gw:
             txt = (gw[0] or "").upper()
+            # PLATFORM is checked first: it is the most specific intent, and a question
+            # like "how is the analytics pipeline built" contains tokens that would
+            # otherwise match ANALYTICS.
+            if "PLATFORM" in txt:
+                return "platform"
             if "SEMANTIC" in txt:
                 return "semantics"
             if "KB" in txt and "ANALYTIC" not in txt:
@@ -840,6 +927,8 @@ async def _classify_intent(q: str) -> str:
         r = await _client().post(url, json=body, headers={"Authorization": f"Bearer {token}"},
                                  timeout=15.0)
         txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].upper()
+        if "PLATFORM" in txt:
+            return "platform"
         if "SEMANTIC" in txt:
             return "semantics"
         if "KB" in txt and "ANALYTIC" not in txt:
@@ -896,6 +985,7 @@ async def analyst_ask(request: Request):
     utok = request.headers.get("X-User-Access-Token") or None
     res = await (_run_ca(q, user_token=utok) if mode == "analytics"
                  else _run_kb(q) if mode == "kb"
+                 else _run_platform(q) if mode == "platform"
                  else _run_okf(q))
     _latency_ms = int((_time.perf_counter() - _t0) * 1000)
     # Capture for live eval; for analytics the generated SQL + rows are the grounding context.

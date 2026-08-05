@@ -128,6 +128,7 @@ finchat/
 | — | Storage Decision Framework | [`docs/21`](docs/21-storage-decision-framework.md) |
 | — | AI Unit Economics (cost per successful task) | [`docs/22`](docs/22-ai-unit-economics.md) |
 | — | Gateway Transit & Bypass | [`docs/23`](docs/23-gateway-transit.md) |
+| — | Platform Docs RAG (ask FinChat about FinChat) | [`docs/24`](docs/24-platform-docs-rag.md) |
 | — | Architecture Decision Records | [`docs/adr/`](docs/adr/) |
 
 ---
