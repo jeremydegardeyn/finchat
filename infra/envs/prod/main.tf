@@ -315,3 +315,33 @@ module "agent_harness" {
   ]
   labels = local.labels
 }
+
+# Agent registry (ADR-0023) — one identity per agent, impersonated by the runtimes,
+# plus the registry + append-only action log. Service accounts and an empty dataset
+# cost nothing, so unlike the Bigtable and steward toggles this is on by default: a
+# control that ships disabled is not a control.
+module "agent_registry" {
+  source      = "../../modules/agent_registry"
+  project_id  = var.project_id
+  region      = var.region
+  env         = var.env
+  name_prefix = var.name_prefix
+  agents      = var.agents
+
+  # Runtimes that may mint short-lived credentials for an agent identity.
+  impersonator_members = [
+    "serviceAccount:${module.foundation.service_account_emails["agent"]}",
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+    "serviceAccount:${module.foundation.service_account_emails["workflow"]}",
+  ]
+  registry_readers = [
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+    "serviceAccount:${module.foundation.service_account_emails["cicd"]}",
+  ]
+  registry_writers = [
+    "serviceAccount:${module.foundation.service_account_emails["cicd"]}",
+    "serviceAccount:${module.foundation.service_account_emails["agent"]}",
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+  ]
+  labels = local.labels
+}
