@@ -5,6 +5,12 @@
 - **Deciders:** Principal Data Architect
 - **Context tags:** Security, identity, authorization, audit
 
+> **Update 2026-08-05 ([ADR-0025](0025-one-time-signin.md)).** The ID token is now obtained
+> from an authorization-code exchange rather than the GIS credential callback, so identity
+> and data access are granted in one consent. **What is verified is unchanged** — the same
+> `verify_oauth2_token` call, same signature/audience/issuer/expiry checks. Only the number
+> of consent screens moved.
+
 ## Context
 
 Personas were simulated: a dropdown set an `X-Persona` header the BFF trusted, and

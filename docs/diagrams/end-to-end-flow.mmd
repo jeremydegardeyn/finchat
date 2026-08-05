@@ -5,7 +5,7 @@
 flowchart TB
 
 %% ============ 1. WHO ASKS ============
-subgraph L1["① Consumers — persona from a verified Google identity (ADR-0016)"]
+subgraph L1["① Consumers — one consent, ever: code flow → id_token + access_token + refresh (ADR-0025)"]
   direction LR
   CUST["Customer<br/><i>anonymous</i>"]
   APPR["Loan Approver<br/><i>verified</i>"]
@@ -13,7 +13,7 @@ subgraph L1["① Consumers — persona from a verified Google identity (ADR-0016
   ADM["Platform Admin"]
 end
 
-BFF["<b>BFF</b> · Cloud Run<br/>serves the SPA · enforces routes server-side<br/>customers stay anonymous; staff routes require sign-in"]
+BFF["<b>BFF</b> · Cloud Run<br/>serves the SPA · enforces routes server-side<br/>customers stay anonymous; staff routes require sign-in<br/><i>code exchange · silent refresh · revoke on sign-out</i>"]
 L1 ==> BFF
 
 %% ============ 2. WHAT ANSWERS ============

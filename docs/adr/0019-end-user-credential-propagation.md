@@ -5,6 +5,12 @@
 - **Deciders:** Principal Cloud Architect
 - **Context tags:** Identity, least privilege, OBO, column-level security, data masking
 
+> **Update 2026-08-05 ([ADR-0025](0025-one-time-signin.md)).** The user access token now
+> comes from the same authorization-code exchange as the ID token, and the scope narrowed
+> from `cloud-platform` to `bigquery.readonly` — the broadest scope Google publishes was
+> being requested to run `SELECT`s. A stored refresh token means later sessions obtain it
+> silently, with no consent screen at all.
+
 ## Context
 
 After ADR-0016 (identity-resolved personas) the BFF *knows who you are*, but the

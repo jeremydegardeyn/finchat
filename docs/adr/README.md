@@ -28,6 +28,7 @@ Lightweight ADRs capturing significant, hard-to-reverse decisions and their rati
 | [0022](0022-model-version-pinning.md) | Model version pinning + scheduled canary evaluation (FINOS AIR-PREV-010) | Accepted |
 | [0023](0023-agent-registry-and-identity.md) | Agent registry, per-agent identity, and lifecycle | Accepted |
 | [0024](0024-enterprise-ai-gateway.md) | Enterprise AI Gateway as the single enforcement point | Accepted |
+| [0025](0025-one-time-signin.md) | One-time sign-in via the authorization-code flow | Accepted |
 
 _Future ADRs (planned): row/column-level security model, idempotency & exactly-once strategy,
 environment promotion gating._
