@@ -17,6 +17,7 @@ Checks
   REG-3    consequential agents declare a human-in-the-loop gate
   LIFE-1   no agent is past its recertification date
   PIN-1    production agents run a pinned model snapshot  (warning, not failure)
+           - downgraded to INFO where the provider publishes no snapshot to pin to
 
 Exit code 0 = clean, 1 = at least one failure. Warnings never fail the build.
 
@@ -32,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agents_catalog import DEFAULT_MODEL_ALIAS, agents, recert_due  # noqa: E402
+from model_pins import PINNABLE_VERIFIED, is_pinnable  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -45,12 +47,21 @@ class Findings:
     def __init__(self) -> None:
         self.failures: list[str] = []
         self.warnings: list[str] = []
+        self.infos: list[str] = []
 
     def fail(self, code: str, msg: str) -> None:
         self.failures.append(f"{code}: {msg}")
 
     def warn(self, code: str, msg: str) -> None:
         self.warnings.append(f"{code}: {msg}")
+
+    def info(self, code: str, msg: str) -> None:
+        """Something worth stating that nobody can act on.
+
+        Kept distinct from warn() on purpose: a warning nobody can clear is one people
+        learn to ignore, and an ignored warning channel stops carrying the ones that
+        matter."""
+        self.infos.append(f"{code}: {msg}")
 
 
 # --- Source scanning ---------------------------------------------------------
@@ -186,17 +197,37 @@ def check_lifecycle(registry: list[dict], f: Findings, today: date) -> None:
 
 
 def check_pinning(registry: list[dict], f: Findings) -> None:
-    """PIN-1 — model version pinning (ADR-0022). Warning, not a failure.
+    """PIN-1 — model version pinning (ADR-0022).
 
-    Running an alias is a legitimate posture; running one without having decided to is
-    not. The warning exists so the choice is visible in every build log.
+    Three outcomes, and the distinction matters:
+
+      pinned              silent
+      unpinned, pinnable  WARNING — a snapshot exists and we chose not to use it
+      unpinned, no snapshot published   INFO — there is nothing to pin to, so the
+                                        scheduled canary is the drift control
+
+    Reporting the third as a warning would nag on every build about something nobody can
+    fix, and a warning channel that cannot be cleared stops being read.
     """
+    unpinnable: list[str] = []
     for a in registry:
         alias = a.get("model_alias")
-        if alias == DEFAULT_MODEL_ALIAS:
+        if not alias or alias != DEFAULT_MODEL_ALIAS:
+            continue
+        if is_pinnable(alias):
             f.warn("PIN-1", f"{a['id']} runs the floating alias '{alias}' rather than a "
                             f"pinned snapshot — provider-side changes can alter behaviour "
                             f"without notice")
+        else:
+            unpinnable.append(a["id"])
+
+    if unpinnable:
+        # One line for the whole set rather than one per agent: it is a single fact about
+        # the provider, not ten independent findings.
+        f.info("PIN-1", f"{len(unpinnable)} agent(s) run '{DEFAULT_MODEL_ALIAS}', which "
+                        f"publishes no snapshot to pin to (verified {PINNABLE_VERIFIED}; "
+                        f"re-check with scripts/check_pinnable.py). The scheduled canary "
+                        f"is the drift control until one exists.")
 
 
 # --- Entrypoint --------------------------------------------------------------
@@ -219,6 +250,8 @@ def main() -> int:
 
     print(f"Agent registry verification — {args.env} ({len(registry)} active agents)\n")
 
+    for i in f.infos:
+        print(f"  INFO  {i}")
     for w in f.warnings:
         print(f"  WARN  {w}")
     for fail in f.failures:

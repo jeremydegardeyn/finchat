@@ -102,7 +102,7 @@ Morgan Stanley, Citi, NatWest and RBC) rather than to a catalogue authored here.
 
 | Control | Implementation | Evidence |
 |---|---|---|
-| Model version pinning | Pinned model snapshot per production call site, with the serving version logged per turn | [ADR-0022](adr/0022-model-version-pinning.md), `conversation_log.model_version` |
+| Model version pinning | Serving version logged per turn. **No snapshot is published for gemini-2.5-flash (verified 2026-08-05)**, so the canary below carries this control | [ADR-0022](adr/0022-model-version-pinning.md), `conversation_log.model_served` |
 | Pre-release evaluation gate | Offline golden-set eval enforced in CI; release blocked on regression | [eval/README](../eval/README.md) |
 | Post-release monitoring | Live LLM-judge scoring of production turns; scheduled canary against the golden set | [ADR-0015](adr/0015-live-evaluation.md), [ADR-0022](adr/0022-model-version-pinning.md) |
 | I/O screening | Model Armor on prompt and response | [ADR-0008](adr/0008-model-armor-llm-screening.md) |

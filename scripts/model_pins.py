@@ -22,14 +22,26 @@ The two halves of the control
 Half two works today and is the more important half — an alias whose serving version is
 logged per turn is a materially better position than a pin nobody verifies.
 
-Setting a pin
--------------
-Snapshot ids must be confirmed against the Model Garden listing for the region in use;
-they are not guessable and they change as versions are retired. Until a pin is set, a
-call site runs its alias and `verify_agent_registry.py` reports PIN-1 for the agents
-behind it — a declared alias, not an accidental one.
+Setting a pin — and when you cannot
+-----------------------------------
+Snapshot ids must be confirmed against the live API for the region in use; they are not
+guessable and they change as versions retire. Run `scripts/check_pinnable.py` to probe.
 
-    export FINCHAT_PIN_AGENT=<snapshot-id-from-model-garden>
+**As of 2026-08-05, gemini-2.5-flash publishes no snapshot to pin to.** Verified against
+us-central1: the publisher model reports `versionId: default`, only the bare alias and
+`@default` return 200, and `gemini-2.5-flash-001` / `@001` / dated preview forms all 404.
+The 1.5 and 2.0 generations did ship dated snapshots; 2.5 currently does not.
+
+Two consequences, both deliberate:
+
+* Setting FINCHAT_PIN_AGENT to an invented dated id produces config that 404s at
+  runtime. An unpinnable model is reported as INFO, not a warning — a warning nobody
+  can clear is one people learn to ignore, which is worse than not having it.
+* **The scheduled canary is therefore the PRIMARY drift control here, not a backup.**
+  If the provider repoints the alias, nothing in the request or the response reveals it;
+  only the fixed golden set moving does.
+
+    export FINCHAT_PIN_AGENT=<snapshot-id>   # once one exists
 """
 from __future__ import annotations
 
@@ -54,6 +66,27 @@ WORKLOAD_CLASS = {
     "JUDGE": "evaluation",
     "STEWARD": "reasoning",
 }
+
+
+# Whether the provider publishes a snapshot to pin to, VERIFIED against the live API
+# rather than assumed. This is a fact about someone else's product and it will change
+# without telling us — re-check with scripts/check_pinnable.py and update the date.
+PINNABLE_VERIFIED = "2026-08-05"
+PINNABLE = {
+    "gemini-2.5-flash": False,  # versionId=default; -001 / @001 / dated forms all 404
+    "gemini-2.5-pro": False,    # same family, same publishing pattern
+    "managed": False,           # Conversational Analytics: version governed by the service
+}
+
+
+def is_pinnable(model: str) -> bool:
+    """True when a snapshot exists to pin to.
+
+    Unknown models default to True on purpose: a NEW model is pinnable-until-proven-
+    otherwise, so it surfaces as a warning to action rather than being silently excused
+    by an omission in the table above.
+    """
+    return PINNABLE.get(model, True)
 
 
 def model_for(site: str) -> str:
@@ -94,6 +127,7 @@ def pin_report() -> list[dict]:
             "requested": model_for(site),
             "alias": alias,
             "pinned": is_pinned(site),
+            "pinnable": is_pinnable(alias),
             "workload_class": WORKLOAD_CLASS[site],
         }
         for site, alias in ALIASES.items()
