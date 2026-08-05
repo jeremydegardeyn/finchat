@@ -310,7 +310,7 @@ function renderAnalyst(){
   <div class="grid">
     ${catalogCard}
     <div class="card" style="grid-column:1/-1"><h3>Ask the Data <span class="pill">Conversational Analytics</span> <span class="pill">Knowledge Base · RAG</span></h3>
-      <div class="mut" style="font-size:12px;margin-bottom:6px">One assistant — it reads your question and routes it to <b>📊 Analytics</b> (queries the data products, shows the SQL), the <b>📚 Knowledge Base</b> (policy/doc RAG), or the <b>📖 Data Model</b> (metric definitions, table/view semantics, join paths) automatically. The badge on each answer shows which it used.</div>
+      <div class="mut" style="font-size:12px;margin-bottom:6px">One assistant — it reads your question and routes it to <b>📊 Analytics</b> (queries the data products, shows the SQL), the <b>📚 Knowledge Base</b> (policy/doc RAG), the <b>📖 Data Model</b> (metric definitions, table/view semantics, join paths), or <b>🛠 Platform</b> (how FinChat itself is built — ADRs, architecture, runbooks, and your live token budget) automatically. The badge on each answer shows which it used.</div>
       <div id="achat" class="chat" style="height:260px"></div>
       <div class="row" style="margin-top:8px"><input id="amsg" style="flex:1" placeholder="ask anything — e.g. 'total deposits by segment'  ·  'what are the overdraft fees?'  ·  'what does overdraft ratio mean?'"><button id="asend">Ask</button></div>
       <div id="aex" class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
@@ -326,11 +326,26 @@ function renderAnalyst(){
   const examples = ["how many customers per segment?", "total deposits by customer segment",
     "which customers have the most overdrafts?",  // → Analytics
     "what are the overdraft fees?", "when is the Lakewood branch open?", "what's the privacy policy?", // → KB
-    "what does overdraft ratio mean?", "what's in the customer_360 view?", "how do transactions join to customers?"]; // → Data Model
+    "what does overdraft ratio mean?", "what's in the customer_360 view?", "how do transactions join to customers?", // → Data Model
+    // → Platform. The budget one is answered from the live gateway meter rather than
+    // from the ADR that describes budgets, so it is a real number, not documentation.
+    "what is my remaining token budget?", "how does the agent registry work?",
+    "why did we choose Bigtable over Spanner?"];
   el("aex").innerHTML = `<span class="mut" style="font-size:12px;align-self:center">try:</span>` +
     examples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("");
   el("aex").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("amsg").value=b.textContent; analystSend(); });
-  pushAChat("a","Ask me anything about FinChat — I'll pull metrics from the governed data products, answer from the bank's policy docs, or explain the data model (metrics, views, joins), whichever fits." + (S.persona==="admin" ? "" : " Discover assets with the catalog search above."));
+  const openers = {
+    admin: "Ask me anything about FinChat. Note your Platform Admin identity has NO grant on the "
+         + "customer data products — analytics questions will be refused by BigQuery at query time "
+         + "(ADR-0019). That separation is deliberate: administering the platform is not the same as "
+         + "reading its data. Knowledge Base, Data Model and Platform questions all work.",
+    analyst: "Ask me anything about FinChat — metrics from the governed data products (PII columns "
+           + "come back masked for your grant), the bank's policy docs, the data model, or how the "
+           + "platform itself is built. Discover assets with the catalog search above.",
+  };
+  pushAChat("a", openers[S.persona] || ("Ask me anything about FinChat — I'll pull metrics from the "
+    + "governed data products, answer from the bank's policy docs, explain the data model, or tell you "
+    + "how the platform itself works. Discover assets with the catalog search above."));
 }
 
 async function catalogSearch(){
