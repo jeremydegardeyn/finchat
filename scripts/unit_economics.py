@@ -80,6 +80,11 @@ WITH cost AS (
     session_id,
     agent_id,
     workload_class,
+    -- Who the spend was charged to. NULL for autonomous work (the steward, the nightly
+    -- judge), set to the verified email when a person caused the call. Reported so the
+    -- split between "what our agents cost" and "what our people cost" is visible rather
+    -- than blended into one number that answers neither question.
+    on_behalf_of,
     tier,
     model,
     SUM(COALESCE(input_tokens, 0))  AS input_tokens,
@@ -89,7 +94,7 @@ WITH cost AS (
     AND surface = 'complete'
     AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
     AND session_id IS NOT NULL
-  GROUP BY session_id, agent_id, workload_class, tier, model
+  GROUP BY session_id, agent_id, workload_class, on_behalf_of, tier, model
 ),
 quality AS (
   SELECT conversation_id, overall
@@ -99,6 +104,7 @@ quality AS (
 SELECT
   c.workload_class,
   c.model,
+  IF(c.on_behalf_of IS NULL, 'autonomous', 'user-initiated') AS initiated_by,
   COUNT(*)                                                   AS tasks,
   COUNTIF(q.overall IS NULL)                                 AS unjudged,
   COUNTIF(q.overall >= {SUCCESS_THRESHOLD})                  AS successful,
@@ -107,7 +113,7 @@ SELECT
   ROUND(AVG(q.overall), 3)                                   AS avg_quality
 FROM cost c
 LEFT JOIN quality q ON q.conversation_id = c.session_id
-GROUP BY c.workload_class, c.model
+GROUP BY c.workload_class, c.model, initiated_by
 ORDER BY tasks DESC
 """.strip()
 
@@ -142,7 +148,8 @@ def report(rows: list[dict], tokens_only: bool) -> None:
     for r in rows:
         toks = (r["input_tokens"] or 0) + (r["output_tokens"] or 0)
         ok = r["successful"] or 0
-        line = (f"  {r['workload_class']:<22}{r['tasks']:>7}{ok:>6}"
+        wc = f"{r['workload_class']} ({(r.get('initiated_by') or '?')[:4]})"
+        line = (f"  {wc:<22}{r['tasks']:>7}{ok:>6}"
                 f"{r['unjudged']:>10}{(r['avg_quality'] if r['avg_quality'] is not None else '—'):>9}"
                 f"{toks:>12,}")
         if not tokens_only:

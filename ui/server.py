@@ -65,7 +65,7 @@ except Exception:  # pragma: no cover — BFF must start even if the client is a
 
 def _gw_complete(prompt: str, *, agent_id: str, workload_class: str,
                  owner: str | None = None, max_output_tokens: int | None = None,
-                 session_id: str | None = None):
+                 session_id: str | None = None, on_behalf_of: str | None = None):
     """Try the governed path first. Returns (text, requested, served) or None to fall back.
 
     A policy refusal (PII / budget) is allowed to propagate — retrying it directly against
@@ -81,7 +81,7 @@ def _gw_complete(prompt: str, *, agent_id: str, workload_class: str,
         return None
     r = _gw.complete(prompt, agent_id=agent_id, workload_class=workload_class,
                      owner=owner, max_output_tokens=max_output_tokens,
-                     session_id=session_id)
+                     session_id=session_id, on_behalf_of=on_behalf_of)
     if not r:
         return None
     return r.get("text", ""), r.get("model"), r.get("model_served")
@@ -870,7 +870,7 @@ async def _run_kb(q: str) -> dict:
     return {"mode": "kb", "answer": data.get("response") or "(no answer)"}
 
 
-async def _run_okf(q: str) -> dict:
+async def _run_okf(q: str, user_email: str | None = None) -> dict:
     """Answer DATA-MODEL / semantics questions (what a metric means, what a view
     contains, how tables join) grounded ONLY on the OKF concept corpus compiled from
     knowledge/ (ANALYST_KNOWLEDGE). Read-only knowledge: it explains the model, it
@@ -899,7 +899,7 @@ async def _run_okf(q: str) -> dict:
     gw = _gw_complete(prompt, agent_id="analyst_semantics",
                       workload_class="grounded_generation",
                       owner="platform-ai@datadinosaur.com", max_output_tokens=1024,
-                      session_id=turn_id)
+                      session_id=turn_id, on_behalf_of=user_email)
     if gw:
         text, requested, served = gw
         return {"mode": "okf", "answer": text or "(no answer)",
@@ -921,7 +921,11 @@ async def _run_okf(q: str) -> dict:
             "model_requested": SEMANTICS_MODEL, "model_served": _served_version(payload)}
 
 
-async def _run_platform(q: str) -> dict:
+_BUDGET_Q = ("token budget", "my budget", "remaining budget", "budget left",
+             "how many tokens", "tokens left", "my spend", "my usage", "token balance")
+
+
+async def _run_platform(q: str, user_email: str | None = None) -> dict:
     """Answer 'how does FinChat work' from the repo's own documentation (docs/24).
 
     A separate corpus from the customer KB by design: that one answers fees and branch
@@ -929,6 +933,15 @@ async def _run_platform(q: str) -> dict:
     Repo docs live in platform_chunks and are reachable from the analyst/admin surface
     only.
     """
+    # "What is my remaining token budget" is a question about live state, not about
+    # documentation. Answering it from the ADR that describes budgets would be a
+    # confident non-answer, so it is served from the meter instead.
+    ql = q.lower()
+    if user_email and any(w in ql for w in _BUDGET_Q):
+        live = await _live_budget(user_email)
+        if live:
+            return live
+
     token = _access_token()
     if not (token and GCP_PROJECT and KB_DATASET):
         return {"mode": "platform", "error": "platform docs not configured"}
@@ -971,7 +984,8 @@ async def _run_platform(q: str) -> dict:
 
     gw = _gw_complete(prompt, agent_id="platform_docs_assistant",
                       workload_class="grounded_generation",
-                      owner="platform-ai@datadinosaur.com", max_output_tokens=1500)
+                      owner="platform-ai@datadinosaur.com", max_output_tokens=1500,
+                      on_behalf_of=user_email)
     if gw:
         text, _, _ = gw
     else:
@@ -997,7 +1011,43 @@ from intent import (KB_WORDS as _KB_WORDS, AN_WORDS as _AN_WORDS,  # noqa: E402,
                     heuristic_intent as _heuristic_intent, hits as _hits)
 
 
-async def _classify_intent(q: str) -> str:
+async def _live_budget(email: str) -> dict | None:
+    """Read this user's consumption from the gateway. None when unavailable, so the
+    caller falls through to the documentation path rather than erroring."""
+    if not (_gw and _gw.GATEWAY_URL):
+        return None
+
+    def _do():
+        import json as _json
+        import urllib.parse
+        import urllib.request
+        url = f"{_gw.GATEWAY_URL}/v1/budget/user/{urllib.parse.quote(email)}"
+        headers = {}
+        tok = _gw._id_token(_gw.GATEWAY_URL)
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers),
+                                    timeout=15) as r:
+            return _json.loads(r.read())
+
+    try:
+        import asyncio
+        d = await asyncio.to_thread(_do)
+    except Exception:
+        return None
+    used, limit, rem = d.get("used", 0), d.get("limit", 0), d.get("remaining", 0)
+    pct = round(100 * used / limit) if limit else 0
+    return {"mode": "platform",
+            "answer": (f"You have used **{used:,}** of your **{limit:,}** daily token "
+                       f"allowance ({pct}%), leaving **{rem:,}** remaining.\n\n"
+                       f"This is metered per person, not per agent: calls you initiate "
+                       f"are charged to your identity, while autonomous work (the "
+                       f"reconciliation steward, the nightly evaluator) is charged to "
+                       f"the agent that ran it. See docs/22 and ADR-0024."),
+            "sources": ["gateway /v1/budget/user", "docs/adr/0024-enterprise-ai-gateway.md"]}
+
+
+async def _classify_intent(q: str, user_email: str | None = None) -> str:
     """Decide ANALYTICS vs KB via Gemini (Vertex), falling back to a keyword
     heuristic if the model isn't reachable (e.g. SA lacks aiplatform.user)."""
     prompt = (
@@ -1021,7 +1071,8 @@ async def _classify_intent(q: str) -> str:
     try:
         gw = _gw_complete(prompt, agent_id="analyst_intent_router",
                           workload_class="classification",
-                          owner="platform-ai@datadinosaur.com", max_output_tokens=16)
+                          owner="platform-ai@datadinosaur.com", max_output_tokens=16,
+                          on_behalf_of=user_email)
         if gw:
             txt = (gw[0] or "").upper()
             # PLATFORM is checked first: it is the most specific intent, and a question
@@ -1115,12 +1166,14 @@ async def analyst_ask(request: Request):
         return JSONResponse({"error": "empty message"}, status_code=400)
     import time as _time
     _t0 = _time.perf_counter()
-    mode = await _classify_intent(q)
+    _u = _verify_user(request)
+    _email = _u["email"] if _u else None
+    mode = await _classify_intent(q, _email)
     utok = request.headers.get("X-User-Access-Token") or None
     res = await (_run_ca(q, user_token=utok) if mode == "analytics"
                  else _run_kb(q) if mode == "kb"
-                 else _run_platform(q) if mode == "platform"
-                 else _run_okf(q))
+                 else _run_platform(q, _email) if mode == "platform"
+                 else _run_okf(q, _email))
     _latency_ms = int((_time.perf_counter() - _t0) * 1000)
     # Capture for live eval; for analytics the generated SQL + rows are the grounding context.
     ctx = None
@@ -1132,6 +1185,48 @@ async def analyst_ask(request: Request):
                     model_served=res.get("model_served"),
                     conversation_id=res.get("turn_id"))
     return res
+
+
+@app.get("/api/me/budget")
+async def my_budget(request: Request):
+    """The signed-in user's own token consumption today.
+
+    Exists so "what is my remaining token budget" is answered from the control rather
+    than from documentation about the control. Scoped to the CALLER — the email comes
+    from the verified ID token, never from a query parameter, so one user cannot read
+    another's consumption by asking nicely.
+    """
+    u = _verify_user(request)
+    if not u:
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+    if not (_gw and _gw.GATEWAY_URL):
+        return {"configured": False,
+                "note": "No gateway configured, so nothing is metered. Calls run "
+                        "direct-to-Vertex and are counted as bypasses (docs/23)."}
+
+    def _do():
+        import json as _json
+        import urllib.parse
+        import urllib.request
+        url = (f"{_gw.GATEWAY_URL}/v1/budget/user/"
+               f"{urllib.parse.quote(u['email'])}")
+        headers = {}
+        tok = _gw._id_token(_gw.GATEWAY_URL)
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return _json.loads(r.read())
+
+    try:
+        import asyncio
+        data = await asyncio.to_thread(_do)
+    except Exception as e:
+        return JSONResponse({"error": f"budget unavailable: {type(e).__name__}"},
+                            status_code=502)
+    p = u["persona"] or "customer"
+    return {"configured": True, "persona": p,
+            "persona_label": PERSONA_LABELS.get(p, "Customer"), **data}
 
 
 @app.get("/api/gateway/transit")
