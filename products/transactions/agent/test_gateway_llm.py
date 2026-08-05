@@ -84,6 +84,43 @@ def test_function_call_and_response_turns_are_preserved():
     assert body["contents"][2]["parts"][0]["functionResponse"]["response"]["balance"] == 1240.55
 
 
+def test_body_is_json_serializable_with_binary_content():
+    """The bug that reached production. pydantic's default (python) mode leaves bytes as
+    bytes, so json.dumps raised TypeError at request time and killed the agent turn.
+    Every fixture here used plain text, so nothing caught it. mode="json" fixes it."""
+    from google.adk.models import LlmRequest
+    from google.genai import types
+    req = LlmRequest(model="gemini-2.5-flash", contents=[
+        types.Content(role="user", parts=[
+            types.Part(text="what are the overdraft fees?"),
+            types.Part(inline_data=types.Blob(mime_type="application/pdf",
+                                              data=b"PDF-binary-bytes")),
+        ])])
+    json.dumps(gl._build_body(req))  # must not raise
+
+
+def test_enums_in_the_config_are_serializable():
+    """Same failure class: a Schema type enum is not a str until mode="json"."""
+    from google.adk.models import LlmRequest
+    from google.genai import types
+    cfg = types.GenerateContentConfig(tools=[types.Tool(
+        function_declarations=[types.FunctionDeclaration(
+            name="search_knowledge_base", description="KB search",
+            parameters=types.Schema(type=types.Type.OBJECT, properties={
+                "query": types.Schema(type=types.Type.STRING)}))])])
+    req = LlmRequest(model="m", contents=[
+        types.Content(role="user", parts=[types.Part(text="hi")])], config=cfg)
+    json.dumps(gl._build_body(req))
+
+
+def test_unserializable_payload_falls_back_instead_of_killing_the_turn(monkeypatch):
+    """Defence in depth: even if a future field slips through, the agent must degrade to
+    the direct path rather than raise. Serialization used to sit outside the try."""
+    monkeypatch.setattr(gl, "GATEWAY_URL", "https://gw.example")
+    monkeypatch.setattr(gl, "_id_token", lambda a: None)
+    assert gl._post({"body": {"bad": b"raw bytes"}}) is None
+
+
 def test_request_without_tools_omits_the_key():
     assert "tools" not in gl._build_body(_request(with_tools=False))
 

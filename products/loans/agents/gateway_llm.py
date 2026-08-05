@@ -78,17 +78,23 @@ def _id_token(audience: str) -> str | None:
 def _build_body(llm_request) -> dict:
     """Serialize an ADK LlmRequest into a Vertex generateContent body.
 
-    `by_alias=True` is what produces camelCase (`functionDeclarations`, `systemInstruction`)
-    — google-genai types are snake_case in Python with camelCase wire aliases, and sending
-    the snake_case form yields a confusing 400 rather than an obvious one.
+    Two pydantic arguments are load-bearing and neither is optional:
+
+    * `by_alias=True` produces camelCase (`functionDeclarations`, `systemInstruction`).
+      google-genai types are snake_case in Python with camelCase wire aliases, and the
+      snake_case form yields a confusing 400 rather than an obvious one.
+    * `mode="json"` converts bytes, enums and datetimes to JSON-safe values. Without it
+      pydantic returns live Python objects — an inline_data Blob keeps raw `bytes` and
+      json.dumps raises TypeError at request time. Text-only fixtures never hit this,
+      which is exactly how it reached production.
     """
     body: dict = {
-        "contents": [c.model_dump(exclude_none=True, by_alias=True)
+        "contents": [c.model_dump(mode="json", exclude_none=True, by_alias=True)
                      for c in (llm_request.contents or [])],
     }
     cfg = getattr(llm_request, "config", None)
     if cfg is not None:
-        dumped = cfg.model_dump(exclude_none=True, by_alias=True)
+        dumped = cfg.model_dump(mode="json", exclude_none=True, by_alias=True)
         # systemInstruction and tools are top-level on the wire, not inside
         # generationConfig; everything else that remains is generation config.
         for key in ("systemInstruction", "tools", "toolConfig", "safetySettings",
@@ -104,12 +110,25 @@ def _build_body(llm_request) -> dict:
 
 
 def _post(payload: dict) -> dict | None:
+    """POST to the gateway. None on any failure the caller should fall back from.
+
+    Serialization is inside the try deliberately. It used to sit outside, so a payload
+    pydantic could not encode raised straight through generate_content_async and killed
+    the agent turn — the fallback only ever covered transport. An unencodable request is
+    a bug in this adapter, and a bug here must degrade to the direct path rather than
+    take the agent down.
+    """
+    try:
+        data = json.dumps(payload).encode()
+    except (TypeError, ValueError) as e:
+        print(f"gateway_llm: request not serializable ({e}); falling back to direct")
+        return None
+
     headers = {"Content-Type": "application/json"}
     tok = _id_token(GATEWAY_URL)
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
-    req = urllib.request.Request(f"{GATEWAY_URL}/v1/generate",
-                                 data=json.dumps(payload).encode(),
+    req = urllib.request.Request(f"{GATEWAY_URL}/v1/generate", data=data,
                                  method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=GATEWAY_TIMEOUT) as r:
