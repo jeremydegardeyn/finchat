@@ -323,22 +323,40 @@ function renderAnalyst(){
   }
   el("asend").onclick = analystSend;
   el("amsg").addEventListener("keydown",e=>{ if(e.key==="Enter") analystSend(); });
-  const examples = ["how many customers per segment?", "total deposits by customer segment",
-    "which customers have the most overdrafts?",  // → Analytics
-    "what are the overdraft fees?", "when is the Lakewood branch open?", "what's the privacy policy?", // → KB
-    "what does overdraft ratio mean?", "what's in the customer_360 view?", "how do transactions join to customers?", // → Data Model
-    // → Platform. The budget one is answered from the live gateway meter rather than
-    // from the ADR that describes budgets, so it is a real number, not documentation.
-    "what is my remaining token budget?", "how does the agent registry work?",
-    "why did we choose Bigtable over Spanner?"];
+  // Chips are tagged by the route they exercise so they can be filtered per persona.
+  // Offering an analytics chip to Platform Admin is offering a button that is guaranteed
+  // to be refused by BigQuery — the refusal is the correct behaviour (ADR-0019), but a
+  // suggestion that cannot work reads as a broken feature rather than a control.
+  const EXAMPLES = [
+    { route: "analytics", q: "how many customers per segment?" },
+    { route: "analytics", q: "total deposits by customer segment" },
+    { route: "analytics", q: "which customers have the most overdrafts?" },
+    { route: "kb",        q: "what are the overdraft fees?" },
+    { route: "kb",        q: "when is the Lakewood branch open?" },
+    { route: "kb",        q: "what's the privacy policy?" },
+    { route: "semantics", q: "what does overdraft ratio mean?" },
+    { route: "semantics", q: "what's in the customer_360 view?" },
+    { route: "semantics", q: "how do transactions join to customers?" },
+    // Answered from the live gateway meter, not from the ADR describing budgets.
+    { route: "platform",  q: "what is my remaining token budget?" },
+    { route: "platform",  q: "how does the agent registry work?" },
+    { route: "platform",  q: "why did we choose Bigtable over Spanner?" },
+  ];
+  // Platform Admin holds no grant on the customer data products, so analytics is
+  // genuinely unavailable to it rather than merely discouraged.
+  const canQueryData = S.persona !== "admin";
+  const examples = EXAMPLES.filter(e => canQueryData || e.route !== "analytics").map(e => e.q);
   el("aex").innerHTML = `<span class="mut" style="font-size:12px;align-self:center">try:</span>` +
-    examples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("");
+    examples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("") +
+    (canQueryData ? "" : `<span class="mut" style="font-size:12px;align-self:center">` +
+      `· analytics examples hidden — this identity has no grant on the data products (ADR-0019)</span>`);
   el("aex").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("amsg").value=b.textContent; analystSend(); });
   const openers = {
-    admin: "Ask me anything about FinChat. Note your Platform Admin identity has NO grant on the "
-         + "customer data products — analytics questions will be refused by BigQuery at query time "
-         + "(ADR-0019). That separation is deliberate: administering the platform is not the same as "
-         + "reading its data. Knowledge Base, Data Model and Platform questions all work.",
+    admin: "Ask me anything about FinChat — the bank's policy docs, the data model, or how the "
+         + "platform itself is built. Analytics is deliberately unavailable to this identity: "
+         + "Platform Admin holds no grant on the customer data products, so BigQuery refuses those "
+         + "queries against your own credentials (ADR-0019). Administering the platform is not the "
+         + "same as being allowed to read its data.",
     analyst: "Ask me anything about FinChat — metrics from the governed data products (PII columns "
            + "come back masked for your grant), the bank's policy docs, the data model, or how the "
            + "platform itself is built. Discover assets with the catalog search above.",
