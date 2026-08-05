@@ -26,6 +26,10 @@ locals {
       "roles/geminidataanalytics.dataAgentStatelessUser", # Analyst: Conversational Analytics chat (inline fallback)
       "roles/geminidataanalytics.dataAgentUser",          # Analyst: chat via the persistent Data Agent (ADR-0018)
       "roles/aiplatform.user",                            # Analyst: Gemini intent router (KB vs analytics)
+      # One-time sign-in (ADR-0025): the BFF exchanges an auth code for an identity plus
+      # an access token, and stores the refresh token so later sessions never prompt.
+      "roles/datastore.user",               # refresh-token store (Firestore)
+      "roles/secretmanager.secretAccessor", # OAuth client secret for the code exchange
     ] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [
       "roles/bigquery.dataEditor",

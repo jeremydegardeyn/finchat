@@ -545,22 +545,81 @@ function stat(name, ok){ return `<div class="row" style="justify-content:space-b
 // ---------- identity (Google Sign-In; ADR-0016) ----------
 // Signed out -> Customer view (no login needed). Staff sign in with Google; the BFF
 // verifies the ID token and maps the email to a persona (approver/analyst/admin).
-function initGsi(clientId){
+function initGsi(clientId, codeFlow, scope){
   S.oauthClientId = clientId;
+  S.codeFlow = !!codeFlow;
+  S.authScope = scope || "openid email profile https://www.googleapis.com/auth/bigquery.readonly";
   const s = document.createElement("script");
   s.src = "https://accounts.google.com/gsi/client"; s.async = true; s.defer = true;
   s.onload = () => {
-    google.accounts.id.initialize({ client_id: clientId, callback: onGoogleCred, auto_select: true });
+    // GIS is still initialised in the two-grant fallback path. With the code flow on,
+    // sign-in is our own button so the consent happens inside a real user gesture -
+    // which is the whole reason the old warm-up got popup-blocked and surfaced as a
+    // second login on first chat.
+    if (!S.codeFlow) {
+      google.accounts.id.initialize({ client_id: clientId, callback: onGoogleCred, auto_select: true });
+    }
     renderAuthUI();
   };
   document.head.appendChild(s);
 }
+
+// ONE consent for identity AND data access (ADR-0025). initCodeClient returns a
+// short-lived code; the BFF exchanges it for an id_token (persona, verified exactly as
+// before) + an access_token (BigQuery as the user) + a refresh_token (so this never
+// happens again). Runs from a button click, so the popup is never blocked.
+function signInWithCode(){
+  if (!(S.codeFlow && S.oauthClientId && window.google)) return;
+  try {
+    google.accounts.oauth2.initCodeClient({
+      client_id: S.oauthClientId,
+      scope: S.authScope,
+      ux_mode: "popup",
+      callback: async (resp) => {
+        if (!resp || !resp.code) return;
+        let r = {};
+        try {
+          r = await (await fetch("/api/auth/exchange", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: resp.code }) })).json();
+        } catch(e){ return; }
+        if (!r.signed_in) return;
+        S.idtok = r.id_token;
+        S.accessTok = r.access_token || null;
+        S.accessTokExp = Date.now() + ((r.expires_in || 3600) - 60) * 1000;
+        S.user = { email: r.email, persona: r.persona, personaLabel: r.persona_label || r.persona };
+        S.persona = r.persona;
+        // persistent === null means Google issued no refresh token (or it could not be
+        // stored), so the next session WILL prompt again. Say so rather than claiming a
+        // permanence we do not have.
+        S.authPersistent = r.persistent === true;
+        renderAuthUI(); setTabs();
+      },
+    }).requestCode();
+  } catch(e){}
+}
 // Identity propagation (ADR-0019): staff grant a one-time OAuth consent so analytics
 // queries run AS THEM — BigQuery evaluates their IAM/policy tags (values vs masked
 // vs denied). Token cached ~1h; silently re-requested when expired.
-function ensureAccessToken(){
+async function ensureAccessToken(){
+  if (!S.user || !S.oauthClientId) return null;
+  if (S.accessTok && S.accessTokExp > Date.now()+60000) return S.accessTok;
+  // Silent path first: the BFF mints a new access token from the stored refresh token
+  // with no user interaction at all. This is what "log in once" actually means.
+  if (S.codeFlow && S.idtok) {
+    try {
+      const r = await (await fetch("/api/auth/refresh", {
+        method: "POST", headers: { "X-User-Token": S.idtok } })).json();
+      if (r && r.access_token) {
+        S.accessTok = r.access_token;
+        S.accessTokExp = Date.now() + ((r.expires_in||3600)-60)*1000;
+        return S.accessTok;
+      }
+    } catch(e){}
+    // No stored grant (first ever, or the user revoked at Google). Fall through to the
+    // interactive client below rather than silently running without data access.
+  }
   return new Promise((resolve)=>{
-    if (!S.user || !S.oauthClientId) return resolve(null);
     if (S.accessTok && S.accessTokExp > Date.now()+60000) return resolve(S.accessTok);
     try {
       const tc = google.accounts.oauth2.initTokenClient({
@@ -587,8 +646,15 @@ function renderAuthUI(){
       <button class="ghost" id="signout">Sign out</button>`;
     el("signout").onclick = signOut;
   } else {
-    box.innerHTML = `<div id="gsibtn"></div>`;
-    try { google.accounts.id.renderButton(el("gsibtn"), { theme:"outline", size:"medium" }); } catch(e){}
+    if (S.codeFlow) {
+      // Our own button: the click IS the gesture that carries the consent popup, so
+      // identity and data access are granted together in one screen.
+      box.innerHTML = `<button class="ghost" id="signin">Sign in with Google</button>`;
+      el("signin").onclick = signInWithCode;
+    } else {
+      box.innerHTML = `<div id="gsibtn"></div>`;
+      try { google.accounts.id.renderButton(el("gsibtn"), { theme:"outline", size:"medium" }); } catch(e){}
+    }
   }
 }
 async function onGoogleCred(resp){
@@ -607,8 +673,13 @@ async function onGoogleCred(resp){
   if (S.user) { try { ensureAccessToken(); } catch(e){} }
 }
 function signOut(){
+  // Revoke server-side first: without this "sign out" only forgets the tokens in this
+  // tab while the stored refresh token keeps working, which is amnesia, not logout.
+  if (S.codeFlow && S.idtok) {
+    try { fetch("/api/auth/signout", { method:"POST", headers:{ "X-User-Token": S.idtok } }); } catch(e){}
+  }
   S.idtok = null; S.user = null; S.persona = "customer";
-  S.accessTok = null; S.accessTokExp = 0;
+  S.accessTok = null; S.accessTokExp = 0; S.authPersistent = false;
   try { google.accounts.id.disableAutoSelect(); } catch(e){}
   renderAuthUI(); setTabs();
 }
@@ -626,7 +697,7 @@ function signOut(){
     // Identity-resolved personas: no dropdown; anonymous = Customer, staff sign in.
     el("personaBox").classList.add("hidden");
     S.persona = "customer"; setTabs();
-    initGsi(auth.client_id);
+    initGsi(auth.client_id, auth.code_flow, auth.scope);
   } else {
     // Fallback (no OAuth configured): persona simulation dropdown.
     const personas = cfg.personas || [{id:"customer",label:"Customer"},{id:"employee",label:"Employee (Loan Officer)"},{id:"analyst",label:"Employee (Analyst)"},{id:"admin",label:"Platform Admin"}];

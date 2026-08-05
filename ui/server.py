@@ -151,7 +151,12 @@ def config():
                  "steward": bool(STEWARD_URL)},
         # Identity-resolved personas: when enabled the SPA shows Google Sign-In
         # instead of the persona dropdown (client_id is public by design).
-        "auth": {"enabled": _auth_enabled(), "client_id": OAUTH_CLIENT_ID},
+        # code_flow: when true the SPA uses ONE consent (auth-code) instead of the
+        # two-grant GIS path. Falls back automatically when the secret isn't configured.
+        "auth": {"enabled": _auth_enabled(), "client_id": OAUTH_CLIENT_ID,
+                 "code_flow": _code_flow_enabled(),
+                 "scope": "openid email profile "
+                          "https://www.googleapis.com/auth/bigquery.readonly"},
     }
 
 
@@ -261,6 +266,139 @@ def me(request: Request):
     p = u["persona"] or "customer"
     return {"auth_enabled": True, "signed_in": True, "email": u["email"],
             "persona": p, "persona_label": PERSONA_LABELS.get(p, "Customer")}
+
+
+# --- One-time sign-in: authorization-code flow (ADR-0025) --------------------
+# GIS gives an ID token OR an access token, never both, and neither yields the other in
+# the browser. The code flow returns both from ONE consent, plus a refresh token — which
+# is what turns "once per session" into "once, ever".
+#
+# The whole path is optional: with no client secret configured the SPA keeps using the
+# two-flow GIS path, which still works. A sign-in mechanism that hard-fails on a missing
+# secret would be a worse trade than an extra consent screen.
+OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+
+
+def _code_flow_enabled() -> bool:
+    return bool(OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET)
+
+
+def _persona_payload(info: dict) -> dict:
+    email = (info.get("email") or "").lower()
+    p = _persona_for(email) or "customer"
+    return {"signed_in": True, "email": email, "persona": p,
+            "persona_label": PERSONA_LABELS.get(p, "Customer")}
+
+
+@app.post("/api/auth/exchange")
+async def auth_exchange(request: Request):
+    """Swap a one-time authorization code for an identity AND an access token.
+
+    The id_token goes through the SAME cryptographic verification as the GIS path
+    (`_verify_user`) — signature, audience, issuer, expiry. Nothing about how identity is
+    established changes here; only how many consent screens it took to get there.
+    """
+    if not _code_flow_enabled():
+        return JSONResponse({"error": "code flow not configured"}, status_code=503)
+    try:
+        code = (await request.json()).get("code", "")
+    except Exception:
+        code = ""
+    if not code:
+        return JSONResponse({"error": "missing code"}, status_code=400)
+
+    def _do():
+        import user_tokens as ut
+        tok = ut.exchange_code(code, OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET)
+        id_tok = tok.get("id_token")
+        if not id_tok:
+            return None, None, None
+        from google.auth.transport.requests import Request as GReq
+        from google.oauth2 import id_token as gid
+        info = gid.verify_oauth2_token(id_tok, GReq(), OAUTH_CLIENT_ID)
+        if not info.get("email_verified"):
+            return None, None, None
+        # Persist the refresh token so future sessions never prompt. Google returns one
+        # only on the FIRST grant for a given client+user, so a missing value here is
+        # normal on re-consent and must not clobber a good stored token.
+        stored = True
+        if tok.get("refresh_token"):
+            stored = ut.save(info.get("email", ""), tok["refresh_token"])
+        return info, tok, stored
+
+    try:
+        import asyncio
+        info, tok, stored = await asyncio.to_thread(_do)
+    except Exception as e:
+        return JSONResponse({"error": f"exchange failed: {type(e).__name__}"},
+                            status_code=502)
+    if not info:
+        return JSONResponse({"error": "invalid code"}, status_code=401)
+
+    return {
+        **_persona_payload(info),
+        "id_token": tok.get("id_token"),
+        "access_token": tok.get("access_token"),
+        "expires_in": tok.get("expires_in", 3600),
+        # False means the user WILL be asked to consent again next session. Surfaced
+        # rather than swallowed, so "log in once" is not quietly untrue.
+        "persistent": bool(stored and tok.get("refresh_token")) or None,
+    }
+
+
+@app.post("/api/auth/refresh")
+async def auth_refresh(request: Request):
+    """Mint a fresh access token from the stored refresh token — no user interaction.
+
+    Requires a currently-valid ID token, so a caller cannot ask for someone else's
+    access token by naming their email.
+    """
+    if not _code_flow_enabled():
+        return JSONResponse({"error": "code flow not configured"}, status_code=503)
+    u = _verify_user(request)
+    if not u:
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+
+    def _do():
+        import user_tokens as ut
+        rt = ut.load(u["email"])
+        if not rt:
+            return None
+        return ut.refresh_access_token(rt, OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET)
+
+    try:
+        import asyncio
+        tok = await asyncio.to_thread(_do)
+    except Exception as e:
+        return JSONResponse({"error": f"refresh failed: {type(e).__name__}"},
+                            status_code=502)
+    if not tok or not tok.get("access_token"):
+        # No stored grant, or Google rejected it (user revoked access). The SPA falls
+        # back to an interactive consent — correct, and the only honest option.
+        return JSONResponse({"error": "no usable refresh token"}, status_code=404)
+    return {"access_token": tok["access_token"], "expires_in": tok.get("expires_in", 3600)}
+
+
+@app.post("/api/auth/signout")
+async def auth_signout(request: Request):
+    """Revoke at Google, not just locally — otherwise 'sign out' is amnesia, not logout."""
+    u = _verify_user(request)
+    if not u:
+        return {"ok": True}
+
+    def _do():
+        import user_tokens as ut
+        rt = ut.load(u["email"])
+        if rt:
+            ut.revoke_at_google(rt)
+        ut.delete(u["email"])
+
+    try:
+        import asyncio
+        await asyncio.to_thread(_do)
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 async def _log_eval(persona: str, channel: str, question: str, answer: str, context=None,
