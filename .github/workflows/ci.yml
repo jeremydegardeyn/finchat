@@ -35,6 +35,18 @@ jobs:
       - name: Steward harness reasoning tests (offline)
         working-directory: products/steward/harness
         run: pytest test_offline.py -q
+      - name: Agent registry — gate tests (ADR-0023)
+        run: pytest scripts/test_agent_registry.py -q
+      - name: ADK gateway adapter — tool-call round trip + refusal handling (ADR-0024)
+        working-directory: products/transactions/agent
+        run: pytest test_gateway_llm.py -q
+      - name: Gateway client — bypass accounting + refusal handling (ADR-0024)
+        working-directory: ui
+        run: pytest test_gateway_client.py -q
+      - name: Model pinning + canary drift control tests (ADR-0022)
+        run: pytest scripts/test_canary_eval.py -q
+      - name: Canary wiring smoke (no live endpoint)
+        run: python scripts/canary_eval.py dev --offline
       - name: Generator invariant check (<=4 per customer)
         working-directory: products/transactions/generator
         run: |
@@ -46,6 +58,31 @@ jobs:
           assert max(per.values())<=4, "invariant violated"
           print(f"OK {len(rows)} txns, max/customer={max(per.values())}")
           PY
+
+  # The registry gate is its own job so a drift failure is legible in the checks list
+  # rather than buried in a test summary. This is the control that stops an agent
+  # reaching production without a distinct identity, a named owner, a scoped tool
+  # allow-list, and a live recertification date.
+  agent-registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify registry against source (drift / ownership / recertification)
+        run: python scripts/verify_agent_registry.py --env prod
+      - name: Terraform projection is current
+        run: |
+          for e in dev test prod; do
+            python scripts/agents_catalog.py --env "$e" \
+              --emit-tfvars "infra/envs/$e/agents.auto.tfvars.json"
+          done
+          if ! git diff --quiet -- infra/envs/*/agents.auto.tfvars.json; then
+            echo "::error::agents.auto.tfvars.json is stale — regenerate with scripts/agents_catalog.py and commit"
+            git diff -- infra/envs/*/agents.auto.tfvars.json
+            exit 1
+          fi
 
   agent-eval:
     runs-on: ubuntu-latest

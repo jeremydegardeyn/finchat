@@ -25,6 +25,9 @@ Lightweight ADRs capturing significant, hard-to-reverse decisions and their rati
 | [0019](0019-end-user-credential-propagation.md) | End-user OAuth credential propagation to the analytics path | Accepted |
 | [0020](0020-remote-mcp-workspace-federation.md) | Remote MCP access federated to Workspace / Cloud Identity via OAuth proxy | Accepted |
 | [0021](0021-durable-agent-harness.md) | Durable-execution harness for long-running agents (DBOS deploy, Temporal documented 1:1) | Accepted |
+| [0022](0022-model-version-pinning.md) | Model version pinning + scheduled canary evaluation (FINOS AIR-PREV-010) | Accepted |
+| [0023](0023-agent-registry-and-identity.md) | Agent registry, per-agent identity, and lifecycle | Accepted |
+| [0024](0024-enterprise-ai-gateway.md) | Enterprise AI Gateway as the single enforcement point | Accepted |
 
 _Future ADRs (planned): row/column-level security model, idempotency & exactly-once strategy,
 environment promotion gating._

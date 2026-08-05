@@ -43,3 +43,6 @@ Thumbs.db
 # scratch: API discovery dumps
 disc*.json
 car.json
+
+# Canary run artifact — the baseline is committed deliberately, the latest run is not.
+eval/reports/canary_latest.json
