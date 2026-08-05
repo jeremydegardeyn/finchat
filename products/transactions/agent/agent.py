@@ -17,7 +17,10 @@ import os
 from tools import (get_account_balance, get_transaction_history, get_account_summary,
                    get_loan_status, search_knowledge_base)
 
-MODEL = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
+# Model pin (ADR-0022). FINCHAT_PIN_AGENT carries a Model Garden snapshot id when one is
+# configured; otherwise this runs the floating alias and the registry gate reports PIN-1.
+# An alias is a legitimate posture — an undeclared one is not.
+MODEL = os.getenv("FINCHAT_PIN_AGENT") or os.getenv("AGENT_MODEL", "gemini-2.5-flash")
 
 INSTRUCTION = """\
 You are FinChat, a retail-banking assistant for a regulated financial institution.
@@ -43,9 +46,15 @@ try:
     # Real ADK path.
     from google.adk.agents import Agent
 
+    from gateway_llm import gateway_model
+
     root_agent = Agent(
         name="finchat_banking_assistant",
-        model=MODEL,
+        # Routed through the Enterprise AI Gateway when configured (ADR-0024); falls back
+        # to the plain model string otherwise, so the agent runs either way. agent_id ties
+        # this call to its registry entry — owner, risk tier, tool allow-list, recert date.
+        model=gateway_model("banking_assistant", MODEL,
+                            owner="transactions-product@datadinosaur.com"),
         description="Answers account questions grounded in the banking transaction data product.",
         instruction=INSTRUCTION,
         tools=[get_account_balance, get_transaction_history, get_account_summary,

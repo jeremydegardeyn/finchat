@@ -1,0 +1,122 @@
+"""Enterprise AI Gateway client — the governed path to a model (ADR-0024).
+
+Every LLM call site in FinChat should reach a model through here rather than calling
+Vertex directly, so that identity, PII screening, tier routing, token budgets and audit
+are consumed rather than reimplemented per call site.
+
+Two design points worth stating plainly:
+
+**Fallback is direct-to-Vertex, and it is counted.** If `AI_GATEWAY_URL` is unset or the
+gateway is unreachable, the call still succeeds by going straight to Vertex — a governance
+layer that takes the product down when it hiccups gets removed within a quarter. But every
+such call is recorded as a bypass, because the honest measure of a gateway programme is the
+share of traffic that actually transits it, and a bypass you don't count is a bypass you
+will report as compliance.
+
+**Not every call site can use this.** ADK agents call the model inside the framework, so
+routing them requires an ADK `BaseLlm` adapter rather than an HTTP client. Those call sites
+are recorded as structural bypasses with a reason, not quietly omitted from the denominator.
+See docs/23 for the current transit share and what remains.
+"""
+from __future__ import annotations
+
+import json
+import os
+import threading
+import urllib.error
+import urllib.request
+
+GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "").rstrip("/")
+GATEWAY_TIMEOUT = float(os.getenv("AI_GATEWAY_TIMEOUT", "45"))
+
+# Bypass counters, in-process. Exported at /api/gateway/transit so the share is
+# observable without a BigQuery round-trip; the durable record is the audit log.
+_lock = threading.Lock()
+_counters: dict[str, int] = {"transited": 0, "bypass_unconfigured": 0,
+                             "bypass_error": 0, "blocked": 0}
+
+
+def _count(key: str) -> None:
+    with _lock:
+        _counters[key] = _counters.get(key, 0) + 1
+
+
+def counters() -> dict:
+    with _lock:
+        c = dict(_counters)
+    total = c["transited"] + c["bypass_unconfigured"] + c["bypass_error"]
+    c["total"] = total
+    c["transit_share"] = round(c["transited"] / total, 3) if total else None
+    c["configured"] = bool(GATEWAY_URL)
+    return c
+
+
+def _id_token(audience: str) -> str | None:
+    """OIDC token for the private gateway. None locally, where it runs unauthenticated."""
+    try:
+        import google.auth.transport.requests
+        from google.oauth2 import id_token as gid
+        return gid.fetch_id_token(google.auth.transport.requests.Request(), audience)
+    except Exception:
+        return None
+
+
+class GatewayBlocked(Exception):
+    """The gateway refused the call — PII, budget, or an unregistered workload.
+
+    Deliberately a distinct exception from a transport failure: a refusal is the control
+    working and must NOT fall back to a direct call, whereas an unreachable gateway is an
+    availability problem that should. Collapsing the two would let a PII block be silently
+    retried around the control.
+    """
+
+    def __init__(self, outcome: str, detail: dict):
+        super().__init__(f"gateway refused: {outcome}")
+        self.outcome = outcome
+        self.detail = detail
+
+
+def complete(prompt: str, *, agent_id: str, workload_class: str,
+             owner: str | None = None, session_id: str | None = None,
+             tier: str | None = None, max_output_tokens: int | None = None) -> dict | None:
+    """Governed completion. Returns the gateway payload, or None to fall back.
+
+    Raises GatewayBlocked when the gateway refused on policy grounds — callers must let
+    that propagate rather than retrying directly against Vertex.
+    """
+    if not GATEWAY_URL:
+        _count("bypass_unconfigured")
+        return None
+
+    body = json.dumps({
+        "agent_id": agent_id, "workload_class": workload_class, "prompt": prompt,
+        "owner": owner, "session_id": session_id, "tier": tier,
+        "max_output_tokens": max_output_tokens,
+    }).encode()
+    headers = {"Content-Type": "application/json"}
+    tok = _id_token(GATEWAY_URL)
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+
+    req = urllib.request.Request(f"{GATEWAY_URL}/v1/complete", data=body,
+                                 method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=GATEWAY_TIMEOUT) as r:
+            payload = json.loads(r.read())
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        _count("bypass_error")
+        return None
+
+    outcome = payload.get("outcome")
+    if outcome == "ok":
+        _count("transited")
+        return payload
+
+    if outcome in ("pii_blocked", "budget_exceeded", "unregistered_workload"):
+        _count("blocked")
+        raise GatewayBlocked(outcome, payload)
+
+    # model_error and anything unrecognised: the gateway reached a decision but could not
+    # serve. Treat as availability, not policy — fall back and count the bypass.
+    _count("bypass_error")
+    return None

@@ -32,6 +32,11 @@ def main():
     remote = agent_engines.create(
         app,
         requirements=["google-adk>=0.3.0", "google-cloud-aiplatform[agent_engines]>=1.70.0", "httpx>=0.27.0"],
+        # Local modules the pickled agent needs at runtime. gateway_llm defines the
+        # GatewayLlm class each agent's `model` is an instance of (ADR-0024) — without it
+        # the remote runtime cannot unpickle the agent at all. tools.py holds the tool
+        # functions. Same failure mode the agent image's explicit COPY list guards against.
+        extra_packages=["gateway_llm.py", "tools.py"],
         display_name="finchat-loan-planner",
         description="Loan underwriting multi-agent system (planner + credit + review + approval + notify).",
     )

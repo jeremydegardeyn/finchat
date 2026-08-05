@@ -44,6 +44,55 @@ DATA_AGENT_ID = os.getenv("DATA_AGENT_ID", "")  # persistent Gemini Data Agent (
 # as the BFF SA, whose fine-grained read would expose values to guests.
 ANON_ANALYST_SA = os.getenv("ANON_ANALYST_SA", "")
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")  # Gemini for intent routing
+
+# Model pins (ADR-0022). Source of truth is scripts/model_pins.py; the deploy injects
+# FINCHAT_PIN_* so this service needs no import across the Docker build context. An unset
+# pin means the floating alias, which is a legitimate posture as long as it is a declared
+# one — the registry gate reports PIN-1 for every call site still on an alias.
+# The evidence half of the control is `modelVersion` on the response: what was *requested*
+# and what actually *served* are different facts, and only the second is auditable.
+ROUTER_MODEL = os.getenv("FINCHAT_PIN_ROUTER") or "gemini-2.5-flash"
+SEMANTICS_MODEL = os.getenv("FINCHAT_PIN_SEMANTICS") or "gemini-2.5-flash"
+JUDGE_MODEL = os.getenv("FINCHAT_PIN_JUDGE") or "gemini-2.5-flash"
+
+
+try:
+    import gateway_client as _gw
+except Exception:  # pragma: no cover — BFF must start even if the client is absent
+    _gw = None
+
+
+def _gw_complete(prompt: str, *, agent_id: str, workload_class: str,
+                 owner: str | None = None, max_output_tokens: int | None = None,
+                 session_id: str | None = None):
+    """Try the governed path first. Returns (text, requested, served) or None to fall back.
+
+    A policy refusal (PII / budget) is allowed to propagate — retrying it directly against
+    Vertex would route around the control that just fired, which is the one failure mode
+    a gateway must never have.
+
+    `session_id` is the correlation key. The gateway records it on the audit row and the
+    BFF writes the same value as `conversation_id`, which is what lets cost (gateway side)
+    join to quality (eval side). Without a shared key there is no cost-per-*successful*-task
+    — only cost per token, which tells a CFO nothing.
+    """
+    if _gw is None:
+        return None
+    r = _gw.complete(prompt, agent_id=agent_id, workload_class=workload_class,
+                     owner=owner, max_output_tokens=max_output_tokens,
+                     session_id=session_id)
+    if not r:
+        return None
+    return r.get("text", ""), r.get("model"), r.get("model_served")
+
+
+def _served_version(payload: dict) -> str | None:
+    """Version that actually answered, from the Vertex response. None when absent —
+    recording the requested version as if it served is how pinning becomes theatre."""
+    v = (payload or {}).get("modelVersion")
+    return v if isinstance(v, str) and v else None
+
+
 ANALYST_READY = bool(GCP_PROJECT and (SILVER_DATASET or GOLD_DATASET or LOANS_DATASET))
 
 # --- Identity-resolved personas (Google Sign-In, ADR-0016) -------------------
@@ -215,11 +264,15 @@ def me(request: Request):
 
 
 async def _log_eval(persona: str, channel: str, question: str, answer: str, context=None,
-                    latency_ms: int | None = None):
+                    latency_ms: int | None = None, model_requested: str | None = None,
+                    model_served: str | None = None, conversation_id: str | None = None):
     """Best-effort capture of a conversation turn for live evaluation. Awaited (in a
     worker thread) WITHIN the request — Cloud Run throttles CPU once the response is
     sent, so a fire-and-forget background thread would never run. Never raises.
-    latency_ms is the wall-clock answer-generation time (operational eval signal)."""
+    latency_ms is the wall-clock answer-generation time (operational eval signal).
+    model_requested/model_served carry the pinning evidence (ADR-0022) — the second is
+    what a drift investigation actually needs, and it is NULL when the surface does not
+    report it rather than being back-filled from the request."""
     if not (GCP_PROJECT and EVAL_DATASET and (question or "").strip()):
         return
 
@@ -229,12 +282,14 @@ async def _log_eval(persona: str, channel: str, question: str, answer: str, cont
             import json as _json
             from datetime import datetime, timezone
             from google.cloud import bigquery
-            row = {"conversation_id": str(_uuid.uuid4()),
+            row = {"conversation_id": conversation_id or str(_uuid.uuid4()),
                    "ts": datetime.now(timezone.utc).isoformat(),
                    "persona": persona, "channel": channel,
                    "question": (question or "")[:4000], "answer": (answer or "")[:8000],
                    "context": (_json.dumps(context)[:8000] if context else None),
-                   "latency_ms": latency_ms}
+                   "latency_ms": latency_ms,
+                   "model_requested": model_requested,
+                   "model_served": model_served}
             bigquery.Client(project=GCP_PROJECT).insert_rows_json(
                 f"{GCP_PROJECT}.{EVAL_DATASET}.conversation_log", [row])
         except Exception:
@@ -692,17 +747,32 @@ async def _run_okf(q: str) -> dict:
         f"=== FINCHAT KNOWLEDGE ===\n{ANALYST_KNOWLEDGE}\n=== END KNOWLEDGE ===\n\n"
         f"Question: {q}"
     )
+    # Governed path first (ADR-0024); direct Vertex is the counted fallback.
+    import uuid as _uuid
+    turn_id = str(_uuid.uuid4())
+    gw = _gw_complete(prompt, agent_id="analyst_semantics",
+                      workload_class="grounded_generation",
+                      owner="platform-ai@datadinosaur.com", max_output_tokens=1024,
+                      session_id=turn_id)
+    if gw:
+        text, requested, served = gw
+        return {"mode": "okf", "answer": text or "(no answer)",
+                "model_requested": requested, "model_served": served,
+                "turn_id": turn_id}
+
     url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
-           f"/locations/{VERTEX_LOCATION}/publishers/google/models/gemini-2.5-flash:generateContent")
+           f"/locations/{VERTEX_LOCATION}/publishers/google/models/{SEMANTICS_MODEL}:generateContent")
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}}
     try:
         r = await _client().post(url, json=body, headers={"Authorization": f"Bearer {token}"},
                                  timeout=30.0)
-        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        payload = r.json()
+        txt = payload["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
         return {"mode": "okf", "error": f"semantics unavailable: {type(e).__name__}"}
-    return {"mode": "okf", "answer": txt or "(no answer)"}
+    return {"mode": "okf", "answer": txt or "(no answer)",
+            "model_requested": SEMANTICS_MODEL, "model_served": _served_version(payload)}
 
 
 _KB_WORDS = ("fee", "polic", "hour", "branch", "atm", " open", "close", "term", "condition",
@@ -743,10 +813,28 @@ async def _classify_intent(q: str) -> str:
         "defined/calculated, what a table or view contains, or how tables join. (Not a data "
         "value; not a policy.)\n"
         f"Question: {q}\nAnswer (ANALYTICS, KB, or SEMANTICS):")
+    # Governed path first. Intent routing is the highest-volume, cheapest call site, so
+    # it is also the one the gateway clamps to the standard tier — a one-word answer must
+    # never reach a premium model.
+    try:
+        gw = _gw_complete(prompt, agent_id="analyst_intent_router",
+                          workload_class="classification",
+                          owner="platform-ai@datadinosaur.com", max_output_tokens=8)
+        if gw:
+            txt = (gw[0] or "").upper()
+            if "SEMANTIC" in txt:
+                return "semantics"
+            if "KB" in txt and "ANALYTIC" not in txt:
+                return "kb"
+            if "ANALYTIC" in txt:
+                return "analytics"
+    except Exception:
+        pass
+
     try:
         token = _access_token()
         url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
-               f"/locations/{VERTEX_LOCATION}/publishers/google/models/gemini-2.5-flash:generateContent")
+               f"/locations/{VERTEX_LOCATION}/publishers/google/models/{ROUTER_MODEL}:generateContent")
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0, "maxOutputTokens": 8}}
         r = await _client().post(url, json=body, headers={"Authorization": f"Bearer {token}"},
@@ -815,8 +903,39 @@ async def analyst_ask(request: Request):
     if res.get("mode") == "analytics":
         ctx = {"sql": res.get("sql"), "rows": (res.get("rows") or [])[:10]}
     await _log_eval("analyst", res.get("mode", mode), q, res.get("answer", ""), ctx,
-                    latency_ms=_latency_ms)
+                    latency_ms=_latency_ms,
+                    model_requested=res.get("model_requested"),
+                    model_served=res.get("model_served"),
+                    conversation_id=res.get("turn_id"))
     return res
+
+
+@app.get("/api/gateway/transit")
+def gateway_transit(request: Request):
+    """Share of this process's model calls that actually transited the gateway.
+
+    The measure that matters for a gateway programme, and the one most easily faked: a
+    bypass nobody counts gets reported as compliance. Structural bypasses — call sites
+    that *cannot* use the HTTP gateway — are listed explicitly so the denominator is
+    honest rather than flattering. See docs/23."""
+    deny = _require(request, "admin")
+    if deny:
+        return deny
+    live = _gw.counters() if _gw else {"configured": False}
+    return {
+        "process": live,
+        "structural_bypasses": [
+            {"call_site": "analyst_data_agent", "reason":
+             "managed Conversational Analytics service; no injectable model endpoint. "
+             "Governed instead by the semantic perimeter (ADR-0018) and end-user "
+             "credential propagation (ADR-0019) — a different control, not an equivalent one"},
+        ],
+        "note_agents": "ADK agents (banking assistant + 5 loan agents) transit via the "
+                       "BaseLlm adapter in their own processes; their counters live there, "
+                       "not here. This endpoint reports the BFF process only.",
+        "note": "Process counters reset on cold start (scale-to-zero). The durable "
+                "record is the gateway audit table.",
+    }
 
 
 @app.get("/api/eval")
@@ -908,7 +1027,7 @@ async def eval_run(request: Request):
             return {"scored": 0, "sampled": 0}
         token = _access_token()
         url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
-               f"/locations/{VERTEX_LOCATION}/publishers/google/models/gemini-2.5-flash:generateContent")
+               f"/locations/{VERTEX_LOCATION}/publishers/google/models/{JUDGE_MODEL}:generateContent")
 
         def _norm(v):
             return None if v is None else round((float(v) - 1) / 4, 3)
@@ -925,10 +1044,15 @@ async def eval_run(request: Request):
                 "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
-                    txt = _json.loads(resp.read())["candidates"][0]["content"]["parts"][0]["text"]
+                    payload = _json.loads(resp.read())
+                txt = payload["candidates"][0]["content"]["parts"][0]["text"]
                 v = _json.loads(txt)
             except Exception:
                 continue
+            # The judge is itself a registered model (M6). Record the version that
+            # actually scored, not the one requested — a judge that silently changed
+            # invalidates the trend it produced.
+            judge_version = _served_version(payload) or JUDGE_MODEL
             rg, ri, rc = v.get("groundedness"), v.get("instruction_following"), v.get("coherence")
             safety = float(v.get("safety", 1))
             norm = [x for x in (_norm(rg), _norm(ri), _norm(rc), safety) if x is not None]
@@ -940,7 +1064,7 @@ async def eval_run(request: Request):
                         "safety": safety,
                         "overall": (round(sum(norm) / len(norm), 3) if norm else None),
                         "rationale": (v.get("rationale") or "")[:500],
-                        "model_version": "gemini-2.5-flash-judge"})
+                        "model_version": judge_version})
         if out:
             bq.insert_rows_json(f"{ds}.conversation_scores", out)
         return {"scored": len(out), "sampled": len(rows)}
