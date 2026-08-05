@@ -24,7 +24,7 @@ corpus and different audience.
 | Answers | Customers | Analysts / admins |
 | Content | Fees, branch hours, policies, terms | Architecture, ADRs, governance, runbooks |
 | Reached by | `search_knowledge_base` (Banking Assistant tool) | PLATFORM intent on the analyst router |
-| Size | 22 documents | ~445 chunks across 94 files |
+| Size | 22 documents | ~455 chunks across 96 files |
 
 Sharing the embedding model is deliberate. Two models would be two things to keep on the
 same version, and a corpus embedded with a different model than the query is a silent
@@ -47,8 +47,8 @@ Two content rules:
   model can cite where an answer came from without a second lookup.
 
 ```
-architecture      174      docs/*.md
-decision-record   154      docs/adr/*.md
+architecture      182      docs/*.md
+decision-record   159      docs/adr/*.md
 governance         77      knowledge/**/*.md
 product            27      products/*/README.md
 overview            8      README.md
