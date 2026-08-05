@@ -1,0 +1,63 @@
+name: Canary Eval
+
+# Replays the golden set against the LIVE agent on a fixed schedule and compares to a
+# stored baseline (ADR-0022). Because the questions are identical every run, a metric
+# move is attributable to the system rather than to changing traffic — which is what
+# makes this a drift control rather than a dashboard.
+#
+# Deliberately separate from Live Eval: that job judges whatever users happened to ask,
+# so a quality drop there is confounded with a change in the questions. This one holds
+# the input constant. Both are needed; neither substitutes for the other.
+on:
+  schedule:
+    - cron: "41 6 * * *" # daily ~06:41 UTC, ahead of the live-eval scorer
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, test, prod]
+        default: prod
+      set_baseline:
+        description: Adopt this run as the new baseline (do this deliberately)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+      - name: Install deps
+        run: pip install google-auth
+
+      - name: Canary against the live agent
+        env:
+          AGENT_URL: ${{ vars.AGENT_URL }}
+        run: |
+          python scripts/canary_eval.py \
+            "${{ github.event.inputs.environment || 'prod' }}" \
+            ${{ github.event.inputs.set_baseline == 'true' && '--set-baseline' || '' }}
+
+      # Uploaded even on failure — the run that regressed is the one worth keeping, and
+      # it carries the serving version that a drift investigation starts from.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-${{ github.event.inputs.environment || 'prod' }}
+          path: |
+            eval/reports/canary_latest.json
+            eval/reports/canary_baseline.json

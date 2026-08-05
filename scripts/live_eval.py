@@ -33,6 +33,14 @@ except Exception:
 PROJECT = "strongsville-city-schools"
 REGION = "us-central1"
 
+# Model pin for the judge (ADR-0022). Source of truth: scripts/model_pins.py. The judge
+# is a registered model itself (M6) — its own silent version change would invalidate the
+# quality trend it produces, so the version that actually scored is recorded per row.
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from model_pins import model_for, served_version  # noqa: E402
+
+JUDGE_MODEL = model_for("JUDGE")
+
 JUDGE_PROMPT = """You evaluate a regulated bank's AI assistant. Score one turn.
 
 USER QUESTION:
@@ -64,18 +72,23 @@ def _token() -> str:
 
 
 def _judge(token: str, question: str, answer: str, context: str, _tries: int = 4) -> dict | None:
+    """Score one turn. Returns the judge verdict with `_served` — the model version that
+    actually answered — attached, so a drifting judge is detectable in the score history."""
     prompt = JUDGE_PROMPT.format(question=question[:3000], answer=answer[:5000],
                                  context=(context or "(none)")[:5000])
     url = (f"https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
-           f"/locations/{REGION}/publishers/google/models/gemini-2.5-flash:generateContent")
+           f"/locations/{REGION}/publishers/google/models/{JUDGE_MODEL}:generateContent")
     body = json.dumps({"contents": [{"role": "user", "parts": [{"text": prompt}]}],
                        "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}}).encode()
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
-        return json.loads(txt)
+            payload = json.loads(r.read())
+        txt = payload["candidates"][0]["content"]["parts"][0]["text"]
+        verdict = json.loads(txt)
+        verdict["_served"] = served_version(payload)
+        return verdict
     except urllib.error.HTTPError as e:
         if e.code == 429 and _tries > 1:  # Vertex rate limit — back off and retry.
             time.sleep(10)
@@ -136,7 +149,7 @@ def main():
                     "coherence": (float(rc) if rc is not None else None),
                     "safety": safety, "overall": overall,
                     "rationale": (v.get("rationale") or "")[:500],
-                    "model_version": "gemini-2.5-flash-judge"})
+                    "model_version": v.get("_served") or JUDGE_MODEL})
         print(f"  ✓ {r['channel']:9s} g={rg} instr={ri} coh={rc} safety={safety}")
 
     if out:

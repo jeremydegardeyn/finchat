@@ -15,10 +15,21 @@ CREATE TABLE IF NOT EXISTS `${PROJECT}.finchat_eval_${ENV}.conversation_log`
   question        STRING,
   answer          STRING,
   context         STRING,                    -- JSON grounding context (sql, rows, sources)
-  latency_ms      INT64
+  latency_ms      INT64,
+  -- Model pinning evidence (ADR-0022). `requested` is what the call site asked for;
+  -- `served` is what the provider says actually answered, read from the Vertex response
+  -- `modelVersion` field. They are different facts and only the second is auditable —
+  -- `served` stays NULL when the surface does not report it rather than being back-filled.
+  model_requested STRING,
+  model_served    STRING
 )
 PARTITION BY DATE(ts)
 CLUSTER BY persona, channel;
+
+-- Existing deployments: additive, idempotent.
+ALTER TABLE `${PROJECT}.finchat_eval_${ENV}.conversation_log`
+  ADD COLUMN IF NOT EXISTS model_requested STRING,
+  ADD COLUMN IF NOT EXISTS model_served    STRING;
 
 CREATE TABLE IF NOT EXISTS `${PROJECT}.finchat_eval_${ENV}.conversation_scores`
 (
