@@ -582,8 +582,19 @@ function signInWithCode(){
           r = await (await fetch("/api/auth/exchange", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ code: resp.code }) })).json();
-        } catch(e){ return; }
-        if (!r.signed_in) return;
+        } catch(e){ r = { error: "network" }; }
+        if (!r.signed_in) {
+          // Never fail silently here. The first version returned quietly, so a rejected
+          // exchange looked identical to a successful login that just didn't change the
+          // persona — which is exactly how this took a log dig to diagnose.
+          const why = r.reason || r.error || "unknown";
+          const box = el("authbox");
+          if (box) box.innerHTML = `<span class="pill warn">sign-in failed: ${escapeHtml(why)}</span>
+            <button class="ghost" id="signin">Retry</button>`;
+          try { el("signin").onclick = signInWithCode; } catch(e){}
+          console.error("auth exchange failed:", r);
+          return;
+        }
         S.idtok = r.id_token;
         S.accessTok = r.access_token || null;
         S.accessTokExp = Date.now() + ((r.expires_in || 3600) - 60) * 1000;

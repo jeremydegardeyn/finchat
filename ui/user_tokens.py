@@ -39,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -131,12 +132,36 @@ def revoke_at_google(refresh_token: str) -> bool:
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
+class TokenEndpointError(RuntimeError):
+    """Google refused, and said why.
+
+    urllib raises a bare HTTPError whose body — the part that actually names the problem
+    (invalid_grant, redirect_uri_mismatch, invalid_client) — is discarded unless you read
+    it. Losing that turns a five-second fix into a guessing game, so it is preserved and
+    surfaced. OAuth error codes are diagnostic, not secret.
+    """
+
+    def __init__(self, error: str, description: str, status: int):
+        super().__init__(f"{error}: {description}" if description else error)
+        self.error = error
+        self.description = description
+        self.status = status
+
+
 def _post_form(fields: dict) -> dict:
     req = urllib.request.Request(
         TOKEN_URL, data=urllib.parse.urlencode(fields).encode(), method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read() or b"{}")
+        except Exception:
+            body = {}
+        raise TokenEndpointError(body.get("error", f"http_{e.code}"),
+                                 body.get("error_description", ""), e.code) from None
 
 
 def exchange_code(code: str, client_id: str, client_secret: str) -> dict:

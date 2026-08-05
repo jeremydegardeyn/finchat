@@ -330,8 +330,14 @@ async def auth_exchange(request: Request):
         import asyncio
         info, tok, stored = await asyncio.to_thread(_do)
     except Exception as e:
-        return JSONResponse({"error": f"exchange failed: {type(e).__name__}"},
-                            status_code=502)
+        # Log the reason, don't just classify it. The first version returned only the
+        # exception type, which told a browser "502" and told the logs nothing — the
+        # actual OAuth error (redirect_uri_mismatch, invalid_grant, ...) was thrown away.
+        detail = getattr(e, "error", None) or type(e).__name__
+        desc = getattr(e, "description", "") or str(e)[:200]
+        print(f"auth/exchange failed: {detail} — {desc}")
+        return JSONResponse({"error": "exchange failed", "reason": detail,
+                             "detail": desc}, status_code=502)
     if not info:
         return JSONResponse({"error": "invalid code"}, status_code=401)
 
@@ -370,8 +376,9 @@ async def auth_refresh(request: Request):
         import asyncio
         tok = await asyncio.to_thread(_do)
     except Exception as e:
-        return JSONResponse({"error": f"refresh failed: {type(e).__name__}"},
-                            status_code=502)
+        detail = getattr(e, "error", None) or type(e).__name__
+        print(f"auth/refresh failed: {detail} — {str(e)[:200]}")
+        return JSONResponse({"error": "refresh failed", "reason": detail}, status_code=502)
     if not tok or not tok.get("access_token"):
         # No stored grant, or Google rejected it (user revoked access). The SPA falls
         # back to an interactive consent — correct, and the only honest option.
