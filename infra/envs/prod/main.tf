@@ -224,6 +224,12 @@ module "rag" {
   name_prefix = var.name_prefix
   reader_members = [
     "serviceAccount:${module.foundation.service_account_emails["agent"]}",
+    # The BFF queries platform_chunks directly for the PLATFORM intent (docs/24). Reading
+    # the table is not enough: ML.GENERATE_EMBEDDING invokes a REMOTE model through this
+    # connection, so the caller also needs bigquery.connections.use. Without it the query
+    # fails 403 — which reads as a permissions problem with the data, when it is actually
+    # permission to use the embedding model.
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
   ]
   labels = local.labels
 }
