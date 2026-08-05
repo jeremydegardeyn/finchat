@@ -129,6 +129,7 @@ finchat/
 | — | AI Unit Economics (cost per successful task) | [`docs/22`](docs/22-ai-unit-economics.md) |
 | — | Gateway Transit & Bypass | [`docs/23`](docs/23-gateway-transit.md) |
 | — | Platform Docs RAG (ask FinChat about FinChat) | [`docs/24`](docs/24-platform-docs-rag.md) |
+| — | **End-to-End Flow** (one diagram, whole platform) | [`docs/25`](docs/25-end-to-end-flow.md) |
 | — | Architecture Decision Records | [`docs/adr/`](docs/adr/) |
 
 ---

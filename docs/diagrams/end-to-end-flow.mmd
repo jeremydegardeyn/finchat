@@ -1,0 +1,111 @@
+%% FinChat — comprehensive end-to-end flow (as built, 2026-08-05)
+%% Reads top to bottom: who asks → what answers → what governs it → what it touches →
+%% what it leaves behind. Solid = request path. Dashed = evidence and control.
+%% Rendered to end-to-end-flow.png; source of truth for docs/25-end-to-end-flow.md.
+flowchart TB
+
+%% ============ 1. WHO ASKS ============
+subgraph L1["① Consumers — persona from a verified Google identity (ADR-0016)"]
+  direction LR
+  CUST["Customer<br/><i>anonymous</i>"]
+  APPR["Loan Approver<br/><i>verified</i>"]
+  ANA["Analyst"]
+  ADM["Platform Admin"]
+end
+
+BFF["<b>BFF</b> · Cloud Run<br/>serves the SPA · enforces routes server-side<br/>customers stay anonymous; staff routes require sign-in"]
+L1 ==> BFF
+
+%% ============ 2. WHAT ANSWERS ============
+subgraph L2["② Call sites — 6 total, each attributed to an agent id + workload class"]
+  direction LR
+  RT["intent router<br/><i>classification</i>"]
+  SEM["semantics<br/><i>grounded_generation</i>"]
+  PLAT["platform docs<br/><i>grounded_generation</i>"]
+  BA["Banking Assistant<br/><i>tool_calling</i> · 5 tools"]
+  LOANS["Loan agents ×5<br/><i>tool_calling</i>"]
+  STW["Steward ×3<br/><i>reasoning</i>"]
+  CA["Conversational Analytics<br/><i>managed</i>"]
+end
+BFF ==> L2
+
+%% ============ 3. WHAT GOVERNS IT ============
+subgraph L3["③ Enterprise AI Gateway (ADR-0024) — the enforcement point"]
+  direction LR
+  G1["registered?<br/>else reject"] --> G2["budget<br/>per agent"] --> G3["PII in<br/>Model Armor"] --> G4["tier<br/>clamp"] --> G5["call"] --> G6["PII out"] --> G7["audit"]
+end
+
+RT ==> G1
+SEM ==> G1
+PLAT ==> G1
+STW ==> G1
+BA ==>|"ADK BaseLlm adapter · /v1/generate<br/>function declarations survive"| G1
+LOANS ==>|"each under its own agent id"| G1
+CA -.->|"no injectable endpoint<br/><b>structural bypass — counted</b>"| VTX
+
+%% ============ 4. MODELS ============
+VTX["<b>Vertex AI</b> · Gemini 2.5 Flash<br/>pin requested · <b>served version logged per turn</b> (ADR-0022)"]
+G5 ==> VTX
+G1 -.->|"gateway unreachable → direct<br/><b>bypass, counted</b>"| VTX
+
+%% ============ 5. WHAT IT TOUCHES ============
+subgraph L5["⑤ Governed data"]
+  direction LR
+  BT[("Bigtable<br/>1.6 ms point read")]
+  BQ[("BigQuery<br/>Bronze→Silver→Gold")]
+  KB[("kb_chunks<br/><i>customer docs</i>")]
+  PC[("platform_chunks<br/><i>repo docs</i>")]
+  GR[("property graph<br/>+ semantic perimeter")]
+end
+
+BA ==> BT
+BA ==> KB
+PLAT ==> PC
+LOANS ==> BQ
+CA ==> GR
+BT --- BQ
+GR --- BQ
+
+%% ============ 6. HUMAN GATE ============
+HUM{{"<b>Human gate</b> — every consequential action pauses<br/>for the verified approver, whose email is written<br/>to the append-only audit (ADR-0016 · ADR-0021)"}}
+LOANS ==> HUM
+STW ==> HUM
+
+%% ============ 7. EVIDENCE ============
+subgraph L7["⑦ Evidence — append-only"]
+  direction LR
+  AUD[("gateway audit<br/>tokens · tier · PII verdict")]
+  AAL[("agent_action_log<br/>who acted, on whose authority")]
+  REG[("agent_registry<br/>owner · tier · tools · recert")]
+  CL[("conversation_log<br/>+ model_served")]
+  CS[("conversation_scores<br/>LLM-judge")]
+end
+
+G7 -.-> AUD
+L2 -.-> AAL
+BFF -.->|"session_id ≡ conversation_id<br/>the join key"| CL
+CL -.-> CS
+
+%% ============ 8. CONTROLS THAT GATE ============
+subgraph L8["⑧ Controls — these gate, they do not merely observe"]
+  direction LR
+  CI["<b>CI registry gate</b><br/>DRIFT-3 · REG-2/3 · LIFE-1<br/><i>blocks the deploy</i>"]
+  CAN["<b>daily canary</b><br/>fixed golden set<br/><i>drift ⇒ version change named</i>"]
+  UE["<b>cost per successful task</b><br/>audit ⋈ scores"]
+end
+
+AUD -.-> UE
+CS -.-> UE
+REG -.- AAL
+%% CI and the canary deliberately have no edges into the flow above: they act BEFORE a
+%% deploy and AFTER it on a schedule, so drawing them as request-path arrows would
+%% misrepresent when they run. What they gate is stated on the node.
+
+classDef gate fill:#1f4e5f,stroke:#0d2b35,color:#ffffff,font-weight:bold
+classDef bypass fill:#fff7ed,stroke:#b45309,stroke-dasharray:5 4,color:#7c2d12
+classDef store fill:#eef2f5,stroke:#64748b,color:#0f172a
+classDef human fill:#fef3c7,stroke:#b45309,color:#7c2d12,font-weight:bold
+class G1,G2,G3,G4,G5,G6,G7 gate
+class CA bypass
+class AUD,AAL,REG,CL,CS,BT,BQ,KB,PC,GR store
+class HUM human
