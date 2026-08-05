@@ -83,7 +83,9 @@ def score_risk(profile: CreditProfile, amount: float, overdraft_events: int = 0,
                overdraft_ratio: float = 0.0) -> RiskResult:
     """Transparent additive scorecard over four factors. Each factor's point
     contribution is captured so the decision is fully explainable (reason codes
-    for adverse-action notices; SR 11-7 model transparency)."""
+    for adverse-action notices; model transparency under revised MRM guidance,
+    SR 26-2 / OCC 2026-13 — this scorecard is deterministic and remains in scope,
+    unlike the platform's generative models)."""
     factors: list[dict] = []
 
     # Credit score factor (0-40).

@@ -12,8 +12,14 @@ scorecard over four factors (credit 0-40, DTI 0-30, overdraft 0-20, loan size 0-
 It computed each factor's point contribution but kept only a flat prose `reasons`
 list — so the *decision was explainable in principle but not surfaced*. Regulated
 lending requires more: **ECOA / Reg B** adverse-action notices must state the
-**principal reasons** for a denial, and **SR 11-7** expects model decisions to be
-transparent, reproducible, and auditable.
+**principal reasons** for a denial, and model risk management guidance expects
+model decisions to be transparent, reproducible, and auditable.
+
+> **Citation corrected 2026-08-04.** This ADR originally cited SR 11-7, which was
+> rescinded on 17 April 2026 by **SR 26-2 / OCC Bulletin 2026-13**. The scorecard is
+> a deterministic model and remains within the revised guidance's scope, so the
+> expectation is unchanged — only the citation. The generative models in this platform
+> are explicitly *outside* that scope; see [19 — Model & Agent Inventory](../19-model-inventory.md).
 
 ## Decision
 

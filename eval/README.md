@@ -50,5 +50,10 @@ Latest offline run (committed sample): [`reports/latest.json`](reports/latest.js
 ## Why this matters (regulated banking)
 
 Auditable, versioned, threshold-gated evaluation is what lets a bank put an agent in front of customer
-data and credit decisions: it provides evidence of accuracy, demonstrates non-fabrication controls,
-and ties to model-risk-management expectations (e.g., SR 11-7).
+data and credit decisions: it provides evidence of accuracy and demonstrates non-fabrication controls.
+
+For the deterministic loan scorecard this ties to model-risk-management expectations under the
+revised guidance (**SR 26-2 / OCC 2026-13**, which rescinded SR 11-7 in April 2026). For the
+LLM agents it ties to nothing external — that guidance explicitly places generative and agentic
+AI outside its scope, so this harness *is* the control rather than evidence of conformance to
+one. See [19 — Model & Agent Inventory](../docs/19-model-inventory.md).

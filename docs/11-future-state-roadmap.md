@@ -32,7 +32,7 @@
 | Theme | Action |
 |-------|--------|
 | Multi-region / DR | Regional → multi-region BigQuery, cross-region replication, tested RTO/RPO |
-| Model risk mgmt | Formal model registry, challenger models, bias/fairness monitoring (SR 11-7) |
+| Model risk mgmt | Formal model registry, challenger models, bias/fairness monitoring (SR 26-2 for the deterministic scorecard; FinChat's own framework for GenAI, which SR 26-2 excludes) |
 | Regulatory reporting | Automated BCBS 239 reconcilable reporting; evidence packs from the audit sink |
 | Org-wide mesh | Self-service data-product templates, central policy-as-code (Org Policy + OPA) |
 | FinOps | Chargeback/showback, committed-use discounts, anomaly-based budget automation |

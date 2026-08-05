@@ -66,7 +66,9 @@ before/after the agent. No single control is the only line of defense.
 - **Right-to-be-forgotten / retention:** partition expiration + DLP tokenization (delete the key to
   crypto-shred); per-table retention policies already declared.
 - **Auditable model decisions:** risk thresholds are explicit + versioned (`model_version`), decisions
-  append-only — supports model-risk-management / explainability mandates (e.g., SR 11-7).
+  append-only — supports model-risk-management / explainability mandates (SR 26-2 / OCC 2026-13 for
+  the deterministic scorecard; FinChat's own control framework for the generative models the revised
+  guidance excludes — see [19 — Model & Agent Inventory](19-model-inventory.md)).
 - **Segregation of duties:** distinct SAs + custom roles + GitHub Environment reviewers for promotion.
 - **VPC Service Controls / CMEK:** the SA/least-privilege boundary and `kms_key` hooks make these an
   additive enablement, not a re-architecture.

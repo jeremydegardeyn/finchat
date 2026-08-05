@@ -2,6 +2,7 @@
 
 > How FinChat governs data across its lifecycle: classification, quality, metadata, lineage, access,
 > retention, and stewardship. Security controls: [06](06-security-architecture.md). Model: [data-model](data-model.md).
+> Model risk (the models themselves, not the data feeding them): [19 — Model Inventory](19-model-inventory.md).
 
 ## Governance operating model
 
@@ -95,4 +96,6 @@ SQL, GQL, or chat-generated queries alike).
 
 Designed to support **GLBA / SOX / PCI-DSS / BCBS 239 / GDPR-CCPA** controls: provenance &
 reconcilability (BCBS 239), PII safeguarding (GLBA/GDPR), immutable audit (SOX), cardholder data
-tokenization (PCI), and auditable, versioned credit decisions (SR 11-7 model risk).
+tokenization (PCI), and auditable, versioned credit decisions (model risk under the revised
+SR 26-2 / OCC 2026-13 guidance, which rescinded SR 11-7 in April 2026 and excludes generative
+and agentic AI from scope entirely — see [19 — Model & Agent Inventory](19-model-inventory.md)).
