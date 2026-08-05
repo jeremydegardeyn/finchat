@@ -43,6 +43,9 @@ jobs:
       - name: Gateway client — bypass accounting + refusal handling (ADR-0024)
         working-directory: ui
         run: pytest test_gateway_client.py -q
+      - name: UI image — every runtime module is COPYed
+        working-directory: ui
+        run: pytest test_ui_image.py -q
       - name: Model pinning + canary drift control tests (ADR-0022)
         run: pytest scripts/test_canary_eval.py -q
       - name: Canary wiring smoke (no live endpoint)
