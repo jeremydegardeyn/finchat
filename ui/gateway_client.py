@@ -79,7 +79,8 @@ class GatewayBlocked(Exception):
 def complete(prompt: str, *, agent_id: str, workload_class: str,
              owner: str | None = None, session_id: str | None = None,
              tier: str | None = None, max_output_tokens: int | None = None,
-             on_behalf_of: str | None = None) -> dict | None:
+             on_behalf_of: str | None = None,
+             routing_text: str | None = None) -> dict | None:
     """Governed completion. Returns the gateway payload, or None to fall back.
 
     Raises GatewayBlocked when the gateway refused on policy grounds — callers must let
@@ -97,6 +98,10 @@ def complete(prompt: str, *, agent_id: str, workload_class: str,
         # analyst_intent_router serves every analyst; billing them collectively means
         # one heavy user silently eats everyone else's allowance.
         "on_behalf_of": on_behalf_of,
+        # Tier selection reads this instead of the full prompt. A grounded prompt is long
+        # because of its CONTEXT; routing on the assembled payload billed every semantics
+        # question at premium rates.
+        "routing_text": routing_text,
     }).encode()
     headers = {"Content-Type": "application/json"}
     tok = _id_token(GATEWAY_URL)

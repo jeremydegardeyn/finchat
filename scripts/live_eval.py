@@ -121,6 +121,11 @@ def main():
       WHERE s.conversation_id IS NULL
         AND l.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {args.hours} HOUR)
         AND l.question IS NOT NULL
+        -- Service failures are not quality failures. An errored turn has no answer, and
+        -- scoring an empty string as "failed to answer" moves an outage into the quality
+        -- metric. Excluded here so the number keeps meaning what it says.
+        AND l.answer IS NOT NULL AND l.answer != ''
+        AND NOT STARTS_WITH(l.answer, '[error]')
       ORDER BY l.ts DESC
       LIMIT {args.limit}
     """

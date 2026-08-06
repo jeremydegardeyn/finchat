@@ -76,7 +76,8 @@ except Exception:  # pragma: no cover — BFF must start even if the client is a
 
 def _gw_complete(prompt: str, *, agent_id: str, workload_class: str,
                  owner: str | None = None, max_output_tokens: int | None = None,
-                 session_id: str | None = None, on_behalf_of: str | None = None):
+                 session_id: str | None = None, on_behalf_of: str | None = None,
+                 routing_text: str | None = None):
     """Try the governed path first. Returns (text, requested, served) or None to fall back.
 
     A policy refusal (PII / budget) is allowed to propagate — retrying it directly against
@@ -92,7 +93,8 @@ def _gw_complete(prompt: str, *, agent_id: str, workload_class: str,
         return None
     r = _gw.complete(prompt, agent_id=agent_id, workload_class=workload_class,
                      owner=owner, max_output_tokens=max_output_tokens,
-                     session_id=session_id, on_behalf_of=on_behalf_of)
+                     session_id=session_id, on_behalf_of=on_behalf_of,
+                     routing_text=routing_text)
     if not r:
         return None
     return r.get("text", ""), r.get("model"), r.get("model_served")
@@ -910,7 +912,7 @@ async def _run_okf(q: str, user_email: str | None = None) -> dict:
     gw = _gw_complete(prompt, agent_id="analyst_semantics",
                       workload_class="grounded_generation",
                       owner="platform-ai@datadinosaur.com", max_output_tokens=1024,
-                      session_id=turn_id, on_behalf_of=user_email)
+                      session_id=turn_id, on_behalf_of=user_email, routing_text=q)
     if gw:
         text, requested, served = gw
         return {"mode": "okf", "answer": text or "(no answer)",
@@ -997,7 +999,7 @@ async def _run_platform(q: str, user_email: str | None = None) -> dict:
     gw = _gw_complete(prompt, agent_id="platform_docs_assistant",
                       workload_class="grounded_generation",
                       owner="platform-ai@datadinosaur.com", max_output_tokens=1500,
-                      on_behalf_of=user_email)
+                      on_behalf_of=user_email, routing_text=q)
     if gw:
         text, _plat_requested, _plat_served = gw
     else:
@@ -1194,7 +1196,17 @@ async def analyst_ask(request: Request):
     ctx = None
     if res.get("mode") == "analytics":
         ctx = {"sql": res.get("sql"), "rows": (res.get("rows") or [])[:10]}
-    await _log_eval("analyst", res.get("mode", mode), q, res.get("answer", ""), ctx,
+    # An errored turn has no answer. Logging it with answer="" hands the judge an empty
+    # string, which it correctly scores ~0.33 for "failed to answer" — so a SERVICE
+    # failure lands in the QUALITY metric and drags it down. Those are different
+    # failures: one is the model answering badly, the other is nothing answering at all.
+    # Mark it so the scorer can skip it, and record the reason where it is findable.
+    _answer = res.get("answer", "")
+    if not _answer and res.get("error"):
+        _answer = f"[error] {res['error']}"
+        print(f"analyst {res.get('mode')}: {res.get('error')}"
+              + (f" — {res.get('detail','')[:200]}" if res.get("detail") else ""))
+    await _log_eval("analyst", res.get("mode", mode), q, _answer, ctx,
                     latency_ms=_latency_ms,
                     model_requested=res.get("model_requested"),
                     model_served=res.get("model_served"),
@@ -1451,6 +1463,8 @@ async def eval_run(request: Request):
             f"FROM `{ds}.conversation_log` l "
             f"LEFT JOIN `{ds}.conversation_scores` s USING (conversation_id) "
             f"WHERE s.conversation_id IS NULL AND l.question IS NOT NULL "
+            f"AND l.answer IS NOT NULL AND l.answer != '' "
+            f"AND NOT STARTS_WITH(l.answer, '[error]') "
             f"AND l.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 168 HOUR) "
             f"ORDER BY l.ts DESC LIMIT 25").result())
         if not rows:
