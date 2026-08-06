@@ -1291,7 +1291,7 @@ def unit_economics(request: Request, days: int = 7):
     deny = _require(request, "admin")
     if deny:
         return deny
-    gw_ds = os.getenv("GATEWAY_BQ_DATASET", "ai_gateway")
+    gw_ds = os.getenv("GATEWAY_BQ_DATASET", "ai_gateway_audit")
     gw_tbl = os.getenv("GATEWAY_BQ_TABLE", "requests")
     if not (GCP_PROJECT and EVAL_DATASET):
         return {"configured": False, "rows": []}

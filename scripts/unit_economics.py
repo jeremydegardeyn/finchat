@@ -49,7 +49,7 @@ except Exception:
     pass
 
 PROJECT = os.getenv("GCP_PROJECT", "strongsville-city-schools")
-GATEWAY_DATASET = os.getenv("GATEWAY_BQ_DATASET", "ai_gateway")
+GATEWAY_DATASET = os.getenv("GATEWAY_BQ_DATASET", "ai_gateway_audit")
 GATEWAY_TABLE = os.getenv("GATEWAY_BQ_TABLE", "requests")
 
 SUCCESS_THRESHOLD = float(os.getenv("SUCCESS_THRESHOLD", "0.7"))

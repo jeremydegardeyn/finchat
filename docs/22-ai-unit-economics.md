@@ -88,6 +88,18 @@ The unrecognised-model fallback is deliberately a real entry rather than a zero 
 **a model that costs nothing is the most dangerous default in a spend report**, because it
 makes unattributed traffic look free.
 
+## The datasets must be co-located
+
+`ai_gateway_audit` lives in **us-central1**, not the `US` multi-region, and that is not a
+naming accident. **BigQuery cannot join across locations.** The gateway's original
+`ai_gateway` dataset was created in `US` while every FinChat dataset is `us-central1`, so
+the join at the heart of this metric was structurally impossible — it failed with
+`Dataset finchat_eval_prod was not found in location US`, which reads as a missing
+dataset rather than a geography mismatch.
+
+Anything that later writes half of this metric has to land in `us-central1` too. A
+correctly-schema'd table in the wrong location is as useless as no table at all.
+
 ## Known limits
 
 - **Only governed traffic appears.** A task shows up here only if it transited the
