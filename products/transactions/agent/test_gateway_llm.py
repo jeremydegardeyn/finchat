@@ -121,6 +121,17 @@ def test_unserializable_payload_falls_back_instead_of_killing_the_turn(monkeypat
     assert gl._post({"body": {"bad": b"raw bytes"}}) is None
 
 
+def test_system_instruction_is_a_content_object_not_a_string():
+    """ADK holds system_instruction as a plain string; the REST API requires a Content.
+    The genai SDK converts it, so hand-rolling the request means inheriting the
+    conversion. Without this every agent turn 400s with
+    "Invalid value at 'system_instruction'" - which is what happened in production."""
+    body = gl._build_body(_request())
+    si = body["systemInstruction"]
+    assert isinstance(si, dict), f"must be a Content object, got {type(si).__name__}"
+    assert si["parts"][0]["text"] == "You are FinChat."
+
+
 def test_request_without_tools_omits_the_key():
     assert "tools" not in gl._build_body(_request(with_tools=False))
 

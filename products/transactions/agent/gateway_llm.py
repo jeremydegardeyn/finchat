@@ -101,6 +101,15 @@ def _build_body(llm_request) -> dict:
                     "cachedContent", "labels"):
             if key in dumped:
                 body[key] = dumped.pop(key)
+        # ADK holds system_instruction as a plain STRING; the REST API requires a Content
+        # object. The genai SDK normalises this on the way out, so hand-rolling the
+        # request means inheriting the conversion too — Vertex otherwise answers
+        # "Invalid value at 'system_instruction'" and the whole agent turn 400s.
+        si = body.get("systemInstruction")
+        if isinstance(si, str):
+            body["systemInstruction"] = {"parts": [{"text": si}]}
+        elif isinstance(si, dict) and "parts" not in si and "text" in si:
+            body["systemInstruction"] = {"parts": [{"text": si["text"]}]}
         # Fields ADK sets that are not valid generateContent inputs.
         for key in ("responseModalities", "speechConfig", "httpOptions"):
             dumped.pop(key, None)
