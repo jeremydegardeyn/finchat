@@ -579,12 +579,19 @@ async function renderAdmin() {
       <div id="uebox" class="mut">Loading…</div></div>
     <div class="card" style="grid-column:1/-1"><h3>Conversation Log <span class="pill">audit</span></h3>
       <div class="mut" style="font-size:12px;margin-bottom:6px">What the platform actually said, with the judge's score and the model version that served it.</div>
-      <div id="logbox" class="mut">Loading…</div></div>
+      <div id="logbox" class="mut">Loading…</div>
+      <div class="row" style="margin-top:8px;gap:8px;align-items:center">
+        <button class="ghost" id="logprev">← Newer</button>
+        <button class="ghost" id="lognext">Older →</button>
+        <span id="logpage" class="mut" style="font-size:12px"></span></div></div>
     <div class="card" style="grid-column:1/-1"><h3>Backend health</h3><pre>${JSON.stringify(h,null,2)}</pre></div>
   </div>`;
   if (el("evrun")) el("evrun").onclick = runEvalsNow;
   renderUnitEconomics();
+  S.logOffset = 0;
   renderChatLogs();
+  if (el("logprev")) el("logprev").onclick = () => { S.logOffset = Math.max(0, (S.logOffset||0) - 25); renderChatLogs(); };
+  if (el("lognext")) el("lognext").onclick = () => { S.logOffset = (S.logOffset||0) + 25; renderChatLogs(); };
 }
 
 // Cost per SUCCESSFUL task. Deliberately shows tokens rather than dollars: per-token
@@ -611,7 +618,8 @@ async function renderUnitEconomics(){
 // the scorer lagged would be the opposite of an audit trail.
 async function renderChatLogs(){
   const box = el("logbox"); if(!box) return;
-  let r={}; try { r = await (await fetch("/api/logs?limit=40",
+  const off = S.logOffset || 0;
+  let r={}; try { r = await (await fetch(`/api/logs?limit=25&offset=${off}`,
     { headers: S.idtok?{"X-User-Token":S.idtok}:{} })).json(); } catch(e){ r={error:"network"}; }
   if (r.error) { box.textContent = "Unavailable: " + r.error; return; }
   if (!r.configured || !(r.rows||[]).length) { box.innerHTML = `<span class="mut">No captured turns yet.</span>`; return; }
@@ -627,6 +635,11 @@ async function renderChatLogs(){
           <td class="mut" style="font-size:11px">${escapeHtml(x.model_served||x.model_requested||"—")}</td></tr>`;
       }).join("")
     + `</tbody></table>`;
+  const shown = r.rows.length, total = r.total || 0;
+  const pg = el("logpage");
+  if (pg) pg.textContent = `${off+1}–${off+shown} of ${total}`;
+  if (el("logprev")) el("logprev").disabled = off === 0;
+  if (el("lognext")) el("lognext").disabled = off + shown >= total;
 }
 // Eastern-time formatter for the Evaluations card (DST-aware via America/New_York).
 function fmtET(iso){ try { return new Date(iso).toLocaleString("en-US",{ timeZone:"America/New_York",

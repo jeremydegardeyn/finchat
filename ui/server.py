@@ -993,12 +993,13 @@ async def _run_platform(q: str, user_email: str | None = None) -> dict:
         f"=== REPOSITORY DOCUMENTATION ===\n{snippets}\n=== END ===\n\n"
         f"Question: {q}")
 
+    _plat_requested = _plat_served = None
     gw = _gw_complete(prompt, agent_id="platform_docs_assistant",
                       workload_class="grounded_generation",
                       owner="platform-ai@datadinosaur.com", max_output_tokens=1500,
                       on_behalf_of=user_email)
     if gw:
-        text, _, _ = gw
+        text, _plat_requested, _plat_served = gw
     else:
         url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
                f"/locations/{VERTEX_LOCATION}/publishers/google/models/{SEMANTICS_MODEL}:generateContent")
@@ -1012,7 +1013,8 @@ async def _run_platform(q: str, user_email: str | None = None) -> dict:
             return {"mode": "platform", "error": f"platform answer unavailable: {type(e).__name__}"}
 
     return {"mode": "platform", "answer": text or "(no answer)",
-            "sources": sorted({r["source_path"] for r in rows})}
+            "sources": sorted({r["source_path"] for r in rows}),
+            "model_requested": _plat_requested, "model_served": _plat_served}
 
 
 # Keyword routing lives in intent.py so it is testable without FastAPI — see the note
@@ -1243,7 +1245,7 @@ async def my_budget(request: Request):
 
 
 @app.get("/api/logs")
-def chat_logs(request: Request, limit: int = 50, hours: int = 168):
+def chat_logs(request: Request, limit: int = 25, offset: int = 0, hours: int = 168):
     """Recent conversation turns with their judge scores — the audit surface for what the
     platform actually said, not what it was supposed to say.
 
@@ -1264,11 +1266,15 @@ def chat_logs(request: Request, limit: int = 50, hours: int = 168):
       FROM `{ds}.conversation_log` l
       LEFT JOIN `{ds}.conversation_scores` s USING (conversation_id)
       WHERE l.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(hours)} HOUR)
-      ORDER BY l.ts DESC LIMIT {int(limit)}
+      ORDER BY l.ts DESC LIMIT {int(limit)} OFFSET {int(offset)}
     """
+    count_sql = (f"SELECT COUNT(*) n FROM `{ds}.conversation_log` "
+                 f"WHERE ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(hours)} HOUR)")
     try:
         from google.cloud import bigquery
-        rows = [dict(r) for r in bigquery.Client(project=GCP_PROJECT).query(sql).result()]
+        client = bigquery.Client(project=GCP_PROJECT)
+        rows = [dict(r) for r in client.query(sql).result()]
+        total = list(client.query(count_sql).result())[0]["n"]
     except Exception as e:
         return JSONResponse({"error": f"logs unavailable: {type(e).__name__}"}, status_code=502)
     for r in rows:
@@ -1276,7 +1282,8 @@ def chat_logs(request: Request, limit: int = 50, hours: int = 168):
         for k in ("question", "answer", "rationale"):
             if r.get(k) and len(r[k]) > 600:
                 r[k] = r[k][:600] + "…"
-    return {"configured": True, "rows": rows}
+    return {"configured": True, "rows": rows, "total": total,
+            "limit": limit, "offset": offset}
 
 
 @app.get("/api/unit-economics")
