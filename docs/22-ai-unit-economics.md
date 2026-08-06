@@ -16,7 +16,7 @@ Cost per successful task can, because it requires both halves:
 
 | Half | Source | What it contributes |
 |---|---|---|
-| Cost | Gateway audit (`ai_gateway.requests`) | input/output tokens, tier, model, per agent |
+| Cost | Gateway audit (`ai_gateway_audit.requests`, us-central1) | input/output tokens, tier, model, per agent |
 | Success | `finchat_eval_<env>.conversation_scores` | LLM-judge composite score per turn |
 
 Most platforms have one or the other. Having both, and joining them, is what makes this
@@ -103,9 +103,9 @@ correctly-schema'd table in the wrong location is as useless as no table at all.
 ## Known limits
 
 - **Only governed traffic appears.** A task shows up here only if it transited the
-  gateway. With 3 of 6 call sites transiting ([docs/23](23-gateway-transit.md)), this is a
-  view of part of the platform — and by volume, the smaller part. Reading it as total AI
-  spend would understate materially.
+  gateway. With 5 of 6 call sites transiting ([docs/23](23-gateway-transit.md)), this is
+  most but not all of the platform — the managed Data Agent cannot be routed. Reading it
+  as total AI spend would still understate.
 - **Quality is a proxy.** "Successful" means an LLM judge scored the turn above a
   threshold, with all the known biases that carries — position, verbosity, and
   self-enhancement, since the judge shares a model family with what it scores.
