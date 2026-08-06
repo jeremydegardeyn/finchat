@@ -19,7 +19,7 @@ bands read top to bottom.
 | ② Call sites | Six, each carrying an **agent id and workload class**. That pair is what makes spend and behaviour attributable ([ADR-0023](adr/0023-agent-registry-and-identity.md)) |
 | ③ Gateway | Seven steps, in order. The first rejects unregistered workloads; the fourth clamps tier; the last writes the audit row ([ADR-0024](adr/0024-enterprise-ai-gateway.md)) |
 | ④ Models | One requested version, one **served** version, logged per turn ([ADR-0022](adr/0022-model-version-pinning.md)) |
-| ⑤ Data | Hot path, warehouse, two RAG corpora, and the semantic perimeter |
+| ⑤ Data | Warehouse, two RAG corpora, and the semantic perimeter. **Bigtable is deliberately absent** — the module exists and was emulator-verified, but `enable_bigtable` defaults false and no instance is deployed, so drawing it would claim a serving tier that is not serving |
 | ⑥ Human gate | Every consequential action pauses for the verified approver |
 | ⑦ Evidence | Append-only, and the join key that makes unit economics possible |
 | ⑧ Controls | The three that **gate** rather than observe |

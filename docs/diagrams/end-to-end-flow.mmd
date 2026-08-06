@@ -49,21 +49,23 @@ G5 ==> VTX
 G1 -.->|"gateway unreachable → direct<br/><b>bypass, counted</b>"| VTX
 
 %% ============ 5. WHAT IT TOUCHES ============
+%% Bigtable is NOT drawn. The module exists and was emulator-verified (1.6 ms point
+%% reads), but enable_bigtable defaults false and no instance is deployed — it has no
+%% scale-to-zero tier. This diagram is titled "as built", so drawing a serving tier that
+%% is not serving would be the exact kind of claim the transit metric exists to prevent.
+%% See docs/21 for the storage decision and ADR-0017 for the measurements.
 subgraph L5["⑤ Governed data"]
   direction LR
-  BT[("Bigtable<br/>1.6 ms point read")]
   BQ[("BigQuery<br/>Bronze→Silver→Gold")]
   KB[("kb_chunks<br/><i>customer docs</i>")]
   PC[("platform_chunks<br/><i>repo docs</i>")]
   GR[("property graph<br/>+ semantic perimeter")]
 end
 
-BA ==> BT
 BA ==> KB
 PLAT ==> PC
 LOANS ==> BQ
 CA ==> GR
-BT --- BQ
 GR --- BQ
 
 %% ============ 6. HUMAN GATE ============
@@ -107,5 +109,5 @@ classDef store fill:#eef2f5,stroke:#64748b,color:#0f172a
 classDef human fill:#fef3c7,stroke:#b45309,color:#7c2d12,font-weight:bold
 class G1,G2,G3,G4,G5,G6,G7 gate
 class CA bypass
-class AUD,AAL,REG,CL,CS,BT,BQ,KB,PC,GR store
+class AUD,AAL,REG,CL,CS,BQ,KB,PC,GR store
 class HUM human

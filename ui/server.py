@@ -1229,6 +1229,97 @@ async def my_budget(request: Request):
             "persona_label": PERSONA_LABELS.get(p, "Customer"), **data}
 
 
+@app.get("/api/logs")
+def chat_logs(request: Request, limit: int = 50, hours: int = 168):
+    """Recent conversation turns with their judge scores — the audit surface for what the
+    platform actually said, not what it was supposed to say.
+
+    Admin-gated. Reads conversation_log LEFT JOINed to conversation_scores, so unjudged
+    turns still appear: a turn missing from this view because the scorer lagged would be
+    the opposite of an audit trail.
+    """
+    deny = _require(request, "admin")
+    if deny:
+        return deny
+    if not (GCP_PROJECT and EVAL_DATASET):
+        return {"configured": False, "rows": []}
+    ds = f"{GCP_PROJECT}.{EVAL_DATASET}"
+    sql = f"""
+      SELECT l.ts, l.persona, l.channel, l.question, l.answer, l.latency_ms,
+             l.model_requested, l.model_served,
+             s.overall, s.groundedness, s.safety, s.rationale
+      FROM `{ds}.conversation_log` l
+      LEFT JOIN `{ds}.conversation_scores` s USING (conversation_id)
+      WHERE l.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(hours)} HOUR)
+      ORDER BY l.ts DESC LIMIT {int(limit)}
+    """
+    try:
+        from google.cloud import bigquery
+        rows = [dict(r) for r in bigquery.Client(project=GCP_PROJECT).query(sql).result()]
+    except Exception as e:
+        return JSONResponse({"error": f"logs unavailable: {type(e).__name__}"}, status_code=502)
+    for r in rows:
+        r["ts"] = r["ts"].isoformat() if r.get("ts") else None
+        for k in ("question", "answer", "rationale"):
+            if r.get(k) and len(r[k]) > 600:
+                r[k] = r[k][:600] + "…"
+    return {"configured": True, "rows": rows}
+
+
+@app.get("/api/unit-economics")
+def unit_economics(request: Request, days: int = 7):
+    """Cost per SUCCESSFUL task by workload class (docs/22).
+
+    Needs both halves — token cost from the gateway audit, success from the LLM-judge —
+    joined on session_id ≡ conversation_id. Reports tokens and success rates; dollars are
+    deliberately absent until per-token prices are configured, because a spend figure
+    built on invented prices is worse than none.
+    """
+    deny = _require(request, "admin")
+    if deny:
+        return deny
+    gw_ds = os.getenv("GATEWAY_BQ_DATASET", "ai_gateway")
+    gw_tbl = os.getenv("GATEWAY_BQ_TABLE", "requests")
+    if not (GCP_PROJECT and EVAL_DATASET):
+        return {"configured": False, "rows": []}
+    sql = f"""
+      WITH cost AS (
+        SELECT session_id, workload_class, on_behalf_of, model,
+               SUM(COALESCE(input_tokens,0)) AS in_tok,
+               SUM(COALESCE(output_tokens,0)) AS out_tok
+        FROM `{GCP_PROJECT}.{gw_ds}.{gw_tbl}`
+        WHERE outcome = 'ok' AND session_id IS NOT NULL
+          AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(days)} DAY)
+        GROUP BY session_id, workload_class, on_behalf_of, model
+      ),
+      quality AS (
+        SELECT conversation_id, overall FROM `{GCP_PROJECT}.{EVAL_DATASET}.conversation_scores`
+        WHERE scored_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(days)} DAY)
+      )
+      SELECT c.workload_class,
+             IF(c.on_behalf_of IS NULL, 'autonomous', 'user-initiated') AS initiated_by,
+             COUNT(*) AS tasks,
+             COUNTIF(q.overall IS NULL) AS unjudged,
+             COUNTIF(q.overall >= 0.7) AS successful,
+             SUM(c.in_tok + c.out_tok) AS tokens,
+             ROUND(AVG(q.overall), 3) AS avg_quality
+      FROM cost c LEFT JOIN quality q ON q.conversation_id = c.session_id
+      GROUP BY 1, 2 ORDER BY tasks DESC
+    """
+    try:
+        from google.cloud import bigquery
+        rows = [dict(r) for r in bigquery.Client(project=GCP_PROJECT).query(sql).result()]
+    except Exception as e:
+        return JSONResponse({"error": f"unit economics unavailable: {type(e).__name__}"},
+                            status_code=502)
+    for r in rows:
+        ok = r.get("successful") or 0
+        r["tokens_per_successful_task"] = round((r.get("tokens") or 0) / ok) if ok else None
+    return {"configured": True, "threshold": 0.7, "days": days, "rows": rows,
+            "note": "Dollar figures omitted: per-token prices are not configured "
+                    "(scripts/unit_economics.py PRICES). Counts and tokens are real."}
+
+
 @app.get("/api/gateway/transit")
 def gateway_transit(request: Request):
     """Share of this process's model calls that actually transited the gateway.

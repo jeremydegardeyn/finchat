@@ -346,10 +346,23 @@ function renderAnalyst(){
   // genuinely unavailable to it rather than merely discouraged.
   const canQueryData = S.persona !== "admin";
   const examples = EXAMPLES.filter(e => canQueryData || e.route !== "analytics").map(e => e.q);
-  el("aex").innerHTML = `<span class="mut" style="font-size:12px;align-self:center">try:</span>` +
-    examples.map(x=>`<button class="ghost fq">${escapeHtml(x)}</button>`).join("") +
-    (canQueryData ? "" : `<span class="mut" style="font-size:12px;align-self:center">` +
-      `· analytics examples hidden — this identity has no grant on the data products (ADR-0019)</span>`);
+  // Split the rows: data/policy questions ask about the BANK, platform questions ask
+  // about the SYSTEM. Mixing them on one line invites the reader to treat them as the
+  // same kind of thing, which is exactly the distinction the badges exist to draw.
+  const dataChips = EXAMPLES.filter(e => e.route !== "platform" && (canQueryData || e.route !== "analytics"));
+  const platChips = EXAMPLES.filter(e => e.route === "platform");
+  const chipRow = (label, items, note) =>
+    `<div class="row" style="gap:6px;flex-wrap:wrap;width:100%">`
+    + `<span class="mut" style="font-size:12px;align-self:center;min-width:112px">${label}</span>`
+    + items.map(e=>`<button class="ghost fq">${escapeHtml(e.q)}</button>`).join("")
+    + (note ? `<span class="mut" style="font-size:12px;align-self:center">${note}</span>` : "")
+    + `</div>`;
+  el("aex").style.flexDirection = "column";
+  el("aex").style.alignItems = "flex-start";
+  el("aex").innerHTML =
+    chipRow("ask the bank:", dataChips,
+            canQueryData ? "" : "· analytics hidden — this identity has no grant on the data products (ADR-0019)")
+    + chipRow("ask the platform:", platChips, "");
   el("aex").querySelectorAll("button.fq").forEach(b=>b.onclick=()=>{ el("amsg").value=b.textContent; analystSend(); });
   const openers = {
     admin: "Ask me anything about FinChat — the bank's policy docs, the data model, or how the "
@@ -412,9 +425,17 @@ async function analystSend(){
     ? `<span class="pill ok">📚 Knowledge Base</span> `
     : r.mode === "okf"
     ? `<span class="pill ok">📖 Data Model</span> `
+    : r.mode === "platform"
+    ? `<span class="pill ok">🛠 Platform Docs</span> `
     : `<span class="pill ok">📊 Analytics</span> `;
   t.querySelector(".b").innerHTML = badge + escapeHtml(r.answer || "(no answer)");
   let html="";
+  // Platform answers cite repo paths. Showing them turns "the platform says so" into
+  // something checkable against the file.
+  if (r.sources && r.sources.length) {
+    html += `<label>Sources</label><div class="mut" style="font-size:12px">`
+         + r.sources.map(x=>`<code>${escapeHtml(x)}</code>`).join(" · ") + `</div>`;
+  }
   if (r.sql) html += `<details class="sqlbox"><summary>Generated SQL</summary><pre>${escapeHtml(r.sql)}</pre></details>`;
   if (r.rows && r.rows.length){ const cols = r.columns && r.columns.length ? r.columns : Object.keys(r.rows[0]);
     html += `<label>Result (${r.rows.length} rows)</label><table><thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join("")}</tr></thead><tbody>${
@@ -552,9 +573,60 @@ async function renderAdmin() {
       <div class="row" style="margin-top:10px;gap:8px"><button class="ghost" id="evrun">Run evals now</button>
         <span id="evrunmsg" class="mut" style="font-size:12px;align-self:center"></span></div>
       <div class="mut" style="font-size:11px;margin-top:4px">Same LLM-as-judge scorer as the scheduled daily job — run on demand.</div></div>
+    <div class="card" style="grid-column:1/-1"><h3>Unit Economics <span class="pill">cost per successful task</span></h3>
+      <div class="mut" style="font-size:12px;margin-bottom:6px">Token cost (gateway audit) joined to outcome (LLM-judge) on the shared turn id.
+        Unjudged turns are counted as neither success nor failure — a scorer that lags must not look like a quality drop.</div>
+      <div id="uebox" class="mut">Loading…</div></div>
+    <div class="card" style="grid-column:1/-1"><h3>Conversation Log <span class="pill">audit</span></h3>
+      <div class="mut" style="font-size:12px;margin-bottom:6px">What the platform actually said, with the judge's score and the model version that served it.</div>
+      <div id="logbox" class="mut">Loading…</div></div>
     <div class="card" style="grid-column:1/-1"><h3>Backend health</h3><pre>${JSON.stringify(h,null,2)}</pre></div>
   </div>`;
   if (el("evrun")) el("evrun").onclick = runEvalsNow;
+  renderUnitEconomics();
+  renderChatLogs();
+}
+
+// Cost per SUCCESSFUL task. Deliberately shows tokens rather than dollars: per-token
+// prices are not configured, and a spend figure built on invented prices is worse than
+// no figure at all.
+async function renderUnitEconomics(){
+  const box = el("uebox"); if(!box) return;
+  let r={}; try { r = await (await fetch("/api/unit-economics?days=7",
+    { headers: S.idtok?{"X-User-Token":S.idtok}:{} })).json(); } catch(e){ r={error:"network"}; }
+  if (r.error) { box.textContent = "Unavailable: " + r.error; return; }
+  if (!r.configured || !(r.rows||[]).length) {
+    box.innerHTML = `<span class="mut">No governed traffic in the window. A turn appears here only if it
+      transited the gateway (docs/23) and was scored.</span>`; return; }
+  box.innerHTML = `<table><thead><tr><th>workload class</th><th>initiated by</th><th>tasks</th>
+    <th>successful</th><th>unjudged</th><th>quality</th><th>tokens</th><th>tokens / successful task</th></tr></thead><tbody>`
+    + r.rows.map(x=>`<tr><td>${escapeHtml(x.workload_class||"—")}</td><td>${escapeHtml(x.initiated_by||"—")}</td>
+      <td>${x.tasks}</td><td>${x.successful}</td><td>${x.unjudged}</td>
+      <td>${x.avg_quality==null?"—":x.avg_quality}</td><td>${(x.tokens||0).toLocaleString()}</td>
+      <td><b>${x.tokens_per_successful_task==null?"n/a":x.tokens_per_successful_task.toLocaleString()}</b></td></tr>`).join("")
+    + `</tbody></table><div class="mut" style="font-size:11px;margin-top:6px">${escapeHtml(r.note||"")}</div>`;
+}
+
+// The conversation audit. Unjudged turns are included on purpose: a turn missing because
+// the scorer lagged would be the opposite of an audit trail.
+async function renderChatLogs(){
+  const box = el("logbox"); if(!box) return;
+  let r={}; try { r = await (await fetch("/api/logs?limit=40",
+    { headers: S.idtok?{"X-User-Token":S.idtok}:{} })).json(); } catch(e){ r={error:"network"}; }
+  if (r.error) { box.textContent = "Unavailable: " + r.error; return; }
+  if (!r.configured || !(r.rows||[]).length) { box.innerHTML = `<span class="mut">No captured turns yet.</span>`; return; }
+  box.innerHTML = `<table><thead><tr><th>when</th><th>persona</th><th>route</th><th>question</th>
+    <th>score</th><th>latency</th><th>served</th></tr></thead><tbody>`
+    + r.rows.map(x=>{
+        const sc = x.overall==null ? `<span class="pill">unjudged</span>`
+          : `<span class="pill ${x.overall>=0.7?'ok':'warn'}">${x.overall}</span>`;
+        return `<tr><td class="mut" style="white-space:nowrap">${x.ts?fmtET(x.ts):"—"}</td>
+          <td>${escapeHtml(x.persona||"—")}</td><td>${escapeHtml(x.channel||"—")}</td>
+          <td title="${escapeHtml(x.answer||"")}">${escapeHtml((x.question||"").slice(0,90))}</td>
+          <td>${sc}</td><td class="mut">${x.latency_ms==null?"—":x.latency_ms+" ms"}</td>
+          <td class="mut" style="font-size:11px">${escapeHtml(x.model_served||x.model_requested||"—")}</td></tr>`;
+      }).join("")
+    + `</tbody></table>`;
 }
 // Eastern-time formatter for the Evaluations card (DST-aware via America/New_York).
 function fmtET(iso){ try { return new Date(iso).toLocaleString("en-US",{ timeZone:"America/New_York",
