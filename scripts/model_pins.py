@@ -51,11 +51,38 @@ import os
 # configured. Keys match the FINCHAT_PIN_<KEY> environment variable that overrides them.
 ALIASES = {
     "AGENT": "gemini-2.5-flash",      # Banking Assistant + loan agents (M2, M3)
-    "ROUTER": "gemini-2.5-flash",     # analyst intent router (BFF)
+    # Intent routing runs on gemini-3.5-flash-lite: it is the highest-volume call site,
+    # its output is one word (so quality risk is minimal), and it gates every analyst
+    # answer, which makes its latency the most user-visible. Global-only, so this is also
+    # where the residency trade is accepted — see LOCATIONS.
+    "ROUTER": "gemini-3.5-flash-lite",
     "SEMANTICS": "gemini-2.5-flash",  # data-model semantics answerer (BFF)
     "JUDGE": "gemini-2.5-flash",      # LLM-as-judge, live eval + steward gate (M6)
     "STEWARD": "gemini-2.5-flash",    # steward planner/generator (M6)
 }
+
+# Vertex location per call site. Not cosmetic: the Gemini 3 family is published ONLY on
+# the `global` endpoint in this project, so choosing that model also chooses global
+# processing — prompts may be handled in any region. For a banking reference
+# implementation that is a data-residency decision, not a model decision, and it is
+# recorded per call site so the trade is visible where it is made.
+LOCATIONS = {
+    "AGENT": "us-central1",
+    "ROUTER": "global",       # gemini-3.5-flash-lite is global-only
+    "SEMANTICS": "us-central1",
+    "JUDGE": "us-central1",
+    "STEWARD": "us-central1",
+}
+
+
+def location_for(site: str) -> str:
+    return os.getenv(f"FINCHAT_LOC_{site.upper()}") or LOCATIONS.get(site.upper(), "us-central1")
+
+
+def is_global(site: str) -> bool:
+    """True when this call site leaves the regional perimeter."""
+    return location_for(site) == "global"
+
 
 # Workload class per call site — used by the unit-economics rollup (docs/22) so cost per
 # successful task is reported by class rather than as one undifferentiated number.

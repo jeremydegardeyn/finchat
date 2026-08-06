@@ -52,7 +52,18 @@ VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")  # Gemini for inte
 # one — the registry gate reports PIN-1 for every call site still on an alias.
 # The evidence half of the control is `modelVersion` on the response: what was *requested*
 # and what actually *served* are different facts, and only the second is auditable.
-ROUTER_MODEL = os.getenv("FINCHAT_PIN_ROUTER") or "gemini-2.5-flash"
+# The intent router runs Gemini 3.5 Flash Lite, which is published ONLY on the `global`
+# endpoint. Choosing that model therefore also chooses global processing — prompts may be
+# handled outside us-central1. Accepted here and nowhere else: the router sees a bare
+# question with no account data, it is the highest-volume call site, and its latency gates
+# every analyst answer. Every other call site stays regional.
+ROUTER_MODEL = os.getenv("FINCHAT_PIN_ROUTER") or "gemini-3.5-flash-lite"
+ROUTER_LOCATION = os.getenv("FINCHAT_LOC_ROUTER") or "global"
+
+
+def _vertex_host(loc: str) -> str:
+    """Global uses the bare host; regional endpoints are prefixed."""
+    return "aiplatform.googleapis.com" if loc == "global" else f"{loc}-aiplatform.googleapis.com"
 SEMANTICS_MODEL = os.getenv("FINCHAT_PIN_SEMANTICS") or "gemini-2.5-flash"
 JUDGE_MODEL = os.getenv("FINCHAT_PIN_JUDGE") or "gemini-2.5-flash"
 
@@ -1091,8 +1102,8 @@ async def _classify_intent(q: str, user_email: str | None = None) -> str:
 
     try:
         token = _access_token()
-        url = (f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
-               f"/locations/{VERTEX_LOCATION}/publishers/google/models/{ROUTER_MODEL}:generateContent")
+        url = (f"https://{_vertex_host(ROUTER_LOCATION)}/v1/projects/{GCP_PROJECT}"
+               f"/locations/{ROUTER_LOCATION}/publishers/google/models/{ROUTER_MODEL}:generateContent")
         # thinkingBudget=0 is load-bearing, not a tweak. Gemini 2.5 Flash is a THINKING
         # model: with maxOutputTokens=8 it spent the entire allowance on reasoning tokens,
         # hit MAX_TOKENS, and returned a candidate with NO parts at all. Reading
@@ -1104,6 +1115,8 @@ async def _classify_intent(q: str, user_email: str | None = None) -> str:
                                      "thinkingConfig": {"thinkingBudget": 0}}}
         r = await _client().post(url, json=body, headers={"Authorization": f"Bearer {token}"},
                                  timeout=15.0)
+        print(f"intent router: {ROUTER_MODEL}@{ROUTER_LOCATION} "
+              f"{r.elapsed.total_seconds()*1000:.0f}ms")
         cand = (r.json().get("candidates") or [{}])[0]
         parts = (cand.get("content") or {}).get("parts") or []
         if not parts:

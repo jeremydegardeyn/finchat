@@ -88,6 +88,9 @@ jobs:
           PIN_STEWARD: ${{ vars.FINCHAT_PIN_STEWARD }}
           # Unset -> every call site bypasses direct to Vertex, and counts it (ADR-0024).
           AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
+          # Per-call-site Vertex location. Gemini 3 is global-endpoint-only, so a
+          # model choice and a residency choice are the same choice here (ADR-0022).
+          LOC_ROUTER: ${{ vars.FINCHAT_LOC_ROUTER }}
         run: |
           REPO="${REGION}-docker.pkg.dev/${PROJECT}/finchat-${ENV}-images"
           SHA="${GITHUB_SHA::12}"
@@ -98,7 +101,8 @@ jobs:
           pin() { [ -n "$2" ] && printf ',FINCHAT_PIN_%s=%s' "$1" "$2" || true; }
           AGENT_PINS="$(pin AGENT "$PIN_AGENT")"
           STEWARD_PINS="$(pin STEWARD "$PIN_STEWARD")$(pin JUDGE "$PIN_JUDGE")"
-          UI_PINS="$(pin ROUTER "$PIN_ROUTER")$(pin SEMANTICS "$PIN_SEMANTICS")$(pin JUDGE "$PIN_JUDGE")"
+          loc() { [ -n "$2" ] && printf ',FINCHAT_LOC_%s=%s' "$1" "$2" || true; }
+          UI_PINS="$(pin ROUTER "$PIN_ROUTER")$(pin SEMANTICS "$PIN_SEMANTICS")$(pin JUDGE "$PIN_JUDGE")$(loc ROUTER "$LOC_ROUTER")"
           deploy() { # name image-name service-account extra-env
             # --cpu-boost: extra CPU during container startup only (no idle cost) —
             # meaningfully shortens Python cold starts on scale-to-zero services.
