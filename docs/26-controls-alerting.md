@@ -304,11 +304,17 @@ by probing its endpoint — see 9.5.
 ### 9.4 ServiceNow — integration user
 
 1. **User Administration → Users** (`sys_user.list`) → **New**
-2. User ID `gcp_integration`; **Active** checked; **Web service access only** checked
+2. User ID `gcp_integration`, **Active** checked. Mark it non-human: on current releases
+   that is **Identity type: Machine** plus **Internal Integration User** (older releases
+   label the same intent *Web service access only*).
 3. **Submit** — the Roles related list only appears after the record exists
-4. Reopen → **Roles** → **Edit** → add `evt_mgmt_integration` → Save
-5. Header right-click → **Set Password**. If a *Password needs reset* flag is set, clear it or
-   Basic Auth returns 401.
+4. Reopen → **Roles** → **Edit** → add `evt_mgmt_integration` → Save. That single role is
+   all the pipeline needs. Verified against a live instance: it grants write on `em_event`
+   and **not** read on `em_alert`, so the integration account cannot see the alerts its own
+   events produce — correct least privilege, and worth knowing before you try to verify
+   correlation through the API rather than the UI.
+5. **Set Password** on the form. If *Password needs reset* is ticked, clear it or Basic Auth
+   returns 401.
 
 `evt_mgmt_integration` only exists once Event Management core is active, so its presence in the
 role picker is a useful activation check.
