@@ -123,3 +123,22 @@ def test_non_control_events_are_dropped_before_the_post():
     spec = yaml.safe_load(SOURCE)
     step_names = [list(s)[0] for s in spec["main"]["steps"]]
     assert step_names.index("guard_shape") < step_names.index("post_event")
+
+
+def test_event_time_is_converted_to_servicenow_date_format():
+    """ServiceNow wants "YYYY-MM-DD HH:MM:SS". Handed an ISO-8601 string it takes the date
+    and silently zeroes the time — the first end-to-end run put every event at 00:00:00,
+    which destroys chronology in the system a responder actually reads, and fails quietly."""
+    assert "format_event_time" in SOURCE
+    assert "time_of_event: ${sn_time}" in SOURCE
+    assert 'text.substring(iso_parts[1], 0, 8)' in SOURCE
+
+
+def test_event_time_conversion_is_guarded_against_a_non_iso_value():
+    """An unparseable occurred_at must yield an empty string, not a malformed date that
+    ServiceNow rejects or mangles."""
+    spec = yaml.safe_load(SOURCE)
+    names = [list(s)[0] for s in spec["main"]["steps"]]
+    assert names.index("format_event_time") < names.index("convert_event_time")
+    assert names.index("convert_event_time") < names.index("build_row")
+    assert '- sn_time: ""' in SOURCE

@@ -82,6 +82,22 @@ main:
           project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
         result: sn_password
 
+    # ServiceNow date fields want "YYYY-MM-DD HH:MM:SS". Handed the ISO-8601 string the
+    # envelope carries ("2026-08-30T21:45:37.296025+00:00") its parser takes the date and
+    # silently zeroes the time, so every event lands at midnight — verified in the first
+    # end-to-end run, where five events an hour apart all read 00:00:00. That destroys
+    # chronology in the one system a responder actually looks at, and it fails quietly.
+    - format_event_time:
+        assign:
+          - occurred: ${default(map.get(ce, "occurred_at"), "")}
+          - sn_time: ""
+    - convert_event_time:
+        switch:
+          - condition: ${text.match_regex(occurred, "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")}
+            assign:
+              - iso_parts: ${text.split(occurred, "T")}
+              - sn_time: ${iso_parts[0] + " " + text.substring(iso_parts[1], 0, 8)}
+
     # Assembled as YAML, not as a map literal inside ${}. Every field is metadata: no
     # prompt, no response, no exception text, no row value (ADR-0026 point 4).
     - build_info:
@@ -104,7 +120,7 @@ main:
               type: ${default(map.get(ce, "control_id"), "unknown")}
               severity: ${severity}
               message_key: ${default(map.get(ce, "message_key"), "")}
-              time_of_event: ${default(map.get(ce, "occurred_at"), "")}
+              time_of_event: ${sn_time}
               description: '${default(map.get(ce, "source"), "control") + " match " + json.encode_to_string(filters)}'
               additional_info: ${info_json}
 
