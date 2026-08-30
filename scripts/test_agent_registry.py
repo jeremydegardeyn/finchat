@@ -156,3 +156,81 @@ def test_every_agent_maps_to_a_model_inventory_row():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# --- DRIFT-4: gateway coverage (ADR-0026) ------------------------------------
+# The gate exists because screening coverage cannot be maintained by instrumenting each
+# agent: `armor` sits in one place while five call sites reach Vertex. Routing everything
+# through the gateway and asserting it here is the form that scales.
+
+def _models(tmp_path: Path, body: str) -> dict:
+    src = tmp_path / "agents.py"
+    src.write_text("from google.adk.agents import Agent\n" + body, encoding="utf-8")
+    return v.scan_agent_models(src)
+
+
+def test_bare_model_string_is_flagged_as_direct(tmp_path: Path):
+    got = _models(tmp_path, 'a = Agent(name="solo", model="gemini-2.5-flash")\n')
+    assert got["solo"] == "direct"
+
+
+def test_inline_gateway_call_counts_as_transit(tmp_path: Path):
+    got = _models(tmp_path,
+                  'from gateway_llm import gateway_model\n'
+                  'a = Agent(name="wrapped", model=gateway_model("wrapped", "m"))\n')
+    assert got["wrapped"] == "gateway"
+
+
+def test_local_lambda_alias_for_the_gateway_is_resolved(tmp_path: Path):
+    """The real shape in products/loans/agents/agents.py. An earlier version of this
+    scanner matched only the bare name and reported all five loan agents as bypassing the
+    gateway — a false failure against code doing exactly the right thing."""
+    got = _models(tmp_path,
+                  'from gateway_llm import gateway_model\n'
+                  '_m = lambda agent_id: gateway_model(agent_id, "m", owner="o")\n'
+                  'a = Agent(name="aliased", model=_m("aliased"))\n')
+    assert got["aliased"] == "gateway"
+
+
+def test_local_def_wrapping_the_gateway_is_resolved(tmp_path: Path):
+    got = _models(tmp_path,
+                  'from gateway_llm import gateway_model\n'
+                  'def _mk(i):\n    return gateway_model(i, "m")\n'
+                  'a = Agent(name="viadef", model=_mk("viadef"))\n')
+    assert got["viadef"] == "gateway"
+
+
+def test_unrelated_local_call_is_not_mistaken_for_the_gateway(tmp_path: Path):
+    """Resolving aliases must not become 'any call counts', or the gate stops biting."""
+    got = _models(tmp_path,
+                  'def pick(i):\n    return "gemini-2.5-flash"\n'
+                  'a = Agent(name="sneaky", model=pick("sneaky"))\n')
+    assert got["sneaky"] == "direct"
+
+
+def test_unresolvable_name_reports_rather_than_fails(tmp_path: Path):
+    """A false failure trains people to disable the check, so indirection is INFO."""
+    got = _models(tmp_path,
+                  'from gateway_llm import gateway_model\n'
+                  'M = gateway_model("x", "m")\n'
+                  'a = Agent(name="vianame", model=M)\n')
+    assert got["vianame"] in ("gateway", "indirect")
+
+
+def test_the_real_repo_has_no_agent_bypassing_the_gateway():
+    """The assertion that actually matters: no registered agent reaches Vertex directly."""
+    f = v.Findings()
+    v.check_coverage([a for a in agents_catalog.agents("prod") if a["status"] == "active"], f)
+    assert [x for x in f.failures if x.startswith("DRIFT-4")] == []
+
+
+def test_drift4_fires_when_an_agent_does_bypass(tmp_path: Path, monkeypatch):
+    """Proof the gate bites — a control that cannot be shown to fail is not a control."""
+    src = tmp_path / "bypass.py"
+    src.write_text('from google.adk.agents import Agent\n'
+                   'a = Agent(name="rogue", model="gemini-2.5-flash")\n', encoding="utf-8")
+    monkeypatch.setattr(v, "REPO", tmp_path)
+    f = v.Findings()
+    v.check_coverage([{"id": "rogue", "code_name": "rogue", "source": "bypass.py",
+                       "kind": "adk_agent"}], f)
+    assert any(x.startswith("DRIFT-4") for x in f.failures)
