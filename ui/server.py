@@ -551,12 +551,16 @@ def _control_ctx(request: Request) -> tuple[str, str, str]:
 async def agent_proxy(path: str, request: Request):
     """Agent path with Model Armor screening on prompt (in) and response (out)."""
     import armor
-    import control_events
     body = await request.body()
     if body:
         r = await armor.screen_prompt_detailed(body.decode("utf-8", "replace"))
         if not r["allowed"]:
+            # Imported here, inside the guard, and never at function top level. Terraform
+            # and CI/CD deploy on different clocks, so a revision can be running an image
+            # older than this file; an unguarded import would turn that ordinary skew into
+            # a 500 on every chat request. Emission is evidence — it fails quiet.
             try:
+                import control_events
                 principal, trace, env = _control_ctx(request)
                 control_events.emit_armor_block(
                     direction="prompt", filters=r["filters"],
@@ -575,6 +579,7 @@ async def agent_proxy(path: str, request: Request):
         r = await armor.screen_response_detailed(resp.body.decode("utf-8", "replace"))
         if not r["allowed"]:
             try:
+                import control_events
                 principal, trace, env = _control_ctx(request)
                 control_events.emit_armor_block(
                     direction="response", filters=r["filters"],
