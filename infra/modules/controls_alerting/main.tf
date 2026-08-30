@@ -151,33 +151,17 @@ resource "google_eventarc_trigger" "on_event" {
 # Deliberately independent of everything above: it keeps recording when ServiceNow is
 # down, unlicensed, or hibernating, which is the whole point of separating the planes.
 
-resource "google_bigquery_table" "control_events" {
-  count               = var.evidence_dataset == "" ? 0 : 1
-  project             = var.project_id
-  dataset_id          = var.evidence_dataset
-  table_id            = "control_events"
-  deletion_protection = true
-
-  time_partitioning {
-    type          = "DAY"
-    field         = "timestamp"
-    expiration_ms = var.evidence_retention_days == null ? null : var.evidence_retention_days * 24 * 60 * 60 * 1000
-  }
-
-  # Written by a Cloud Logging sink, so the schema is the sink's, not ours: Logging owns
-  # these column names. jsonPayload carries the envelope.
-  schema = jsonencode([
-    { name = "timestamp", type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "logName", type = "STRING" },
-    { name = "severity", type = "STRING" },
-    { name = "insertId", type = "STRING" },
-    { name = "resource", type = "RECORD", fields = [
-      { name = "type", type = "STRING" },
-      { name = "labels", type = "JSON" },
-    ] },
-    { name = "jsonPayload", type = "JSON" },
-  ])
-}
+# NOTE: there is deliberately no google_bigquery_table here.
+#
+# A Cloud Logging BigQuery sink names its own destination tables after the log id — the
+# control events land in `run_googleapis_com_stdout`, not in anything we choose. An
+# earlier revision of this module declared a `control_events` table, which Terraform
+# would have created and Logging would then have ignored: an empty table sitting beside
+# the real data, looking authoritative in every diff.
+#
+# The queryable `control_events` view over the sink's table belongs with the
+# reconciliation work (A7), because it cannot be created until the sink's table exists,
+# and that only happens once the first event is written.
 
 resource "google_logging_project_sink" "evidence" {
   count                  = var.evidence_dataset == "" ? 0 : 1

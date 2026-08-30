@@ -10,6 +10,11 @@
 # a Store app not entitled on the target instance (F9). Event Management still owns
 # correlation: `message_key` collapses events into one `em_alert`, and
 # `em_alert_management_rule` decides what becomes an incident.
+#
+# Two Workflows constraints shape the code below, both found at deploy time:
+#   * `env` is a RESERVED variable name — the environment is held in `environment`.
+#   * map literals cannot appear inside a ${} expression, so any map destined for
+#     json.encode_to_string is assembled as a YAML block first (see build_info).
 ##############################################################################
 main:
   params: [event]
@@ -24,12 +29,12 @@ main:
     - guard_shape:
         switch:
           - condition: ${ce == null}
-            return: {"skipped": "not a control event"}
+            return: "skipped: not a control event"
 
     - defaults:
         assign:
           - svc: ${default(map.get(entry, ["resource", "labels", "service_name"]), "")}
-          - env: ${default(map.get(ce, "environment"), "unknown")}
+          - environment: ${default(map.get(ce, "environment"), "unknown")}
           - filters: ${default(map.get(ce, "filters"), [])}
           - severity: "4"
           - elevated: false
@@ -42,10 +47,10 @@ main:
         switch:
           - condition: ${text.match_regex(svc, "^finchat-(dev|test|prod)-")}
             assign:
-              - env: ${text.split(svc, "-")[1]}
+              - environment: ${text.split(svc, "-")[1]}
 
-    # Prompt injection and sensitive-data hits outrank harmful-content hits: the first
-    # two are attacks or leaks, the third is usually a user being unpleasant.
+    # Prompt injection, sensitive-data and malicious-URL hits outrank harmful-content
+    # hits: the first three are attacks or leaks, the last is usually a rude user.
     - detect_elevated_filters:
         for:
           value: f
@@ -63,10 +68,10 @@ main:
     # outage goes unseen.
     - derive_severity:
         switch:
-          - condition: ${env == "prod" and elevated}
+          - condition: ${environment == "prod" and elevated}
             assign:
               - severity: "2"
-          - condition: ${env == "prod"}
+          - condition: ${environment == "prod"}
             assign:
               - severity: "3"
 
@@ -77,23 +82,31 @@ main:
           project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
         result: sn_password
 
+    # Assembled as YAML, not as a map literal inside ${}. Every field is metadata: no
+    # prompt, no response, no exception text, no row value (ADR-0026 point 4).
+    - build_info:
+        assign:
+          - info:
+              environment: ${environment}
+              principal_hash: ${default(map.get(ce, "principal_hash"), "")}
+              evidence_ref: ${default(map.get(ce, "evidence_ref"), "")}
+              filters: ${filters}
+          - info_json: ${json.encode_to_string(info)}
+          - basic: ${"Basic " + base64.encode(text.encode(sys.get_env("SN_USER") + ":" + sn_password))}
+
     - build_row:
         assign:
-          - basic: ${"Basic " + base64.encode(text.encode(sys.get_env("SN_USER") + ":" + sn_password))}
-          # Every field here is metadata. No prompt, no response, no exception text, no
-          # row value — see ADR-0026 point 4. `description` is assembled from the closed
-          # filter vocabulary, never from user input.
           - row:
               source: "GCP"
               event_class: "finchat"
               node: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
-              resource: ${if(svc != "", svc, env)}
+              resource: ${if(svc != "", svc, environment)}
               type: ${default(map.get(ce, "control_id"), "unknown")}
               severity: ${severity}
               message_key: ${default(map.get(ce, "message_key"), "")}
               time_of_event: ${default(map.get(ce, "occurred_at"), "")}
               description: '${default(map.get(ce, "source"), "control") + " match " + json.encode_to_string(filters)}'
-              additional_info: '${json.encode_to_string({"environment": env, "principal_hash": default(map.get(ce, "principal_hash"), ""), "evidence_ref": default(map.get(ce, "evidence_ref"), ""), "filters": filters})}'
+              additional_info: ${info_json}
 
     - post_event:
         try:
@@ -119,4 +132,4 @@ main:
           status: ${sn_response.code}
           message_key: ${row.message_key}
           severity: ${severity}
-          environment: ${env}
+          environment: ${environment}

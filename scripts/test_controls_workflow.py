@@ -84,7 +84,24 @@ def test_severity_distinguishes_prod_from_nonprod():
     spec = yaml.safe_load(SOURCE)
     steps = {list(s)[0] for s in spec["main"]["steps"]}
     assert "derive_severity" in steps
-    assert 'env == "prod"' in SOURCE
+    assert 'environment == "prod"' in SOURCE
+
+
+def test_does_not_assign_to_reserved_workflow_variables():
+    """`env` is reserved in Workflows and the deploy fails on it — which is a slow way to
+    find out, so pin the whole reserved set here instead."""
+    reserved = ("env", "sys", "text", "json", "map", "list", "http", "base64", "time", "math")
+    for step in yaml.safe_load(SOURCE)["main"]["steps"]:
+        body = list(step.values())[0]
+        for assignment in (body.get("assign", []) if isinstance(body, dict) else []):
+            for name in assignment:
+                assert name not in reserved, f"assigns to reserved variable {name!r}"
+
+
+def test_maps_destined_for_json_are_built_as_yaml_blocks():
+    """Workflows expressions cannot contain map literals; `{...}` inside ${} fails to
+    parse at deploy time."""
+    assert 'json.encode_to_string({' not in SOURCE.replace(" ", "")
 
 
 # --- resilience -------------------------------------------------------------

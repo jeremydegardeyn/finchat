@@ -18,7 +18,7 @@ output "servicenow_secret" {
   value       = var.servicenow_instance_url == "" ? null : google_secret_manager_secret.servicenow[0].secret_id
 }
 
-output "evidence_table" {
-  description = "Append-only evidence table fed by the Cloud Logging sink."
-  value       = var.evidence_dataset == "" ? null : "${var.project_id}.${var.evidence_dataset}.control_events"
+output "evidence_dataset" {
+  description = "Dataset the evidence sink writes to. Cloud Logging names the table itself (run_googleapis_com_stdout), so there is no fixed table name to output."
+  value       = var.evidence_dataset == "" ? null : "${var.project_id}.${var.evidence_dataset}"
 }
