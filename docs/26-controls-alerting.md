@@ -1,9 +1,11 @@
 # 26 — Technical Controls Alerting (GCP → ServiceNow)
 
-**Status:** partially built. A2 (DLP regionalization) is **applied in dev/test/prod**; the envelope,
-armor filter detail, dispatch workflow and Terraform module are **written but not applied** (both
-module flags default empty, so it currently creates nothing). A3, A7, A8 outstanding.
-Extends ADR-0008 (Model Armor).
+**Status:** built; awaiting end-to-end verification. A2 (DLP regionalization) applied in
+dev/test/prod. A5 infrastructure **deployed in dev** (topic, DLQ, both sinks, workflow, Eventarc
+trigger, secret container). A1/A3/A4/A6/A7/A8 written and CI-guarded but inert: `CONTROL_EVENTS`,
+`servicenow_instance_url` and `model_armor_use_dlp_templates` all default off, and the dev UI image
+predates the emitter until CI rebuilds. Outstanding: end-to-end test, prod/test rollout, SCC
+decision. Extends ADR-0008 (Model Armor).
 **Related:** ADR-0023 (agent registry), ADR-0024 (AI gateway), `compliance/regulatory-map.md`,
 `orchestration` repo (`composer/dags/utils/alerting.py`).
 
@@ -163,29 +165,29 @@ registry only sees teams that registered, and SCC becomes load-bearing. That thr
 **A0. Fork test (do first, ~10 min).** Activate Event Management on dev305242; `curl` a synthetic
 JSON 1.2 payload at the inbound endpoint. Resolves F9 and decides A5.
 
-**A1. Envelope + routing matrix.** Spec first — both sources must agree on the contract before wiring.
+**A1. Envelope + routing matrix.** *[DONE]* Spec first — both sources must agree on the contract before wiring.
 
-**A2. Regionalize DLP templates.** `parent = projects/P/locations/us-central1`; move the Dataflow
+**A2. Regionalize DLP templates.** *[DONE — applied dev/test/prod]* `parent = projects/P/locations/us-central1`; move the Dataflow
 reference in lockstep. Replacement, not edit (F6).
 
-**A3. Model Armor `advanced_config`.** Point at the regionalized inspect + deid templates. Chat
+**A3. Model Armor `advanced_config`.** *[DONE — flag off]* Point at the regionalized inspect + deid templates. Chat
 becomes the DLP test harness with Silver-matching surrogates (F7). Grant the Model Armor service
 agent DLP User/Reader.
 
-**A4. Emission + evidence.** Floor settings ON (closes F16/F17). Log sink to locked bucket + BQ
+**A4. Emission + evidence.** *[PARTIAL — emitter + sinks done; floor settings still off]* Floor settings ON (closes F16/F17). Log sink to locked bucket + BQ
 `control_events`. Redacted structured control event; `labelExtractors` for the notification (F3/F12).
 
-**A5. Notification.** Settled by F9: **Pub/Sub → Cloud Workflows → `/api/now/table/em_event`**.
+**A5. Notification.** *[DONE — deployed in dev]* Settled by F9: **Pub/Sub → Cloud Workflows → `/api/now/table/em_event`**.
 No container, no CI build target, reuse the existing `workflows` module. Workflows shapes the
 envelope into an `em_event` row; ServiceNow still owns correlation and promotion. (Not a Cloud Run
 service — that was an earlier, wrong call. Not the `sn_em_connector` webhook — not entitled here.)
 
-**A6. Composer.** `on_failure_callback` emits the same envelope instead of a Teams-shaped message.
+**A6. Composer.** *[DONE — orchestration repo, branch controls-alerting-emitter]* `on_failure_callback` emits the same envelope instead of a Teams-shaped message.
 Keep `notify_failure_lightweight` as **break-glass**, explicitly scoped as notification not record.
 
-**A7. Reconciliation.** Scheduled query + control-failure alert. The auditable deliverable.
+**A7. Reconciliation.** *[DONE]* Scheduled query + control-failure alert. The auditable deliverable.
 
-**A8. Coverage gate.** DRIFT-4 in `verify_agent_registry.py`.
+**A8. Coverage gate.** *[DONE — DRIFT-4, dev+prod clean]* DRIFT-4 in `verify_agent_registry.py`.
 
 **A9. Docs.** ADR-0026, this doc, `docs/08` cost line for DLP inspection under advanced config.
 

@@ -22,9 +22,21 @@ import armor
 # pins that shut.
 
 def test_envelope_key_set_is_frozen():
-    """Adding a field must be a deliberate contract change, not a drive-by."""
+    """Adding a field must be a deliberate contract change, not a drive-by.
+
+    The literal is spelled out rather than compared to the constant, because the same
+    literal is asserted in the orchestration repo's
+    `composer/tests/test_control_events.py`. Those two repos deploy independently and
+    share no package, so this pair of assertions IS the cross-repo contract: add a field
+    on one side only and that side's build fails, instead of the dispatch workflow
+    quietly receiving an envelope it cannot read.
+    """
     ev = ce.build(control_id="model_armor.prompt", source="model_armor")
     assert set(ev) == set(ce.ENVELOPE_KEYS)
+    assert ce.ENVELOPE_KEYS == frozenset({
+        "control_id", "source", "environment", "severity", "message_key",
+        "occurred_at", "principal_hash", "evidence_ref", "filters",
+    })
 
 
 def test_build_has_no_parameter_that_could_carry_content():
