@@ -76,6 +76,23 @@ resource "google_secret_manager_secret" "servicenow" {
   }
 }
 
+resource "google_secret_manager_secret" "teams" {
+  count     = local.notify_enabled && var.enable_teams_notify ? 1 : 0
+  project   = var.project_id
+  secret_id = "${local.prefix}-teams-webhook"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "workflow_reads_teams" {
+  count     = local.notify_enabled && var.enable_teams_notify ? 1 : 0
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.teams[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workflow[0].email}"
+}
+
 resource "google_secret_manager_secret_iam_member" "workflow_reads_secret" {
   count     = local.notify_enabled ? 1 : 0
   project   = var.project_id
@@ -105,6 +122,8 @@ resource "google_workflows_workflow" "dispatch" {
     SN_INSTANCE_URL = var.servicenow_instance_url
     SN_USER         = var.servicenow_user
     SN_SECRET_ID    = google_secret_manager_secret.servicenow[0].secret_id
+    # Empty disables the Teams hop entirely — the workflow skips it rather than failing.
+    TEAMS_SECRET_ID = var.enable_teams_notify ? google_secret_manager_secret.teams[0].secret_id : ""
   }
 }
 

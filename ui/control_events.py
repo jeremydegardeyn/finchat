@@ -80,6 +80,34 @@ def principal_hash(principal: str | None) -> str:
     return hashlib.sha256(f"{SALT}:{principal}".encode("utf-8")).hexdigest()[:16]
 
 
+# Detector classes, ordered by seriousness. Correlation keys on the CLASS, never on the
+# exact filter set.
+#
+# Keying on the set was the first design and it fragmented the queue: the same jailbreak
+# tripped `["pi_and_jailbreak"]` on one attempt and `["pi_and_jailbreak","rai"]` on the
+# next, and Event Management — correctly — treated those as two incidents. An attacker
+# probing for five minutes would open a fresh ticket every time the detector mix shifted,
+# which is the exact flooding correlation exists to prevent.
+#
+# The class is stable across attempts of the same attack while still separating things a
+# responder handles differently. The full filter list still travels in the event, so
+# nothing is lost — only the grouping is coarser.
+FILTER_CLASSES = (
+    ("security", ("pi_and_jailbreak", "malicious_uris")),  # someone attacking the system
+    ("privacy", ("sdp",)),                                 # sensitive data crossing a boundary
+    ("content", ("rai",)),                                 # a user being unpleasant
+)
+
+
+def filter_class(filters: list[str] | None) -> str:
+    """The single class a violation belongs to. Highest seriousness wins when several fire."""
+    fired = set(filters or [])
+    for name, members in FILTER_CLASSES:
+        if fired & set(members):
+            return name
+    return "unclassified"
+
+
 def message_key(source: str, control_id: str, *parts: str) -> str:
     """Correlation key. Event Management collapses events sharing one into a single alert.
 
@@ -169,8 +197,9 @@ def emit_armor_block(
         principal=principal,
         evidence_ref=trace,
         filters=matched,
-        # One incident per principal per filter set, not one per attempt.
-        key_parts=(principal_hash(principal), ",".join(matched)),
+        # One incident per principal per detector CLASS, not per attempt and not per
+        # filter set — see FILTER_CLASSES for why the set was the wrong key.
+        key_parts=(principal_hash(principal), filter_class(matched)),
         environment=environment,
     )
     emit(event)

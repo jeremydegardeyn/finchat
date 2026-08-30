@@ -142,3 +142,39 @@ def test_event_time_conversion_is_guarded_against_a_non_iso_value():
     assert names.index("format_event_time") < names.index("convert_event_time")
     assert names.index("convert_event_time") < names.index("build_row")
     assert '- sn_time: ""' in SOURCE
+
+
+# --- Teams (optional second destination) -------------------------------------
+
+def test_teams_hop_is_skipped_when_unconfigured():
+    """Empty secret id must skip, not fail — most environments will not set it."""
+    assert 'sys.get_env("TEAMS_SECRET_ID") == ""' in SOURCE
+    assert "teams_gate" in SOURCE
+
+
+def test_teams_runs_after_servicenow_and_cannot_fail_the_execution():
+    """ServiceNow is the record; Teams is awareness. A broken webhook must not cost the
+    auditable write, which is the entire reason the two planes are separate."""
+    names = [list(s)[0] for s in yaml.safe_load(SOURCE)["main"]["steps"]]
+    assert names.index("post_event") < names.index("notify_teams")
+    teams = [s for s in yaml.safe_load(SOURCE)["main"]["steps"] if "notify_teams" in s][0]
+    assert "except" in teams["notify_teams"]
+
+
+def test_teams_card_carries_no_content():
+    """Same redaction rule as the em_event row — detectors, never what they fired on."""
+    card = SOURCE[SOURCE.index("- card:"):SOURCE.index("- post_card:")]
+    for leaky in ("occurred", "jsonPayload", "textPayload", "prompt", "response"):
+        assert leaky not in card, f"Teams card references {leaky!r}"
+
+
+def test_teams_card_links_back_to_the_system_of_record():
+    """Posting from the workflow rather than from ServiceNow costs us the incident number;
+    the event link is what lets a responder cross over anyway."""
+    assert "nav_to.do?uri=em_event.do?sys_id=" in SOURCE
+
+
+def test_teams_webhook_comes_from_secret_manager():
+    """A Teams webhook URL is a credential: anyone holding it can post to the channel."""
+    assert 'secret_id: ${sys.get_env("TEAMS_SECRET_ID")}' in SOURCE
+    assert "https://" not in SOURCE.split("notify_teams")[1].split("- done:")[0]

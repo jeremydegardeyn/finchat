@@ -253,3 +253,53 @@ def test_clean_result_reports_nothing():
     clean = {"filterMatchState": "NO_MATCH_FOUND",
              "filterResults": {"rai": {"raiFilterResult": {"matchState": "NO_MATCH_FOUND"}}}}
     assert armor.matched_filters(clean) == []
+
+
+# --- correlation keys on the detector CLASS, not the filter set ---------------
+# Keying on the set was the first design and it fragmented the ServiceNow queue in the
+# live prod test: Alert0010007 ["pi_and_jailbreak"] and Alert0010008
+# ["pi_and_jailbreak","rai"] were the SAME jailbreak, split because one attempt also
+# tripped RAI. Alert0010009 ["sdp"] and Alert0010010 ["rai","sdp"] split the same way.
+
+def test_same_attack_collapses_even_when_the_detector_mix_shifts():
+    """The regression that produced four alerts where two were wanted."""
+    a = ce.emit_armor_block(direction="prompt", filters=["pi_and_jailbreak"],
+                            principal="a@x.com", trace="t")
+    b = ce.emit_armor_block(direction="prompt", filters=["pi_and_jailbreak", "rai"],
+                            principal="a@x.com", trace="t")
+    assert a["message_key"] == b["message_key"]
+
+
+def test_privacy_hit_collapses_regardless_of_incidental_content_flags():
+    a = ce.emit_armor_block(direction="prompt", filters=["sdp"], principal="a@x.com", trace="t")
+    b = ce.emit_armor_block(direction="prompt", filters=["rai", "sdp"],
+                            principal="a@x.com", trace="t")
+    assert a["message_key"] == b["message_key"]
+
+
+def test_an_attack_and_a_leak_still_stay_apart():
+    """Coarser grouping must not merge things a responder handles differently."""
+    a = ce.emit_armor_block(direction="prompt", filters=["pi_and_jailbreak"],
+                            principal="a@x.com", trace="t")
+    b = ce.emit_armor_block(direction="prompt", filters=["sdp"], principal="a@x.com", trace="t")
+    assert a["message_key"] != b["message_key"]
+
+
+def test_class_ordering_puts_an_attack_above_a_leak_above_rudeness():
+    assert ce.filter_class(["pi_and_jailbreak", "sdp", "rai"]) == "security"
+    assert ce.filter_class(["sdp", "rai"]) == "privacy"
+    assert ce.filter_class(["rai"]) == "content"
+    assert ce.filter_class(["malicious_uris"]) == "security"
+
+
+def test_unknown_detector_is_classified_not_dropped():
+    """A new Model Armor filter must still correlate somewhere rather than vanish."""
+    assert ce.filter_class(["some_future_filter"]) == "unclassified"
+    assert ce.filter_class([]) == "unclassified"
+
+
+def test_the_full_filter_list_survives_in_the_event():
+    """Coarser correlation must not cost detail — the responder still sees what fired."""
+    e = ce.emit_armor_block(direction="prompt", filters=["rai", "sdp"],
+                            principal="a@x.com", trace="t")
+    assert e["filters"] == ["rai", "sdp"]
