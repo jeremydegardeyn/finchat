@@ -109,6 +109,21 @@ control_id, source (model_armor|dlp|composer|scc), environment,
 severity, message_key, occurred_at, principal_hash, evidence_ref
 ```
 
+### Correlation keys on the detector CLASS
+
+`message_key` is `<source>:<control_id>:<principal_hash>:<class>` where class is one of
+**security** (prompt injection, malicious URLs), **privacy** (sensitive data), or
+**content** (RAI). Highest seriousness wins when several detectors fire.
+
+The first design keyed on the exact filter set and it fragmented the queue in the live prod
+test: `Alert0010007 ["pi_and_jailbreak"]` and `Alert0010008 ["pi_and_jailbreak","rai"]` were
+the same jailbreak, split because one attempt also tripped RAI; `0009 ["sdp"]` and
+`0010 ["rai","sdp"]` split the same way. The set is not stable across attempts of one attack,
+so an attacker probing for five minutes opens a fresh ticket every time the detector mix
+shifts — the exact flooding correlation exists to prevent. It is the same failure as keying
+on an Airflow `try_number`, reached from the other direction: too strict rather than too
+lenient. The full filter list still travels in the event, so only the grouping coarsened.
+
 `environment` **must** derive from resource identity — never from a payload field the emitter sets.
 
 Correction to an earlier assumption: it is **not** `resource.labels.env`. Cloud Run's monitored
@@ -355,7 +370,9 @@ increment, the `message_key` is not matching and everything downstream is wrong.
 
 - **Name:** `FinChat prod control violations -> Incident`, **Active** checked
 - **Conditions:** `Source is GCP` AND `Resource starts with finchat-prod` AND
-  `Severity is Major` (2)
+  `Severity is Major` (2). **Do not match on description text** — the live test found the
+  rule silently not firing (`No event rule applied` in the event's Processing Notes) because
+  the description format differs between a hand-written test event and the pipeline's.
 - **Action:** enable incident creation and set an assignment group
 
 Exact field placement varies by platform release, so locate the incident-creation action on the
@@ -395,3 +412,46 @@ corpus") so it does not stop a release, but it means **new documentation — inc
 is not searchable in the platform KB** until the CI/CD service account gets dataset-level write on
 `finchat_kb_<env>`. Unrelated to controls alerting; recorded here because this rollout is what
 surfaced it.
+
+## 11. What the live end-to-end test found
+
+Run against dev and prod on 2026-08-30. The pipeline worked first time; everything below is
+a defect the test surfaced that unit tests could not.
+
+**The UI swallowed the block and answered anyway.** A prompt carrying an SSN was screened
+out, the control event fired, the workflow ran, ServiceNow raised the ticket — and the SPA
+showed an account balance. `api()` only special-cased 503, so a 400 refusal arrived as an
+ordinary object with `.error` set, indistinguishable from a backend outage; `agentAnswer()`
+treated it as one and fell through to `groundedAnswer()`, which matched `/balance/` and
+served the answer from the client-side path. The screening decision was made, recorded,
+ticketed, and then ignored by the only component a user can see — the worst shape a control
+failure can take, because everything downstream looks healthy. Fixed; guarded by
+`ui/test_block_surfacing.py`.
+
+**Every event landed at midnight.** ServiceNow date fields want `YYYY-MM-DD HH:MM:SS`; handed
+the ISO-8601 string the envelope carries, the parser takes the date and zeroes the time. No
+error, row created, chronology gone. Fixed in the workflow and pinned by tests.
+
+**Correlation was too strict** — see §3, class-based keying.
+
+**ServiceNow writes ~3 `em_event` rows per POST.** Verified one workflow execution returning
+`status 201` per event, so this is not duplicate sending on our side; the extra rows appear
+during EM's own processing. They collapse into a single `em_alert`, so it is cosmetic at the
+alert layer — but a row count is not an event count, and any reporting built on `em_event`
+must account for it.
+
+**Nothing promoted to an incident.** The event record's Processing Notes read
+`No event rule applied`. The alert management rule's conditions do not match what the
+pipeline emits — a rule keyed on the description text of a hand-written test event
+(`Model Armor MATCH_FOUND: pi_and_jailbreak`) will miss the pipeline's format
+(`model_armor match ["sdp"]`). Match on `Source`, `Resource` and `Severity` instead, which
+are stable.
+
+**No CI binding.** `Failed to find the host with name: strongsville-city-schools` — there is
+no CMDB in this sandbox, so alerts cannot bind to a configuration item and assignment stays
+manual. This is exactly the Plan B row (§5) where a real deployment diverges: CI binding is
+what drives auto-assignment, impact and service maps.
+
+**The integration user cannot read its own alerts.** `evt_mgmt_integration` grants write on
+`em_event` and not read on `em_alert`. Correct least privilege; it means correlation must be
+verified in the UI, not through the API.
