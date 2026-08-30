@@ -47,6 +47,16 @@ jobs:
         run: pytest test_offline.py -q
       - name: Agent registry — gate tests (ADR-0023)
         run: pytest scripts/test_agent_registry.py -q
+      - name: Control-event envelope + redaction guard (ADR-0026)
+        working-directory: ui
+        run: pytest test_control_events.py -q
+      - name: Controls dispatch workflow — drift guard (ADR-0026)
+        run: pip install pyyaml && pytest scripts/test_controls_workflow.py -q
+      - name: Reconciliation control — divergence logic (ADR-0026)
+        run: pytest scripts/test_reconcile_controls.py -q
+      - name: DLP resource paths — regional templates (ADR-0026)
+        working-directory: products/transactions/pipeline
+        run: pytest test_dlp_paths.py -q
       - name: ADK gateway adapter — tool-call round trip + refusal handling (ADR-0024)
         working-directory: products/transactions/agent
         run: pytest test_gateway_llm.py -q

@@ -1,0 +1,80 @@
+name: Reconcile Controls
+
+# Compares the evidence plane (BigQuery, written by a Cloud Logging sink) against the
+# notification plane (ServiceNow em_event) and reports disagreement as its own control
+# failure — ADR-0026, docs/26 §3.
+#
+# This is the job that answers "prove no violation went unticketed". It has to run on a
+# schedule rather than on push: the failure it detects (a dropped notification) happens
+# in production time, not at commit time.
+#
+# It deliberately does NOT fail the build by default. A dropped notification is an
+# operational finding that belongs in ServiceNow with everything else, not a red X on a
+# repository that nobody is watching at 06:40 UTC. Use --fail-on-divergence via the
+# manual trigger when you want a hard gate.
+on:
+  schedule:
+    - cron: "40 6 * * *" # daily ~06:40 UTC, ahead of the working day
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, test, prod]
+        default: dev
+      window_hours:
+        description: Reconciliation window in hours
+        default: "24"
+      fail_on_divergence:
+        description: Exit non-zero when the planes disagree
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    # Skips cleanly until WIF is configured, matching the other deploy-touching jobs.
+    if: vars.WIF_PROVIDER != ''
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+      - name: Install deps
+        run: pip install google-cloud-bigquery google-cloud-secret-manager requests
+
+      - name: Reconcile evidence against ServiceNow
+        env:
+          ENV: ${{ github.event.inputs.environment || 'dev' }}
+        run: |
+          # The ServiceNow password is read from Secret Manager by the script itself, so
+          # it never becomes a workflow env var, a masked-but-present log value, or part
+          # of the process argv.
+          python scripts/reconcile_controls.py \
+            --project "${{ vars.GCP_PROJECT }}" \
+            --dataset "finchat_platform_${ENV}" \
+            --instance "${{ vars.SERVICENOW_INSTANCE_URL }}" \
+            --secret "finchat-${ENV}-servicenow-auth" \
+            --environment "${ENV}" \
+            --window-hours "${{ github.event.inputs.window_hours || '24' }}" \
+            --emit \
+            ${{ github.event.inputs.fail_on_divergence == 'true' && '--fail-on-divergence' || '' }} \
+            | tee reconciliation.json
+
+      - name: Upload reconciliation record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconciliation-${{ github.event.inputs.environment || 'dev' }}
+          path: reconciliation.json
+          retention-days: 90

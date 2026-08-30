@@ -12,6 +12,7 @@ Checks
   DRIFT-1  every ADK agent constructed in code is registered
   DRIFT-2  every registered agent still exists in code
   DRIFT-3  the tool allow-list in the registry matches the tools passed in code
+  DRIFT-4  every registered agent reaches models through the AI gateway (ADR-0026)
   REG-1    every agent declares owner, business area, risk tier, identity and data scope
   REG-2    every agent has a distinct service account (no sharing)
   REG-3    consequential agents declare a human-in-the-loop gate
@@ -113,6 +114,84 @@ def scan_functions(path: Path) -> set[str]:
     return {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
 
 
+# Helpers that route a model call through the enterprise AI gateway (ADR-0024), where
+# screening, budget and attribution are applied.
+GATEWAY_HELPERS = {"gateway_model", "gateway_llm"}
+
+
+def _calls_gateway(node: ast.AST) -> bool:
+    return any(
+        isinstance(n, ast.Call)
+        and (getattr(n.func, "id", None) or getattr(n.func, "attr", None)) in GATEWAY_HELPERS
+        for n in ast.walk(node)
+    )
+
+
+def _gateway_helper_names(tree: ast.AST) -> set[str]:
+    """GATEWAY_HELPERS plus any local alias that wraps one.
+
+    Agents rarely call `gateway_model` inline. The loans product binds
+    `_m = lambda agent_id: gateway_model(agent_id, MODEL, owner=OWNER)` so each agent
+    routes under its own registry id, and a scanner that only matched the bare name would
+    report all five as bypassing the gateway — a false failure on the code that is doing
+    exactly the right thing. One level of indirection is resolved here; deeper wrapping
+    falls through to the "indirect" verdict, which reports rather than fails.
+    """
+    names = set(GATEWAY_HELPERS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and _calls_gateway(node.value):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    names.add(t.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _calls_gateway(node):
+            names.add(node.name)
+    return names
+
+
+def scan_agent_models(path: Path) -> dict[str, str]:
+    """Return {agent_name: "gateway" | "indirect" | "direct"} for ADK agents in `path`.
+
+    "direct" means the constructor was handed a bare model, so that agent reaches Vertex
+    without transiting the gateway — and therefore without Model Armor screening, budget
+    accounting, or per-agent attribution.
+
+    "indirect" means the model came from a name this scanner cannot resolve statically.
+    Reported, never failed: a false failure here would train people to disable the check.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    helpers = _gateway_helper_names(tree)
+    gateway_aware = bool(helpers - GATEWAY_HELPERS) or any(
+        isinstance(n, ast.Name) and n.id in GATEWAY_HELPERS
+        for n in ast.walk(tree)
+    )
+    found: dict[str, str] = {}
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        ctor = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", None)
+        if ctor not in AGENT_CTORS:
+            continue
+
+        name, verdict = None, "direct"
+        for kw in node.keywords:
+            if kw.arg == "name":
+                name = _literal(kw.value)
+            elif kw.arg == "model":
+                v = kw.value
+                if isinstance(v, ast.Call):
+                    called = getattr(v.func, "id", None) or getattr(v.func, "attr", None)
+                    verdict = "gateway" if called in helpers else "direct"
+                elif isinstance(v, ast.Constant):
+                    verdict = "direct"
+                else:
+                    verdict = "indirect" if gateway_aware else "direct"
+        if isinstance(name, str):
+            found[name] = verdict
+    return found
+
+
 # --- Checks ------------------------------------------------------------------
 
 def check_drift(registry: list[dict], f: Findings) -> None:
@@ -159,6 +238,38 @@ def check_drift(registry: list[dict], f: Findings) -> None:
             if name not in registered_names:
                 f.fail("DRIFT-1", f"unregistered agent '{name}' constructed in {source} — "
                                   f"add it to scripts/agents_catalog.py")
+
+
+def check_coverage(registry: list[dict], f: Findings) -> None:
+    """DRIFT-4 — every registered agent reaches models through the gateway (ADR-0026).
+
+    Screening coverage cannot be maintained by instrumenting each agent: `armor` is
+    imported in exactly one place, while five call sites reach Vertex, so hand-wiring
+    would be five integrations and one more for every agent added. The scalable form is
+    to route everything through the gateway and *assert* the routing here — nobody has
+    to remember, because the build objects.
+
+    This checks the code path, not the runtime. `gateway_llm.py` falls back to
+    direct-to-Vertex when AI_GATEWAY_URL is unset, so passing this check means an agent
+    is capable of transiting the gateway, not that it did. Model Armor floor settings are
+    the enforcing control; this is the one that keeps the estate honest.
+    """
+    for a in sorted(registry, key=lambda x: x["id"]):
+        if a.get("kind") == "managed_agent":
+            continue  # no local constructor to inspect
+        path = REPO / a["source"]
+        if not path.exists():
+            continue  # DRIFT-2 already reports this
+        verdicts = scan_agent_models(path)
+        v = verdicts.get(a["code_name"])
+        if v is None:
+            continue  # not an ADK constructor (steward entrypoint) — DRIFT-2 covers existence
+        if v == "direct":
+            f.fail("DRIFT-4", f"{a['id']} ({a['source']}): model is passed directly, bypassing "
+                              f"the AI gateway — wrap it in gateway_model() (ADR-0024/0026)")
+        elif v == "indirect":
+            f.info("DRIFT-4", f"{a['id']} ({a['source']}): model resolved indirectly; gateway "
+                              f"transit could not be confirmed statically")
 
 
 def check_registration(registry: list[dict], f: Findings) -> None:
@@ -244,6 +355,7 @@ def main() -> int:
     f = Findings()
 
     check_drift(registry, f)
+    check_coverage(registry, f)
     check_registration(registry, f)
     check_lifecycle(registry, f, today)
     check_pinning(registry, f)
