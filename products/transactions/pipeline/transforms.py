@@ -86,3 +86,20 @@ def to_dlq_envelope(raw: bytes | str, error: str) -> bytes:
         "failed_at": datetime.now(timezone.utc).isoformat(),
         "pipeline_version": PIPELINE_VERSION,
     }).encode("utf-8")
+
+
+def dlp_template_path(project: str, location: str, kind: str, template: str) -> str:
+    """Expand a bare DLP template id into a full, locations-qualified resource name.
+
+    Lives here rather than on the Beam DoFn so it can be tested without a runner. The
+    templates are regional (ADR-0026) so Model Armor can reference the same pair for chat
+    screening, and a regional template addressed through a global parent is not
+    "wrong-looking" — it is simply not found, and de-identification silently stops
+    happening while every diff still reads correctly.
+
+    A value that already starts with `projects/` is passed through: Terraform hands over
+    the full name, and prefixing it twice would 404 just as thoroughly.
+    """
+    if template and not template.startswith("projects/"):
+        return f"projects/{project}/locations/{location}/{kind}/{template}"
+    return template
