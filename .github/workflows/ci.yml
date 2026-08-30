@@ -50,6 +50,9 @@ jobs:
       - name: Control-event envelope + redaction guard (ADR-0026)
         working-directory: ui
         run: pytest test_control_events.py -q
+      - name: Safety block reaches the user, not demo data (ADR-0026)
+        working-directory: ui
+        run: pytest test_block_surfacing.py -q
       - name: Controls dispatch workflow — drift guard (ADR-0026)
         run: pip install pyyaml && pytest scripts/test_controls_workflow.py -q
       - name: Reconciliation control — divergence logic (ADR-0026)

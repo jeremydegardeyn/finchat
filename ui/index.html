@@ -93,7 +93,12 @@ async function api(kind, path, opts={}) {
                 ...(S.idtok?{"X-User-Token":S.idtok}:{}),
                 ...(S.accessTok?{"X-User-Access-Token":S.accessTok}:{}), ...(opts.headers||{}) } });
     if (r.status === 503) throw new Error("demo");
-    return await r.json();
+    const j = await r.json();
+    // Preserve the status so callers can tell a REFUSAL from an OUTAGE. Without it a
+    // 400 "blocked by safety screening" is just an object with .error set, which reads
+    // exactly like a backend being down.
+    if (!r.ok) j.__status = r.status;
+    return j;
   } catch(e) { return { __demo:true }; }
 }
 
@@ -223,6 +228,14 @@ async function agentAnswer(q, acc) {
   const message = acc ? `(account ${acc}) ${q}` : q;
   let res = await api("agent","chat",{ method:"POST",
     body: JSON.stringify({ message, user_id: S.persona, session_id: S.sid }) });
+  // A safety block is a DECISION, not an outage — 400 = prompt blocked, 502 = response
+  // withheld. Falling through to groundedAnswer() answers the question the control just
+  // refused and tells the user nothing: a prompt carrying an SSN was screened out, then
+  // served a balance anyway from the client-side path. The control fired and ServiceNow
+  // raised the ticket; only the screen disagreed.
+  if (res.__status === 400 || res.__status === 502) {
+    return res.error || "Your message was blocked by safety screening.";
+  }
   if (res.__demo || res.error || !res.response) return await groundedAnswer(q, acc);
   return res.response;
 }
