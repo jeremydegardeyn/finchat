@@ -367,4 +367,5 @@ module "controls_alerting" {
   servicenow_instance_url = var.servicenow_instance_url
   servicenow_user         = var.servicenow_user
   evidence_dataset        = var.controls_evidence_dataset
+  chat_provider           = var.controls_chat_provider
 }

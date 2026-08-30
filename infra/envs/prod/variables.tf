@@ -152,3 +152,9 @@ variable "model_armor_use_dlp_templates" {
   description = "Point Model Armor's SDP filter at the project's own DLP inspect/de-identify templates (advanced mode) instead of the built-in infoTypes. Adds DLP inspection billing per screened request."
   default     = false
 }
+
+variable "controls_chat_provider" {
+  type        = string
+  description = "Chat destination for control events: \"teams\", \"google_chat\", or \"\" for none."
+  default     = ""
+}

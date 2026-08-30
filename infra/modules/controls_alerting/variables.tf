@@ -21,23 +21,33 @@ variable "servicenow_user" {
   default     = "gcp_integration"
 }
 
-variable "enable_teams_notify" {
-  type        = bool
+variable "chat_provider" {
+  type        = string
   description = <<-EOT
-    Also post each dispatched control event to a Microsoft Teams channel.
+    Post each dispatched control event to a chat channel as well: "teams", "google_chat",
+    or "" for none.
 
-    This is the SECOND-best shape and is chosen because the first is unavailable. Notifying
-    from ServiceNow would keep one correlation domain and let the message carry its incident
-    number; the Teams spoke needs an entitlement this PDI does not have, the same way the
-    Event Management Connectors app did. Posting from the workflow instead means Teams and
-    ServiceNow count separately — the Teams message links back to the event record so a
-    responder can still cross over, but the two can disagree under load, and only ServiceNow
-    is the record.
+    Either way this is the SECOND-best shape. Notifying from ServiceNow would keep one
+    correlation domain and let the message carry its incident number; the Teams spoke needs
+    an entitlement this PDI lacks, exactly as the Event Management Connectors app did.
+    Posting from the workflow means chat and ServiceNow count separately — the card links
+    back to the event record so a responder can cross over, but the two can disagree under
+    load, and only ServiceNow is the record.
 
-    Terraform creates the secret container; add the webhook URL out of band. A Teams webhook
+    "teams" needs a Power Automate Workflows webhook, which requires a work or school
+    Microsoft 365 account; a personal account cannot create one, and the free E5 developer
+    sandbox now requires a Visual Studio Professional/Enterprise subscription. "google_chat"
+    needs only a Workspace space, which is why it is the sandbox default while Teams stays
+    documented for the enterprise story.
+
+    Terraform creates the secret container; add the webhook URL out of band. A chat webhook
     URL is a credential — anyone holding it can post to the channel.
   EOT
-  default     = false
+  default     = ""
+  validation {
+    condition     = contains(["", "teams", "google_chat"], var.chat_provider)
+    error_message = "chat_provider must be \"teams\", \"google_chat\", or \"\"."
+  }
 }
 
 variable "evidence_dataset" {

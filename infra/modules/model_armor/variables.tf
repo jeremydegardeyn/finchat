@@ -11,7 +11,19 @@ variable "name_prefix" {
 
 variable "enable_floor_setting" {
   type        = bool
-  description = "Also create a project-level floor setting (org-wide minimum screening). Needs elevated perms."
+  description = <<-EOT
+    Also create a project-level Model Armor floor setting — the minimum screening every
+    caller gets whether or not the application asks for it. This is what turns screening
+    from a convention into an enforced control: the gateway can be bypassed by unsetting
+    an env var, a floor setting cannot.
+
+    ENABLE IT IN EXACTLY ONE ENVIRONMENT. The resource is scoped to the PROJECT, and
+    dev/test/prod share one project here (docs/26 F18), so two states with this set would
+    each try to own the same singleton and fight over it on every apply. Prod owns it; the
+    setting still covers dev and test because it is project-wide.
+
+    Needs elevated permissions to create.
+  EOT
   default     = false
 }
 

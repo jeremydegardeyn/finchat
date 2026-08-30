@@ -143,50 +143,68 @@ main:
             max_delay: 60
             multiplier: 2
 
-    # --- Teams (optional, best-effort) ---------------------------------------
+    # --- Chat notification (optional, best-effort) ---------------------------
     # ServiceNow remains the record; this is awareness. It runs AFTER the em_event POST
     # and its failure never fails the execution — a broken webhook must not cost us the
     # auditable record, which is the whole reason the planes are separate.
-    - teams_gate:
+    - chat_gate:
         switch:
-          - condition: ${sys.get_env("TEAMS_SECRET_ID") == ""}
+          - condition: ${sys.get_env("CHAT_SECRET_ID") == ""}
             next: done
-    - notify_teams:
+    - notify_chat:
         try:
           steps:
             - read_webhook:
                 call: googleapis.secretmanager.v1.projects.secrets.versions.accessString
                 args:
-                  secret_id: ${sys.get_env("TEAMS_SECRET_ID")}
+                  secret_id: ${sys.get_env("CHAT_SECRET_ID")}
                   project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
-                result: teams_url
-            - build_card:
+                result: chat_url
+            - chat_common:
                 assign:
                   # Link back to the event record so a responder can cross into the system
                   # of record. It is not the incident number — posting from here rather
                   # than from ServiceNow is what costs us that.
                   - sn_id: ${default(map.get(sn_response, ["body", "result", "sys_id"]), "")}
                   - sn_link: ${sys.get_env("SN_INSTANCE_URL") + "/nav_to.do?uri=em_event.do?sys_id=" + sn_id}
-                  # Metadata only, same rule as the em_event row: which detectors fired,
-                  # never what they fired on.
-                  - card: '${"<strong>Control violation — " + environment + "</strong><br/>" + "<div>source: " + default(map.get(ce, "source"), "") + "</div>" + "<div>control: " + default(map.get(ce, "control_id"), "") + "</div>" + "<div>detectors: " + json.encode_to_string(filters) + "</div>" + "<div>severity: " + severity + "</div>" + "<div>principal: " + default(map.get(ce, "principal_hash"), "") + "</div>" + "<div><a href=\"" + sn_link + "\">open the ServiceNow event</a></div>"}'
+                  - ce_source: ${default(map.get(ce, "source"), "")}
+                  - ce_control: ${default(map.get(ce, "control_id"), "")}
+                  - ce_principal: ${default(map.get(ce, "principal_hash"), "")}
+                  - chat_body: {}
+            # Metadata only, same rule as the em_event row: which detectors fired, never
+            # what they fired on. Two providers, two payload shapes, one hop.
+            - shape_payload:
+                switch:
+                  - condition: ${sys.get_env("CHAT_PROVIDER") == "google_chat"}
+                    assign:
+                      - chat_body:
+                          text: '${"*Control violation — " + environment + "*
+" + "source: " + ce_source + "
+control: " + ce_control + "
+detectors: " + json.encode_to_string(filters) + "
+severity: " + severity + "
+principal: " + ce_principal + "
+<" + sn_link + "|open the ServiceNow event>"}'
+                  - condition: true
+                    assign:
+                      - chat_body:
+                          attachments:
+                            - contentType: "text/html"
+                              content: '${"<strong>Control violation — " + environment + "</strong><br/>" + "<div>source: " + ce_source + "</div>" + "<div>control: " + ce_control + "</div>" + "<div>detectors: " + json.encode_to_string(filters) + "</div>" + "<div>severity: " + severity + "</div>" + "<div>principal: " + ce_principal + "</div>" + "<div><a href=\"" + sn_link + "\">open the ServiceNow event</a></div>"}'
             - post_card:
                 call: http.post
                 args:
-                  url: ${teams_url}
+                  url: ${chat_url}
                   headers:
                     Content-Type: "application/json"
-                  body:
-                    attachments:
-                      - contentType: "text/html"
-                        content: ${card}
+                  body: ${chat_body}
                   timeout: 20
         except:
           as: e
           steps:
             - swallow:
                 assign:
-                  - teams_error: ${e}
+                  - chat_error: ${e}
 
     - done:
         return:
