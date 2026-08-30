@@ -110,6 +110,24 @@ def to_dlq_envelope(raw, error):
     }).encode("utf-8")
 
 
+def dlp_template_path(project, location, kind, template):
+    """Expand a bare DLP template id into a full, locations-qualified resource name.
+
+    Inlined here rather than imported from transforms.py — see the module docstring: the
+    Flex Template ships only this file to stock Beam workers, so an import would
+    NameError on Dataflow while passing every local test. Keep in sync with transforms.py,
+    which is what `test_dlp_paths.py` exercises without a Beam runtime.
+
+    The templates are regional (ADR-0026) so Model Armor can reference the same pair for
+    chat screening. A regional template addressed through a global parent is not
+    "wrong-looking" — it is simply not found, and de-identification silently stops
+    happening while every diff still reads correctly.
+    """
+    if template and not template.startswith("projects/"):
+        return f"projects/{project}/locations/{location}/{kind}/{template}"
+    return template
+
+
 # --------------------------------------------------------------------------- #
 # Beam graph
 # --------------------------------------------------------------------------- #
@@ -156,16 +174,10 @@ class MaybeDeidentify(beam.DoFn):
         # parent is simply not found.
         self.location = location
         # DLP wants FULL resource names; terraform output may give the bare id.
-        self.deid_template = self._full(project, location, "deidentifyTemplates", deid_template)
-        self.inspect_template = self._full(project, location, "inspectTemplates", inspect_template)
+        self.deid_template = dlp_template_path(project, location, "deidentifyTemplates", deid_template)
+        self.inspect_template = dlp_template_path(project, location, "inspectTemplates", inspect_template)
         self.sample_rate = sample_rate
         self._client = None
-
-    @staticmethod
-    def _full(project, location, kind, tmpl):
-        if tmpl and not tmpl.startswith("projects/"):
-            return f"projects/{project}/locations/{location}/{kind}/{tmpl}"
-        return tmpl
 
     def setup(self):
         if self.deid_template:

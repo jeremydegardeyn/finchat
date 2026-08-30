@@ -71,6 +71,11 @@ locals {
       # modules (datasets/pubsub/dlp/catalog/etc.). Apply is still run locally; the CI
       # SA never gets write/editor here.
       "roles/viewer",
+      # basic Viewer covers *.get and *.list but NOT *.getIamPolicy, so refreshing any
+      # google_*_iam_member resource 403s during plan. Surfaced when the controls-alerting
+      # module added a Pub/Sub topic IAM binding (ADR-0026). securityReviewer is the
+      # read-only role that grants policy reads; it adds no write capability.
+      "roles/iam.securityReviewer",
       "roles/serviceusage.serviceUsageConsumer", # x-goog-user-project quota for plan
     ] }
   }
