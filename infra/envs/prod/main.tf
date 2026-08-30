@@ -99,6 +99,7 @@ module "pubsub" {
 module "dlp" {
   source      = "../../modules/dlp"
   project_id  = var.project_id
+  region      = var.region
   env         = var.env
   name_prefix = var.name_prefix
 }
@@ -265,6 +266,9 @@ module "model_armor" {
   env                  = var.env
   name_prefix          = var.name_prefix
   enable_floor_setting = var.enable_model_armor_floor
+  # One PII policy across ingest and chat (ADR-0026). Empty vars fall back to basic mode.
+  inspect_template    = var.model_armor_use_dlp_templates ? module.dlp.inspect_template : ""
+  deidentify_template = var.model_armor_use_dlp_templates ? module.dlp.deidentify_template : ""
 }
 
 # --- Custom domain for the UI (e.g. finchat.datadinosaur.com) -----------------
@@ -350,4 +354,17 @@ module "agent_registry" {
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
   ]
   labels = local.labels
+}
+
+# --- Controls alerting (ADR-0026) --------------------------------------------
+# Off by default: with both variables empty this module creates nothing at all.
+module "controls_alerting" {
+  source                  = "../../modules/controls_alerting"
+  project_id              = var.project_id
+  region                  = var.region
+  env                     = var.env
+  name_prefix             = var.name_prefix
+  servicenow_instance_url = var.servicenow_instance_url
+  servicenow_user         = var.servicenow_user
+  evidence_dataset        = var.controls_evidence_dataset
 }

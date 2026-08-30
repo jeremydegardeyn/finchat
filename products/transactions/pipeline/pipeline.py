@@ -147,18 +147,24 @@ class ParseAndValidate(beam.DoFn):
 class MaybeDeidentify(beam.DoFn):
     """Sampled DLP de-identification of counterparty_account (cost-controlled)."""
 
-    def __init__(self, project, deid_template, inspect_template, sample_rate):
+    def __init__(self, project, deid_template, inspect_template, sample_rate,
+                 location="us-central1"):
         self.project = project
+        # The templates are REGIONAL (ADR-0026) so Model Armor can reference the same pair
+        # for chat screening. Both the resource names and the request parent below must
+        # therefore be locations-qualified — a regional template addressed through a global
+        # parent is simply not found.
+        self.location = location
         # DLP wants FULL resource names; terraform output may give the bare id.
-        self.deid_template = self._full(project, "deidentifyTemplates", deid_template)
-        self.inspect_template = self._full(project, "inspectTemplates", inspect_template)
+        self.deid_template = self._full(project, location, "deidentifyTemplates", deid_template)
+        self.inspect_template = self._full(project, location, "inspectTemplates", inspect_template)
         self.sample_rate = sample_rate
         self._client = None
 
     @staticmethod
-    def _full(project, kind, tmpl):
+    def _full(project, location, kind, tmpl):
         if tmpl and not tmpl.startswith("projects/"):
-            return f"projects/{project}/{kind}/{tmpl}"
+            return f"projects/{project}/locations/{location}/{kind}/{tmpl}"
         return tmpl
 
     def setup(self):
@@ -170,7 +176,7 @@ class MaybeDeidentify(beam.DoFn):
         import random
         if self._client and record.get("counterparty_account") and random.random() < self.sample_rate:
             req = {
-                "parent": f"projects/{self.project}",
+                "parent": f"projects/{self.project}/locations/{self.location}",
                 "deidentify_template_name": self.deid_template,
                 "item": {"value": str(record["counterparty_account"])},
             }
@@ -207,7 +213,7 @@ def build_pipeline(p, opts):
 
     valid = (
         deduped
-        | "Deidentify" >> beam.ParDo(MaybeDeidentify(opts.project, opts.deid_template, opts.inspect_template, opts.dlp_sample_rate))
+        | "Deidentify" >> beam.ParDo(MaybeDeidentify(opts.project, opts.deid_template, opts.inspect_template, opts.dlp_sample_rate, opts.dlp_location))
         | "Enrich" >> beam.Map(enrich)
     )
 
@@ -239,6 +245,8 @@ def run(argv=None):
     parser.add_argument("--deid_template", default="")
     parser.add_argument("--inspect_template", default="")
     parser.add_argument("--dlp_sample_rate", type=float, default=0.1)
+    parser.add_argument("--dlp_location", default="us-central1",
+                        help="Location of the DLP templates. Must match, or the call 404s.")
     parser.add_argument("--dedup_ttl_seconds", type=int, default=3600,
                         help="In-stream idempotency_key dedup window (0 disables).")
     parser.add_argument("--input_file")

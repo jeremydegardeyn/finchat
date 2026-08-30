@@ -29,6 +29,7 @@ Lightweight ADRs capturing significant, hard-to-reverse decisions and their rati
 | [0023](0023-agent-registry-and-identity.md) | Agent registry, per-agent identity, and lifecycle | Accepted |
 | [0024](0024-enterprise-ai-gateway.md) | Enterprise AI Gateway as the single enforcement point | Accepted |
 | [0025](0025-one-time-signin.md) | One-time sign-in via the authorization-code flow | Accepted |
+| [0026](0026-technical-controls-alerting.md) | Technical controls alerting: evidence plane, notification plane, ITSM-owned correlation | Proposed |
 
 _Future ADRs (planned): row/column-level security model, idempotency & exactly-once strategy,
 environment promotion gating._

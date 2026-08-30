@@ -1,0 +1,122 @@
+##############################################################################
+# Controls alerting (ADR-0026): control-event log entry -> ServiceNow em_event.
+#
+# Triggered by Eventarc from a Pub/Sub topic fed by a Cloud Logging sink. The sink
+# selects only the redacted control events emitted by ui/control_events.py and the
+# Composer on_failure_callback — never Model Armor's raw sanitize logs, which carry
+# the flagged prompt and must stay inside GCP (docs/26 F3).
+#
+# This writes an `em_event` row rather than calling the Connectors endpoint, which is
+# a Store app not entitled on the target instance (F9). Event Management still owns
+# correlation: `message_key` collapses events into one `em_alert`, and
+# `em_alert_management_rule` decides what becomes an incident.
+##############################################################################
+main:
+  params: [event]
+  steps:
+    - decode_log_entry:
+        assign:
+          - entry: ${json.decode(text.decode(base64.decode(event.data.message.data)))}
+          - ce: ${map.get(entry, ["jsonPayload", "control_event"])}
+
+    # A sink filter is a coarse instrument; anything that slips through and is not a
+    # control event is dropped here rather than becoming a malformed ServiceNow row.
+    - guard_shape:
+        switch:
+          - condition: ${ce == null}
+            return: {"skipped": "not a control event"}
+
+    - defaults:
+        assign:
+          - svc: ${default(map.get(entry, ["resource", "labels", "service_name"]), "")}
+          - env: ${default(map.get(ce, "environment"), "unknown")}
+          - filters: ${default(map.get(ce, "filters"), [])}
+          - severity: "4"
+          - elevated: false
+
+    # Environment comes from resource identity where it exists. The Cloud Run service
+    # name is stamped by the platform and the workload cannot forge it; the copy inside
+    # the payload is emitter-set and therefore only advisory (docs/26 F18). Composer and
+    # other sources have no service_name and fall back to the payload value.
+    - env_from_resource_identity:
+        switch:
+          - condition: ${text.match_regex(svc, "^finchat-(dev|test|prod)-")}
+            assign:
+              - env: ${text.split(svc, "-")[1]}
+
+    # Prompt injection and sensitive-data hits outrank harmful-content hits: the first
+    # two are attacks or leaks, the third is usually a user being unpleasant.
+    - detect_elevated_filters:
+        for:
+          value: f
+          in: ${filters}
+          steps:
+            - check:
+                switch:
+                  - condition: ${f == "pi_and_jailbreak" or f == "sdp" or f == "malicious_uris"}
+                    assign:
+                      - elevated: true
+
+    # Nonprod stays at 4 (Warning): visible in Event Management, below the promotion
+    # threshold. That keeps nonprod signal without manufacturing nonprod incidents —
+    # switching nonprod off entirely is how a staging warning that predicted a prod
+    # outage goes unseen.
+    - derive_severity:
+        switch:
+          - condition: ${env == "prod" and elevated}
+            assign:
+              - severity: "2"
+          - condition: ${env == "prod"}
+            assign:
+              - severity: "3"
+
+    - read_credentials:
+        call: googleapis.secretmanager.v1.projects.secrets.versions.accessString
+        args:
+          secret_id: ${sys.get_env("SN_SECRET_ID")}
+          project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+        result: sn_password
+
+    - build_row:
+        assign:
+          - basic: ${"Basic " + base64.encode(text.encode(sys.get_env("SN_USER") + ":" + sn_password))}
+          # Every field here is metadata. No prompt, no response, no exception text, no
+          # row value — see ADR-0026 point 4. `description` is assembled from the closed
+          # filter vocabulary, never from user input.
+          - row:
+              source: "GCP"
+              event_class: "finchat"
+              node: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+              resource: ${if(svc != "", svc, env)}
+              type: ${default(map.get(ce, "control_id"), "unknown")}
+              severity: ${severity}
+              message_key: ${default(map.get(ce, "message_key"), "")}
+              time_of_event: ${default(map.get(ce, "occurred_at"), "")}
+              description: '${default(map.get(ce, "source"), "control") + " match " + json.encode_to_string(filters)}'
+              additional_info: '${json.encode_to_string({"environment": env, "principal_hash": default(map.get(ce, "principal_hash"), ""), "evidence_ref": default(map.get(ce, "evidence_ref"), ""), "filters": filters})}'
+
+    - post_event:
+        try:
+          call: http.post
+          args:
+            url: ${sys.get_env("SN_INSTANCE_URL") + "/api/now/table/em_event"}
+            headers:
+              Content-Type: "application/json"
+              Authorization: ${basic}
+            body: ${row}
+            timeout: 30
+          result: sn_response
+        retry:
+          predicate: ${http.default_retry_predicate}
+          max_retries: 5
+          backoff:
+            initial_delay: 2
+            max_delay: 60
+            multiplier: 2
+
+    - done:
+        return:
+          status: ${sn_response.code}
+          message_key: ${row.message_key}
+          severity: ${severity}
+          environment: ${env}

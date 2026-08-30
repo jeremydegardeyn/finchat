@@ -39,7 +39,9 @@ PARAMS="${PARAMS},dlq_topic=projects/${PROJECT}/topics/finchat-${ENV}-transactio
 if [ "$WITH_DLP" = "dlp" ]; then
   DEID="$(terraform -chdir="infra/envs/${ENV}" output -raw dlp_deidentify_template)"
   INSPECT="$(terraform -chdir="infra/envs/${ENV}" output -raw dlp_inspect_template)"
-  PARAMS="${PARAMS},deid_template=${DEID},inspect_template=${INSPECT},dlp_sample_rate=0.2"
+  # The templates are regional (ADR-0026); the pipeline's DLP request parent has to match.
+  DLP_LOC="$(terraform -chdir="infra/envs/${ENV}" output -raw dlp_location)"
+  PARAMS="${PARAMS},deid_template=${DEID},inspect_template=${INSPECT},dlp_sample_rate=0.2,dlp_location=${DLP_LOC}"
   echo "→ DLP de-identification ENABLED"
 fi
 
