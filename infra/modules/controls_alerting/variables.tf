@@ -26,9 +26,3 @@ variable "evidence_dataset" {
   description = "BigQuery dataset for the append-only control_events evidence table."
   default     = ""
 }
-
-variable "evidence_retention_days" {
-  type        = number
-  description = "Partition expiry on control_events. Null keeps rows forever; the locked log bucket is the long-retention copy either way."
-  default     = null
-}
