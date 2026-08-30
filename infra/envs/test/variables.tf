@@ -129,3 +129,26 @@ variable "agents" {
   description = "Agent registry (ADR-0023), generated from scripts/agents_catalog.py."
   default     = {}
 }
+
+# --- Controls alerting (ADR-0026) --------------------------------------------
+variable "servicenow_instance_url" {
+  type        = string
+  description = "ServiceNow instance for control-event notification (e.g. https://dev305242.service-now.com). Empty disables the notification path; the evidence sink is independent."
+  default     = ""
+}
+variable "servicenow_user" {
+  type        = string
+  description = "ServiceNow integration user holding evt_mgmt_integration. Never an admin account."
+  default     = "gcp_integration"
+}
+variable "controls_evidence_dataset" {
+  type        = string
+  description = "BigQuery dataset for the append-only control_events evidence table. Empty disables the evidence sink."
+  default     = ""
+}
+
+variable "model_armor_use_dlp_templates" {
+  type        = bool
+  description = "Point Model Armor's SDP filter at the project's own DLP inspect/de-identify templates (advanced mode) instead of the built-in infoTypes. Adds DLP inspection billing per screened request."
+  default     = false
+}

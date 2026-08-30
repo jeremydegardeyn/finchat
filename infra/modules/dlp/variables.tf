@@ -1,5 +1,14 @@
 variable "project_id" { type = string }
 variable "env" { type = string }
+
+# Templates are REGIONAL, not global (ADR-0026). Model Armor's sdp_settings.advanced_config
+# only accepts the locations-qualified form `projects/P/locations/L/inspectTemplates/T`, so a
+# global template (`projects/P/inspectTemplates/T`) cannot be referenced from it at all.
+# Changing this on an existing deployment REPLACES both templates.
+variable "region" {
+  type    = string
+  default = "us-central1"
+}
 variable "name_prefix" {
   type    = string
   default = "finchat"

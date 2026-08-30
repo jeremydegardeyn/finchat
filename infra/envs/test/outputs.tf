@@ -39,6 +39,10 @@ output "dlp_deidentify_template" {
   description = "Pass to the pipeline as deid_template."
   value       = module.dlp.deidentify_template
 }
+output "dlp_location" {
+  description = "Pass to the pipeline as dlp_location. The DLP request parent must match the template location."
+  value       = module.dlp.location
+}
 output "kb_dataset" {
   description = "RAG knowledge-base dataset (set as KB_DATASET on the agent)."
   value       = module.rag.kb_dataset

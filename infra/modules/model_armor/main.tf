@@ -48,10 +48,21 @@ resource "google_model_armor_template" "this" {
       filter_enforcement = "ENABLED"
     }
 
-    # Sensitive Data Protection (basic DLP inspection of LLM I/O).
+    # Sensitive Data Protection. Basic = built-in infoTypes; advanced = this project's
+    # own DLP templates, so ingest and chat enforce the identical PII policy (ADR-0026).
     sdp_settings {
-      basic_config {
-        filter_enforcement = "ENABLED"
+      dynamic "basic_config" {
+        for_each = var.inspect_template == "" ? [1] : []
+        content {
+          filter_enforcement = "ENABLED"
+        }
+      }
+      dynamic "advanced_config" {
+        for_each = var.inspect_template == "" ? [] : [1]
+        content {
+          inspect_template    = var.inspect_template
+          deidentify_template = var.deidentify_template == "" ? null : var.deidentify_template
+        }
       }
     }
   }
@@ -75,4 +86,30 @@ resource "google_model_armor_floorsetting" "this" {
       filter_enforcement = "ENABLED"
     }
   }
+}
+
+# --- Model Armor -> DLP access (advanced SDP mode only) ----------------------
+# In advanced mode Model Armor calls DLP on our behalf, as its own service agent — not
+# as the caller. Without these grants screening fails at request time, not at apply time.
+data "google_project" "this" {
+  count      = var.inspect_template == "" ? 0 : 1
+  project_id = var.project_id
+}
+
+locals {
+  armor_agent = var.inspect_template == "" ? "" : "serviceAccount:service-${data.google_project.this[0].number}@gcp-sa-modelarmor.iam.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "armor_dlp_user" {
+  count   = var.inspect_template == "" ? 0 : 1
+  project = var.project_id
+  role    = "roles/dlp.user"
+  member  = local.armor_agent
+}
+
+resource "google_project_iam_member" "armor_dlp_reader" {
+  count   = var.inspect_template == "" ? 0 : 1
+  project = var.project_id
+  role    = "roles/dlp.reader"
+  member  = local.armor_agent
 }

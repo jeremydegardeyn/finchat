@@ -1,13 +1,22 @@
 ###############################################################################
 # DLP module — inspection + de-identification templates
 # Inspect template: detect PII; De-id template: mask/tokenize before Silver.
-# Pipeline references these by name (sampled in sandbox to control cost).
+#
+# ONE PII policy, TWO enforcement points (ADR-0026): the Dataflow pipeline applies these
+# at ingest, and Model Armor's sdp_settings.advanced_config applies the same pair to chat
+# I/O. That is why the templates are regional and why the ids are explicit — Model Armor
+# needs a stable, locations-qualified name to point at.
 ###############################################################################
 
 resource "google_data_loss_prevention_inspect_template" "pii" {
-  parent       = "projects/${var.project_id}"
+  parent = "projects/${var.project_id}/locations/${var.region}"
+  # Explicit id: without it the server generates a random one, so nothing can reference the
+  # template except through a Terraform output. Model Armor's template config is easier to
+  # reason about against a predictable name, and this is the moment to fix it — the move to
+  # a regional parent already forces a replacement.
+  template_id  = "${var.name_prefix}-${var.env}-pii-inspect"
   display_name = "${var.name_prefix}-${var.env}-pii-inspect"
-  description  = "Detects banking PII prior to Silver promotion."
+  description  = "Detects banking PII prior to Silver promotion, and in Model Armor chat screening."
 
   inspect_config {
     dynamic "info_types" {
@@ -20,9 +29,14 @@ resource "google_data_loss_prevention_inspect_template" "pii" {
 }
 
 resource "google_data_loss_prevention_deidentify_template" "mask" {
-  parent       = "projects/${var.project_id}"
+  parent       = "projects/${var.project_id}/locations/${var.region}"
+  template_id  = "${var.name_prefix}-${var.env}-pii-deid"
   display_name = "${var.name_prefix}-${var.env}-pii-deid"
-  description  = "Masks/tokenizes PII for Silver de-identification."
+  # Also used by Model Armor: supplying a de-identify template (not just an inspect one)
+  # makes Model Armor return de-identified text in deidentifyResult.data.text, so the chat
+  # path can redact-and-continue instead of hard-blocking — and the FINCHAT_TOKEN surrogate
+  # below means a tokenized value from chat matches the one in Silver.
+  description = "Masks/tokenizes PII for Silver de-identification and Model Armor chat screening."
 
   deidentify_config {
     info_type_transformations {

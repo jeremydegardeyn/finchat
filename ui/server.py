@@ -526,16 +526,45 @@ async def steward_proxy(path: str, request: Request):
     return await _proxy(STEWARD_URL, path, request, extra_headers=extra)
 
 
+def _control_ctx(request: Request) -> tuple[str, str, str]:
+    """(principal, trace, environment) for a control event (ADR-0026).
+
+    The principal is the *verified* email where there is one, never a client-sent header —
+    the event is evidence, and evidence sourced from a spoofable header is not evidence.
+    Anonymous customer chat legitimately has none, and `control_events` records that as
+    "anonymous" rather than inventing an identity.
+
+    The trace id is what lets a responder pivot from the redacted event to Model Armor's own
+    sanitize log, which holds the flagged text — under GCP IAM, never through ServiceNow.
+
+    Environment is derived from the dataset suffix (finchat_silver_prod -> "prod"), matching
+    how catalog_search resolves it. Advisory only: the authoritative value is
+    resource.labels.env on the log entry, which the workload cannot forge (docs/26 F18).
+    """
+    u = _verify_user(request) if _auth_enabled() else None
+    trace = request.headers.get("X-Cloud-Trace-Context", "").split("/")[0]
+    env = SILVER_DATASET.rsplit("_", 1)[-1] if "_" in SILVER_DATASET else ""
+    return ((u or {}).get("email", ""), trace, env or "unknown")
+
+
 @app.api_route("/api/agent/{path:path}", methods=["GET", "POST"])
 async def agent_proxy(path: str, request: Request):
     """Agent path with Model Armor screening on prompt (in) and response (out)."""
     import armor
+    import control_events
     body = await request.body()
     if body:
-        ok, reason = await armor.screen_prompt(body.decode("utf-8", "replace"))
-        if not ok:
+        r = await armor.screen_prompt_detailed(body.decode("utf-8", "replace"))
+        if not r["allowed"]:
+            try:
+                principal, trace, env = _control_ctx(request)
+                control_events.emit_armor_block(
+                    direction="prompt", filters=r["filters"],
+                    principal=principal, trace=trace, environment=env)
+            except Exception:  # evidence must never break the block it is recording
+                pass
             return JSONResponse(
-                {"error": "Your message was blocked by safety screening.", "reason": reason},
+                {"error": "Your message was blocked by safety screening.", "reason": r["reason"]},
                 status_code=400)
     import time as _time
     _t0 = _time.perf_counter()
@@ -543,10 +572,17 @@ async def agent_proxy(path: str, request: Request):
     _latency_ms = int((_time.perf_counter() - _t0) * 1000)
     # Screen the model response before returning it to the user.
     try:
-        ok, reason = await armor.screen_response(resp.body.decode("utf-8", "replace"))
-        if not ok:
+        r = await armor.screen_response_detailed(resp.body.decode("utf-8", "replace"))
+        if not r["allowed"]:
+            try:
+                principal, trace, env = _control_ctx(request)
+                control_events.emit_armor_block(
+                    direction="response", filters=r["filters"],
+                    principal=principal, trace=trace, environment=env)
+            except Exception:
+                pass
             return JSONResponse(
-                {"error": "The response was withheld by safety screening.", "reason": reason},
+                {"error": "The response was withheld by safety screening.", "reason": r["reason"]},
                 status_code=502)
     except Exception:
         pass
