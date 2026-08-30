@@ -101,6 +101,25 @@ resource "google_bigquery_table" "agent_registry" {
     { name = "status", type = "STRING", mode = "REQUIRED" },
     { name = "published_at", type = "TIMESTAMP", mode = "REQUIRED" },
   ])
+
+  # The schema above is the declared contract — what an examiner is told the registry
+  # contains. It is NOT what Terraform reconciles, because it cannot be.
+  #
+  # `agent_registry_bootstrap.py` publishes with WRITE_TRUNCATE and no explicit schema,
+  # so BigQuery autodetects one from the JSON rows and the resulting field ORDER is
+  # arbitrary. Terraform compares schemas order-sensitively, so every bootstrap run
+  # re-creates a "must be replaced" diff — and replacing the table drops the rows, which
+  # the next bootstrap then restores, which re-creates the diff. A permanent oscillation
+  # that turns every routine `terraform apply` into a silent data-loss event.
+  #
+  # Ignoring `schema` makes the ownership honest: the publisher owns the columns, this
+  # resource owns the table's existence, deletion protection and labels. The alternative
+  # — passing an explicit schema from the publisher — is the stricter fix and would let
+  # Terraform reconcile properly, but it duplicates the column list into Python where
+  # nothing would keep the two aligned.
+  lifecycle {
+    ignore_changes = [schema]
+  }
 }
 
 # Append-only attribution sink. Every consequential action an agent takes lands here
