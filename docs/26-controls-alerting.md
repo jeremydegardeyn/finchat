@@ -367,3 +367,25 @@ an ITOM admin without a deploy.
 The rule filters on `Resource starts with finchat-prod` as well as severity even though severity
 already encodes the environment. The redundancy is for the reader: an auditor examining the rule
 can see the prod intent without reverse-engineering the severity mapping.
+
+## 10. Operational notes found during rollout
+
+**CI/CD owns the Cloud Run environment, so a hand-set flag does not survive a deploy.**
+`build-deploy.yml` passes the full env with `--set-env-vars`, which replaces rather than merges.
+`CONTROL_EVENTS=1` set with `gcloud run services update` was silently dropped by the very deploy
+that shipped the emitter — the module arrived and the flag left on the same revision. This is the
+same clobbering hazard the `cloud_run` Terraform module works around with `ignore_changes`, with
+CI/CD as the actor instead of Terraform. The flag is now sourced from the `CONTROL_EVENTS` GitHub
+Actions variable (default `0`), so it is set once per environment and survives.
+
+**Two CI permissions were missing and only surfaced under load.** Basic `roles/viewer` covers
+`*.get` and `*.list` but not `*.getIamPolicy`, so `terraform plan` 403s on any
+`google_*_iam_member` — latent until this work added the first such binding CI had to refresh.
+Fixed with `roles/iam.securityReviewer` (read-only), applied to dev, test and prod.
+
+Separately, the platform-docs corpus step fails with `bigquery.tables.create denied on
+finchat_kb_dev`. It is `continue-on-error: true` by design ("never block a deploy on the search
+corpus") so it does not stop a release, but it means **new documentation — including this file —
+is not searchable in the platform KB** until the CI/CD service account gets dataset-level write on
+`finchat_kb_<env>`. Unrelated to controls alerting; recorded here because this rollout is what
+surfaced it.
