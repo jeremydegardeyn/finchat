@@ -458,10 +458,26 @@ verified in the UI, not through the API.
 
 ## 12. CI binding — using FinChat as the configuration item
 
-Every event so far carries `No CI found for binding — Failed to find the host with name:
-strongsville-city-schools` in its Processing Notes, and no alert has promoted to an incident.
-Those two facts are probably the same fact: the OOB **Create Incident** subflow is the mechanism
-Event Management uses, and it may require a configuration item to attach the task to.
+Every event carried `No CI found for binding — Failed to find the host with name:
+strongsville-city-schools`, and no alert promoted to an incident. I predicted those were the same
+fact — that the Create Incident subflow needed a CI to attach to.
+
+**Tested, and that prediction was wrong.** With `cmdb_ci` set explicitly the binding succeeds
+(`Alert CI will be bound to CI id … Bind to …`), a fresh alert is created with the CI attached at
+severity 2 matching every rule condition including `incidentISEMPTY` — **and `incident` is still
+empty.** CI binding and incident promotion are independent problems. The CMDB work below is
+worth doing on its own merits; it is not what unblocks promotion.
+
+### Node binding needs more than a matching CI
+
+Creating a `cmdb_ci_appl` named `strongsville-city-schools` was not enough: Event Management
+resolves `node` against **host** classes and kept logging `Failed to find the host with name`.
+Setting `ci_type: cmdb_ci_appl` on the event made the class register (`Event CI type is
+cmdb_ci_appl`) but did not change the lookup — node binding still went looking for a host.
+
+Only an explicit `cmdb_ci` on the event bound successfully. So either the CIs are created in a
+host class so `node` resolves naturally, or the event carries the CI sys_id directly — which
+means the workflow needs it from configuration, since a sys_id is instance-specific.
 
 ### The choice, and why node stays the project
 
@@ -497,3 +513,25 @@ discovering GCP continuously. The gap is not that CI binding is hard, it is that
 integration is only as good as the asset inventory underneath it** — without a CI, an incident
 cannot route itself, and every alert lands on whichever group someone hardcoded. That is the real
 argument for the catalog and ontology work in Inc 10 and Inc 20 sitting under all of this.
+
+### Promotion is blocked by something else
+
+Ruled out by testing, in order: the rule's conditions (it matches on Source/Resource/Severity,
+all verified against a live alert), the rule's own state (`active`, `state=1`, `type=incident`,
+copied field-for-field from the working OOB rule), the remediation subflow (`Create Incident` is
+`active`, `published`, `run_as: system`), and CI binding (proven to work independently, with no
+effect on promotion).
+
+What remains untested is whether this PDI evaluates alert management rules automatically at all.
+The manual **Quick Incident** action on the alert form works — that is how INC0010001 was created
+— so the alert-to-incident path itself is sound; only the automatic trigger is not firing.
+
+Two ways forward, and they are a real choice rather than a workaround:
+
+1. **A Business Rule on `em_alert`** that creates an incident when the conditions match. Fully
+   supported, needs no ITOM Pro flow engine, and keeps promotion inside ServiceNow — so the
+   architectural principle in ADR-0026 (correlation and promotion live in the system of record)
+   still holds. It trades a declarative rule for a script.
+2. **Leave promotion manual** and say so. Every alert is present, correlated and CI-bound; a human
+   clicks Quick Incident. For a sandbox demonstrating the *pipeline*, that may be honest enough —
+   and it is what the reconciliation control exists to catch if anyone forgets.

@@ -186,3 +186,10 @@ def test_chat_webhook_comes_from_secret_manager():
     """A chat webhook URL is a credential: anyone holding it can post to the channel."""
     assert 'secret_id: ${sys.get_env("CHAT_SECRET_ID")}' in SOURCE
     assert "https://" not in SOURCE.split("notify_chat")[1].split("- done:")[0]
+
+
+def test_event_names_its_ci_class():
+    """Without ci_type, Event Management resolves `node` against HOST classes and logs
+    "Failed to find the host with name: <project>" — the alert binds to nothing, and an
+    alert with no CI cannot route itself to an owner."""
+    assert 'ci_type: "cmdb_ci_appl"' in SOURCE

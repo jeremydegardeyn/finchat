@@ -116,6 +116,13 @@ main:
               source: "GCP"
               event_class: "finchat"
               node: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+              # Without ci_type, Event Management resolves `node` against HOST classes and
+              # logs "Failed to find the host with name: <project>" — there is no host, and
+              # the alert binds to no configuration item. Naming the class sends it to
+              # cmdb_ci_appl, where the GCP project is modelled. An alert with no CI cannot
+              # route itself, so this is what lets assignment come from CI ownership rather
+              # than a group somebody hardcoded (docs/26 §12).
+              ci_type: "cmdb_ci_appl"
               resource: ${if(svc != "", svc, environment)}
               type: ${default(map.get(ce, "control_id"), "unknown")}
               severity: ${severity}
