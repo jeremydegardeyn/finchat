@@ -1,11 +1,13 @@
 # 26 — Technical Controls Alerting (GCP → ServiceNow)
 
-**Status:** built; awaiting end-to-end verification. A2 (DLP regionalization) applied in
-dev/test/prod. A5 infrastructure **deployed in dev** (topic, DLQ, both sinks, workflow, Eventarc
-trigger, secret container). A1/A3/A4/A6/A7/A8 written and CI-guarded but inert: `CONTROL_EVENTS`,
-`servicenow_instance_url` and `model_armor_use_dlp_templates` all default off, and the dev UI image
-predates the emitter until CI rebuilds. Outstanding: end-to-end test, prod/test rollout, SCC
-decision. Extends ADR-0008 (Model Armor).
+**Status:** live and verified end to end in dev/test/prod. A real prod jailbreak travels
+Model Armor block -> redacted control event -> Pub/Sub -> Eventarc -> Cloud Workflows ->
+ServiceNow `em_event` -> `em_alert`, and in parallel to a Google Chat space. Prod computes
+severity 2, nonprod 4, from identical code. Model Armor floor settings are ON (prod owns the
+project-level singleton). DLP templates regionalized in all three envs.
+**One gap:** no alert promotes to an incident automatically — the alert management rule matches
+and the CI binds, but the trigger does not fire; see §12. `model_armor_use_dlp_templates` and the
+SCC trial remain off.
 **Related:** ADR-0023 (agent registry), ADR-0024 (AI gateway), `compliance/regulatory-map.md`,
 `orchestration` repo (`composer/dags/utils/alerting.py`).
 
