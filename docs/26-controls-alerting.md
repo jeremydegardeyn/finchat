@@ -455,3 +455,45 @@ what drives auto-assignment, impact and service maps.
 **The integration user cannot read its own alerts.** `evt_mgmt_integration` grants write on
 `em_event` and not read on `em_alert`. Correct least privilege; it means correlation must be
 verified in the UI, not through the API.
+
+## 12. CI binding — using FinChat as the configuration item
+
+Every event so far carries `No CI found for binding — Failed to find the host with name:
+strongsville-city-schools` in its Processing Notes, and no alert has promoted to an incident.
+Those two facts are probably the same fact: the OOB **Create Incident** subflow is the mechanism
+Event Management uses, and it may require a configuration item to attach the task to.
+
+### The choice, and why node stays the project
+
+Event Management resolves the event's `node` field against the CMDB as a host name. Two ways to
+make that resolve:
+
+**(a) Change `node` to the Cloud Run service** (`finchat-prod-ui`) and create CIs with those names.
+Rejected: `resource` already carries the service, so `node` would duplicate it, and the emitting
+project — the one fact that identifies the tenant — would be pushed into `additional_info` where
+no correlation can reach it.
+
+**(b) Create a CI for the GCP project and let `node` resolve to it.** Chosen. It needs no change
+to the dispatch workflow, and it is what the field already means: a GCP project *is* a
+configuration item, and in a real cloud CMDB it is modelled as a cloud service account with the
+services running on it as children.
+
+### The records to create
+
+| CI | Class | Name |
+|---|---|---|
+| GCP project | `cmdb_ci_cloud_service_account` (or `cmdb_ci_appl`) | `strongsville-city-schools` |
+| BFF, per env | `cmdb_ci_appl` | `finchat-dev-ui`, `finchat-test-ui`, `finchat-prod-ui` |
+
+The service CIs are children of the project CI, so an alert binding on `node` reaches the project
+and the `resource` field still names the specific service. Assignment can then derive from CI
+ownership rather than the hardcoded group the alert rule uses today — which is exactly the
+Plan B row in §5, made concrete.
+
+### What this is worth saying in the write-up
+
+The sandbox has no CMDB because nothing populated one; a bank has Service Graph Connectors
+discovering GCP continuously. The gap is not that CI binding is hard, it is that **an ITSM
+integration is only as good as the asset inventory underneath it** — without a CI, an incident
+cannot route itself, and every alert lands on whichever group someone hardcoded. That is the real
+argument for the catalog and ontology work in Inc 10 and Inc 20 sitting under all of this.
