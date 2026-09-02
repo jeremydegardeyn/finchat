@@ -1,13 +1,12 @@
 # 26 — Technical Controls Alerting (GCP → ServiceNow)
 
-**Status:** live and verified end to end in dev/test/prod. A real prod jailbreak travels
+**Status:** COMPLETE and verified live in dev/test/prod. A real prod jailbreak travels
 Model Armor block -> redacted control event -> Pub/Sub -> Eventarc -> Cloud Workflows ->
-ServiceNow `em_event` -> `em_alert`, and in parallel to a Google Chat space. Prod computes
-severity 2, nonprod 4, from identical code. Model Armor floor settings are ON (prod owns the
-project-level singleton). DLP templates regionalized in all three envs.
-**One gap:** no alert promotes to an incident automatically — the alert management rule matches
-and the CI binds, but the trigger does not fire; see §12. `model_armor_use_dlp_templates` and the
-SCC trial remain off.
+ServiceNow `em_event` -> `em_alert` -> **incident**, and in parallel to a Google Chat space.
+Prod computes severity 2, nonprod 4, from identical code. Model Armor floor settings ON (prod owns
+the project-level singleton). DLP templates regionalized in all three envs. CMDB CIs created and
+alerts bind to them. Promotion is a Business Rule, not the alert management rule — see §12.
+Remaining: `model_armor_use_dlp_templates` off, SCC trial undecided.
 **Related:** ADR-0023 (agent registry), ADR-0024 (AI gateway), `compliance/regulatory-map.md`,
 `orchestration` repo (`composer/dags/utils/alerting.py`).
 
@@ -516,24 +515,37 @@ integration is only as good as the asset inventory underneath it** — without a
 cannot route itself, and every alert lands on whichever group someone hardcoded. That is the real
 argument for the catalog and ontology work in Inc 10 and Inc 20 sitting under all of this.
 
-### Promotion is blocked by something else
+### Promotion: resolved with a Business Rule
 
-Ruled out by testing, in order: the rule's conditions (it matches on Source/Resource/Severity,
-all verified against a live alert), the rule's own state (`active`, `state=1`, `type=incident`,
-copied field-for-field from the working OOB rule), the remediation subflow (`Create Incident` is
-`active`, `published`, `run_as: system`), and CI binding (proven to work independently, with no
-effect on promotion).
+Ruled out by testing, in order: the rule's conditions (verified against a live alert), the rule's
+own state (`active`, `state=1`, `type=incident`, copied field-for-field from the working OOB rule),
+the remediation subflow (`active`, `published`, `run_as: system`), and CI binding (proven to work
+independently, with no effect on promotion). The manual **Quick Incident** action works, so the
+alert-to-incident path is sound — only the automatic trigger never fires on this instance.
 
-What remains untested is whether this PDI evaluates alert management rules automatically at all.
-The manual **Quick Incident** action on the alert form works — that is how INC0010001 was created
-— so the alert-to-incident path itself is sound; only the automatic trigger is not firing.
+Resolved with a **Business Rule on `em_alert`** (after insert/update, condition
+`source=GCP^severity=2^resourceSTARTSWITHfinchat-prod^incidentISEMPTY`). Verified live:
+`INC0010004` was raised from a prod alert with the CI attached and `correlation_id` set to the
+message key.
 
-Two ways forward, and they are a real choice rather than a workaround:
+This is a script where a declarative rule was intended, and it is worth being explicit that the
+reason is an instance limitation rather than a design preference. What matters for ADR-0026 is
+that promotion still happens **inside ServiceNow** — the decision about what becomes an incident
+is not made in GCP glue, so the principle survives even though the mechanism changed.
 
-1. **A Business Rule on `em_alert`** that creates an incident when the conditions match. Fully
-   supported, needs no ITOM Pro flow engine, and keeps promotion inside ServiceNow — so the
-   architectural principle in ADR-0026 (correlation and promotion live in the system of record)
-   still holds. It trades a declarative rule for a script.
-2. **Leave promotion manual** and say so. Every alert is present, correlated and CI-bound; a human
-   clicks Quick Incident. For a sandbox demonstrating the *pipeline*, that may be honest enough —
-   and it is what the reconciliation control exists to catch if anyone forgets.
+Three properties the rule depends on:
+
+* **It cannot double-ticket.** `incidentISEMPTY` is in the filter *and* re-checked at the top of
+  the script. That also makes it safe alongside the alert management rule: if that ever starts
+  firing, whichever runs first wins and the same condition blocks the other. Confirmed live — a
+  repeat violation on an already-ticketed alert correctly produced no second incident.
+* **No recursion.** It writes back to the alert that triggered it, so it calls `setWorkflow(false)`
+  before `update()`; the filter would block re-entry regardless.
+* **Metadata only.** The incident names the resource, detectors, severity and message key, and says
+  in its own description that the flagged content stays in GCP behind IAM, reachable via
+  `evidence_ref`.
+
+One field trap worth recording: `em_alert.type` resolves to a sys_id, and `getDisplayValue()` on it
+returns `undefined`. The first two incidents carry those artefacts in their short descriptions. The
+alert's own `description` is the field to use — it already names the detectors and is always
+populated.
