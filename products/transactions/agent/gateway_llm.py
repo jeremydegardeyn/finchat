@@ -33,6 +33,10 @@ from typing import AsyncGenerator
 
 GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "").rstrip("/")
 GATEWAY_TIMEOUT = float(os.getenv("AI_GATEWAY_TIMEOUT", "120"))
+# Enforced chokepoint (ADR-0024/0026). Off, an absent gateway degrades to the direct
+# ADK path and the bypass is counted; on, construction fails rather than running the
+# agent ungoverned. Counting a bypass does not stop the bypassing.
+GATEWAY_REQUIRED = os.getenv("AI_GATEWAY_REQUIRED", "").lower() in ("1", "true", "yes")
 
 _lock = threading.Lock()
 _counters: dict[str, int] = {"transited": 0, "bypass_error": 0, "blocked": 0}
@@ -224,6 +228,14 @@ def gateway_model(agent_id: str, model: str, *, owner: str | None = None,
     risk tier and a recertification date.
     """
     if not (GATEWAY_URL and _ADK_AVAILABLE):
+        if GATEWAY_REQUIRED:
+            # Fail at construction, not at first token: an agent that starts and then
+            # answers ungoverned is worse than one that refuses to start, because the
+            # first is indistinguishable from a working control.
+            raise RuntimeError(
+                f"AI_GATEWAY_REQUIRED is set but the gateway is unavailable for "
+                f"{agent_id} (url={'set' if GATEWAY_URL else 'unset'}, "
+                f"adk={'present' if _ADK_AVAILABLE else 'absent'})")
         return model
     return GatewayLlm(model=model, agent_id=agent_id, owner=owner,
                       workload_class=workload_class)
