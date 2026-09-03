@@ -130,3 +130,53 @@ def test_transit_share_is_none_before_any_call():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# --- enforced chokepoint (ADR-0024 / ADR-0026) --------------------------------
+# Counting a bypass tells you the control was skipped; it does not stop the skipping.
+# With AI_GATEWAY_REQUIRED set there is no direct-to-Vertex path at all, so the screening
+# the gateway performs cannot be routed around by unsetting an environment variable.
+
+def test_unconfigured_gateway_still_degrades_by_default(monkeypatch):
+    """Default posture is unchanged: a sandbox keeps working when the gateway is absent."""
+    monkeypatch.setattr(gc, "GATEWAY_URL", "")
+    monkeypatch.setattr(gc, "GATEWAY_REQUIRED", False)
+    assert gc.complete("hi", agent_id="a", workload_class="w") is None
+
+
+def test_unconfigured_gateway_fails_closed_when_required(monkeypatch):
+    monkeypatch.setattr(gc, "GATEWAY_URL", "")
+    monkeypatch.setattr(gc, "GATEWAY_REQUIRED", True)
+    with pytest.raises(gc.GatewayUnavailable):
+        gc.complete("hi", agent_id="a", workload_class="w")
+
+
+def test_unreachable_gateway_fails_closed_when_required(monkeypatch):
+    """An outage must not silently become an ungoverned call on a regulated path."""
+    monkeypatch.setattr(gc, "GATEWAY_URL", "https://gw.invalid")
+    monkeypatch.setattr(gc, "GATEWAY_REQUIRED", True)
+    monkeypatch.setattr(gc, "_id_token", lambda a: None)
+
+    def boom(*a, **k):
+        raise OSError("connection refused")
+    monkeypatch.setattr(gc.urllib.request, "urlopen", boom)
+
+    with pytest.raises(gc.GatewayUnavailable):
+        gc.complete("hi", agent_id="a", workload_class="w")
+
+
+def test_a_refusal_is_still_a_refusal_not_an_outage(monkeypatch):
+    """GatewayBlocked and GatewayUnavailable must stay distinct. A PII block is the control
+    working; collapsing it into the outage path would let it be retried around."""
+    assert not issubclass(gc.GatewayBlocked, gc.GatewayUnavailable)
+    assert not issubclass(gc.GatewayUnavailable, gc.GatewayBlocked)
+
+
+def test_bypasses_are_still_counted_when_required(monkeypatch):
+    """Failing closed must not cost the transit-share measurement."""
+    monkeypatch.setattr(gc, "GATEWAY_URL", "")
+    monkeypatch.setattr(gc, "GATEWAY_REQUIRED", True)
+    before = gc.counters()["bypass_unconfigured"]
+    with pytest.raises(gc.GatewayUnavailable):
+        gc.complete("hi", agent_id="a", workload_class="w")
+    assert gc.counters()["bypass_unconfigured"] == before + 1

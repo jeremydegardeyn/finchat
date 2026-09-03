@@ -13,6 +13,15 @@ such call is recorded as a bypass, because the honest measure of a gateway progr
 share of traffic that actually transits it, and a bypass you don't count is a bypass you
 will report as compliance.
 
+**Unless AI_GATEWAY_REQUIRED is set, in which case there is no fallback.** Counting a bypass
+tells you the control was skipped; it does not stop the skipping, and a chokepoint you can
+step around by unsetting an environment variable is a convention rather than an enforcement.
+With the flag on, an unconfigured or unreachable gateway raises GatewayUnavailable instead of
+reaching Vertex, so the screening the gateway performs cannot be bypassed by configuration.
+The cost is availability: a gateway outage takes the agent down. That is the correct trade
+on a regulated path and the wrong one in a sandbox, which is why it is a flag and why it is
+off by default.
+
 **Not every call site can use this.** ADK agents call the model inside the framework, so
 routing them requires an ADK `BaseLlm` adapter rather than an HTTP client. Those call sites
 are recorded as structural bypasses with a reason, not quietly omitted from the denominator.
@@ -28,6 +37,9 @@ import urllib.request
 
 GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "").rstrip("/")
 GATEWAY_TIMEOUT = float(os.getenv("AI_GATEWAY_TIMEOUT", "45"))
+# Enforced chokepoint. Off, a missing or unreachable gateway degrades to a counted
+# direct call; on, it raises. See GatewayUnavailable for the trade.
+GATEWAY_REQUIRED = os.getenv("AI_GATEWAY_REQUIRED", "").lower() in ("1", "true", "yes")
 
 # Bypass counters, in-process. Exported at /api/gateway/transit so the share is
 # observable without a BigQuery round-trip; the durable record is the audit log.
@@ -76,6 +88,21 @@ class GatewayBlocked(Exception):
         self.detail = detail
 
 
+class GatewayUnavailable(Exception):
+    """The gateway could not be reached, and this deployment forbids bypassing it.
+
+    Only raised when GATEWAY_REQUIRED is set. Without it, an unconfigured or unreachable
+    gateway degrades to a counted direct call, which keeps a sandbox working when the
+    gateway is down. That is the right default for a demo and the wrong one for a
+    regulated path, because screening you can route around by unsetting an environment
+    variable is a convention rather than a control (ADR-0024, ADR-0026).
+
+    The trade is explicit: with this on, a gateway outage takes the agent down instead of
+    quietly running it ungoverned. That is the intended behaviour — an ungoverned answer
+    is worse than no answer where the control is the point.
+    """
+
+
 def complete(prompt: str, *, agent_id: str, workload_class: str,
              owner: str | None = None, session_id: str | None = None,
              tier: str | None = None, max_output_tokens: int | None = None,
@@ -88,6 +115,8 @@ def complete(prompt: str, *, agent_id: str, workload_class: str,
     """
     if not GATEWAY_URL:
         _count("bypass_unconfigured")
+        if GATEWAY_REQUIRED:
+            raise GatewayUnavailable("gateway required but AI_GATEWAY_URL is unset")
         return None
 
     body = json.dumps({
@@ -113,8 +142,10 @@ def complete(prompt: str, *, agent_id: str, workload_class: str,
     try:
         with urllib.request.urlopen(req, timeout=GATEWAY_TIMEOUT) as r:
             payload = json.loads(r.read())
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
         _count("bypass_error")
+        if GATEWAY_REQUIRED:
+            raise GatewayUnavailable(f"gateway unreachable: {type(e).__name__}") from e
         return None
 
     outcome = payload.get("outcome")
@@ -129,4 +160,6 @@ def complete(prompt: str, *, agent_id: str, workload_class: str,
     # model_error and anything unrecognised: the gateway reached a decision but could not
     # serve. Treat as availability, not policy — fall back and count the bypass.
     _count("bypass_error")
+    if GATEWAY_REQUIRED:
+        raise GatewayUnavailable(f"gateway could not serve: {outcome}")
     return None
