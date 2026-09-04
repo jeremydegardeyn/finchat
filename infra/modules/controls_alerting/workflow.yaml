@@ -116,12 +116,17 @@ main:
               source: "GCP"
               event_class: "finchat"
               node: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
-              # Without ci_type, Event Management resolves `node` against HOST classes and
-              # logs "Failed to find the host with name: <project>" — there is no host, and
-              # the alert binds to no configuration item. Naming the class sends it to
-              # cmdb_ci_appl, where the GCP project is modelled. An alert with no CI cannot
-              # route itself, so this is what lets assignment come from CI ownership rather
-              # than a group somebody hardcoded (docs/26 §12).
+              # Names the CMDB class the `node` value should resolve against. Without it,
+              # Event Management resolves `node` against HOST classes and logs "Failed to
+              # find the host with name: <project>"; there is no host, and the alert binds
+              # to nothing. The GCP project is modelled as cmdb_ci_appl.
+              #
+              # This is necessary but, on the target instance, not sufficient: with a CI of
+              # class Application present and matching `node` exactly, some events bind and
+              # others still record the host-resolution failure (docs/26 F20). Assignment
+              # therefore continues to come from a hardcoded group rather than from CI
+              # ownership, which is the thing binding was supposed to buy. Read an event's
+              # processing notes before believing the routing path works.
               ci_type: "cmdb_ci_appl"
               resource: ${if(svc != "", svc, environment)}
               type: ${default(map.get(ce, "control_id"), "unknown")}
