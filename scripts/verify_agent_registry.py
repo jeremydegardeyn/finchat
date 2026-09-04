@@ -13,12 +13,24 @@ Checks
   DRIFT-2  every registered agent still exists in code
   DRIFT-3  the tool allow-list in the registry matches the tools passed in code
   DRIFT-4  every registered agent reaches models through the AI gateway (ADR-0026)
-  REG-1    every agent declares owner, business area, risk tier, identity and data scope
-  REG-2    every agent has a distinct service account (no sharing)
-  REG-3    consequential agents declare a human-in-the-loop gate
-  LIFE-1   no agent is past its recertification date
   PIN-1    production agents run a pinned model snapshot  (warning, not failure)
            - downgraded to INFO where the provider publishes no snapshot to pin to
+
+What this script does NOT check any more
+----------------------------------------
+REG-1/2/3 (completeness, distinct identity, human-in-the-loop) and LIFE-1/2
+(recertification) moved to `policy/registry/registry.rego` — see ADR-0027. The split
+follows what each check has to read, not a preference for either language:
+
+  * The checks here parse agent SOURCE FILES with `ast` and compare constructors, tool
+    lists and model arguments against the catalogue. Rego over a syntax tree would be
+    worse in every respect.
+  * The checks that moved are assertions over a JSON document, and they are the ones
+    the risk function has to be able to read. "Every consequential agent declares a
+    human-in-the-loop gate" should be legible without reading a Python for-loop.
+
+Both run in the same CI job, as separate steps, so a failure in either is legible in
+the checks list.
 
 Exit code 0 = clean, 1 = at least one failure. Warnings never fail the build.
 
@@ -29,11 +41,10 @@ from __future__ import annotations
 import argparse
 import ast
 import sys
-from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agents_catalog import DEFAULT_MODEL_ALIAS, agents, recert_due  # noqa: E402
+from agents_catalog import DEFAULT_MODEL_ALIAS, agents  # noqa: E402
 from model_pins import PINNABLE_VERIFIED, is_pinnable  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -272,41 +283,6 @@ def check_coverage(registry: list[dict], f: Findings) -> None:
                               f"transit could not be confirmed statically")
 
 
-def check_registration(registry: list[dict], f: Findings) -> None:
-    """REG-1/2/3 — completeness and identity."""
-    required = ("owner", "business_area", "risk_tier", "sa_key", "data_scope")
-    seen_sa: dict[str, str] = {}
-
-    for a in registry:
-        for field in required:
-            if not a.get(field):
-                f.fail("REG-1", f"{a['id']} is missing '{field}'")
-
-        sa = a.get("sa_key")
-        if sa:
-            if sa in seen_sa:
-                f.fail("REG-2", f"{a['id']} shares service account '{sa}' with "
-                                f"{seen_sa[sa]} — every agent needs a distinct identity")
-            else:
-                seen_sa[sa] = a["id"]
-
-        if a.get("consequential") and not a.get("hitl"):
-            f.fail("REG-3", f"{a['id']} takes consequential action but declares no "
-                            f"human-in-the-loop gate")
-
-
-def check_lifecycle(registry: list[dict], f: Findings, today: date) -> None:
-    """LIFE-1 — recertification, on the privileged-access cycle."""
-    for a in registry:
-        due = recert_due(a)
-        if due < today:
-            f.fail("LIFE-1", f"{a['id']} recertification overdue since {due.isoformat()} "
-                             f"(owner {a['owner']})")
-        elif (due - today).days <= 14:
-            f.warn("LIFE-1", f"{a['id']} recertification due {due.isoformat()} "
-                             f"({(due - today).days}d) — owner {a['owner']}")
-
-
 def check_pinning(registry: list[dict], f: Findings) -> None:
     """PIN-1 — model version pinning (ADR-0022).
 
@@ -346,18 +322,14 @@ def check_pinning(registry: list[dict], f: Findings) -> None:
 def main() -> int:
     p = argparse.ArgumentParser(description="Verify the FinChat agent registry against code.")
     p.add_argument("--env", default="dev")
-    p.add_argument("--today", help="override today's date (ISO) for testing")
     p.add_argument("--strict", action="store_true", help="treat warnings as failures")
     args = p.parse_args()
 
-    today = date.fromisoformat(args.today) if args.today else date.today()
     registry = [a for a in agents(args.env) if a["status"] == "active"]
     f = Findings()
 
     check_drift(registry, f)
     check_coverage(registry, f)
-    check_registration(registry, f)
-    check_lifecycle(registry, f, today)
     check_pinning(registry, f)
 
     print(f"Agent registry verification — {args.env} ({len(registry)} active agents)\n")
@@ -370,7 +342,7 @@ def main() -> int:
         print(f"  FAIL  {fail}")
 
     if not f.failures and not f.warnings:
-        print("  clean — registry matches code, all agents owned and in certification")
+        print("  clean — registry matches code; every agent transits the gateway")
 
     print()
     if f.failures:

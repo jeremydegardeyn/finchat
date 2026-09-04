@@ -338,13 +338,62 @@ def emit_tfvars(env: str) -> dict:
     }
 
 
+def policy_input(env: str, today: date | None = None) -> dict:
+    """The registry as a policy document, for `policy/registry/*.rego`.
+
+    Distinct from `emit_tfvars` on purpose. That projection is deliberately minimal —
+    Terraform needs only what it takes to create a service account — while a policy
+    needs every field it judges, including the ones Terraform has no use for
+    (`data_scope`, `consequential`, `hitl`, `business_area`).
+
+    Two fields are computed rather than carried:
+
+      * `recert_due` — the cadence lives here because `emit_tfvars` already depends on
+        it, and a cadence defined in two places is a cadence that drifts. The policy
+        re-derives it independently and fails on disagreement (LIFE-2), which is what
+        catches a due date edited forward by hand.
+      * `service_account` — the truncated IAM account id, so a policy can reason about
+        the identity that actually gets created rather than the logical key.
+
+    `today` is carried in the document rather than read from the clock inside the
+    policy, so a policy run is reproducible and a test can pin the date.
+    """
+    return {
+        "env": env,
+        "today": (today or date.today()).isoformat(),
+        "agents": [
+            {
+                **a,
+                "service_account": service_account_id(a, env),
+                "recert_due": recert_due(a).isoformat(),
+            }
+            for a in agents(env) if a["status"] == "active"
+        ],
+    }
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="FinChat agent registry — source of truth.")
     p.add_argument("--env", default="dev")
     p.add_argument("--emit-tfvars", metavar="PATH",
                    help="write the Terraform agents map to PATH (.auto.tfvars.json)")
     p.add_argument("--list", action="store_true", help="print the registry as JSON")
+    p.add_argument("--emit-policy-input", metavar="PATH",
+                   help="write the registry policy document to PATH ('-' for stdout); "
+                        "consumed by policy/registry/*.rego via conftest")
+    p.add_argument("--today", help="override today's date (ISO) in the policy document")
     args = p.parse_args()
+
+    if args.emit_policy_input:
+        today = date.fromisoformat(args.today) if args.today else None
+        doc = json.dumps(policy_input(args.env, today), indent=2)
+        if args.emit_policy_input == "-":
+            print(doc)
+        else:
+            with open(args.emit_policy_input, "w", encoding="utf-8") as fh:
+                print(doc, file=fh)
+            print(f"wrote {args.emit_policy_input}")
+        return 0
 
     if args.emit_tfvars:
         with open(args.emit_tfvars, "w", encoding="utf-8") as fh:

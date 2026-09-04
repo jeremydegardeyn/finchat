@@ -99,7 +99,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Verify registry against source (drift / ownership / recertification)
+      - name: Verify registry against source (drift + gateway transit)
         run: python scripts/verify_agent_registry.py --env prod
       - name: Terraform projection is current
         run: |
@@ -112,6 +112,51 @@ jobs:
             git diff -- infra/envs/*/agents.auto.tfvars.json
             exit 1
           fi
+
+  # Policy-as-code (ADR-0027). Its own job for the same reason the registry gate is one:
+  # a policy failure should be legible in the checks list rather than buried in a test
+  # summary. This job needs no cloud credentials — the Terraform rules are unit-tested
+  # against synthetic plan fragments here, and evaluated against a real plan in
+  # `.github/workflows/infra.yml`, which is the only workflow that can produce one.
+  policy:
+    runs-on: ubuntu-latest
+    env:
+      # Pinned. An unpinned policy engine changes the rules' meaning on someone else's
+      # release schedule, which is the one thing a control must not do.
+      CONFTEST_VERSION: "0.69.0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install conftest
+        run: |
+          curl -sSfL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz conftest
+          sudo mv conftest /usr/local/bin/
+          conftest --version
+
+      # The rules are a control, so they get the same treatment as the code they gate:
+      # a test proving each one fires on the violation it names, and a test proving it
+      # stays quiet on the compliant case. A rule nobody has seen fail is not a control.
+      - name: Policy unit tests — Terraform posture rules
+        run: conftest verify --policy policy/terraform
+
+      - name: Policy unit tests — agent registry rules
+        run: conftest verify --policy policy/registry
+
+      # REG-1/2/3 and LIFE-1/2 against the committed registry, in every environment.
+      # These moved out of verify_agent_registry.py; that script now owns only the
+      # checks that have to read the agent source files.
+      - name: Agent registry policy — REG / LIFE (dev, test, prod)
+        run: |
+          for e in dev test prod; do
+            echo "::group::$e"
+            python scripts/agents_catalog.py --env "$e" --emit-policy-input - \
+              | conftest test --policy policy/registry --namespace finchat.registry \
+                  --parser json -
+            echo "::endgroup::"
+          done
 
   agent-eval:
     runs-on: ubuntu-latest

@@ -6,7 +6,7 @@ actually bites. A control that cannot be shown to fail is not a control.
 from __future__ import annotations
 
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -85,50 +85,37 @@ def test_drift2_catches_a_registered_agent_missing_from_code():
     assert any(x.startswith("DRIFT-2") and "ghost_agent" in x for x in f.failures)
 
 
-def test_reg2_rejects_a_shared_service_account():
-    f = v.Findings()
-    v.check_registration([_agent(id="a1"), _agent(id="a2")], f)  # same sa_key
-    assert any(x.startswith("REG-2") for x in f.failures)
-
-
-def test_reg3_rejects_consequential_action_without_a_human_gate():
-    f = v.Findings()
-    v.check_registration([_agent(consequential=True, hitl=False)], f)
-    assert any(x.startswith("REG-3") for x in f.failures)
-
-
-def test_reg1_rejects_an_unowned_agent():
-    f = v.Findings()
-    v.check_registration([_agent(owner="")], f)
-    assert any(x.startswith("REG-1") and "owner" in x for x in f.failures)
-
-
-def test_life1_fails_an_overdue_recertification():
-    stale = (date(2026, 8, 4) - timedelta(days=200)).isoformat()
-    f = v.Findings()
-    v.check_lifecycle([_agent(last_recertified=stale)], f, today=date(2026, 8, 4))
-    assert any(x.startswith("LIFE-1") for x in f.failures)
-
-
-def test_life1_warns_before_it_fails():
-    """A recert due inside 14 days warns; it must not break the build yet."""
-    soon = (date(2026, 8, 4) - timedelta(days=80)).isoformat()  # HIGH = 90d cycle
-    f = v.Findings()
-    v.check_lifecycle([_agent(last_recertified=soon)], f, today=date(2026, 8, 4))
-    assert f.failures == []
-    assert any(x.startswith("LIFE-1") for x in f.warnings)
-
-
 # --- The live catalogue -------------------------------------------------------
 
 def test_live_registry_is_clean():
-    """The committed registry must pass every failing check."""
+    """The committed registry must match the code it claims to describe.
+
+    Completeness, distinct identity, the human-in-the-loop requirement and
+    recertification are asserted against the same registry by
+    policy/registry/registry.rego, in the CI step that runs conftest (ADR-0027).
+    """
     registry = [a for a in agents_catalog.agents("dev") if a["status"] == "active"]
     f = v.Findings()
     v.check_drift(registry, f)
-    v.check_registration(registry, f)
-    v.check_lifecycle(registry, f, today=date(2026, 8, 4))
+    v.check_coverage(registry, f)
     assert f.failures == [], "\n".join(f.failures)
+
+
+def test_policy_input_carries_what_the_registry_policy_judges():
+    """The Rego rules are only as good as the document they are handed.
+
+    `emit_tfvars` is deliberately minimal, so it would be an easy and silent mistake to
+    point conftest at it and quietly stop evaluating the fields Terraform never needed.
+    """
+    doc = agents_catalog.policy_input("prod", today=date(2026, 8, 4))
+    assert doc["today"] == "2026-08-04"
+    assert doc["agents"], "policy input has no agents"
+    for a in doc["agents"]:
+        for field in ("owner", "business_area", "risk_tier", "sa_key", "data_scope",
+                      "consequential", "hitl", "last_recertified", "recert_due",
+                      "service_account"):
+            assert field in a, f"{a['id']} policy input is missing {field}"
+        assert a["recert_due"] == agents_catalog.recert_due(a).isoformat()
 
 
 def test_every_agent_has_a_distinct_service_account():

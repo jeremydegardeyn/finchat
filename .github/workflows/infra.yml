@@ -26,6 +26,9 @@ jobs:
     runs-on: ubuntu-latest
     # Env-scoped vars (WIF_PROVIDER/DEPLOY_SA) are supplied by the GitHub Environment.
     environment: ${{ github.event.inputs.environment || 'dev' }}
+    env:
+      # Kept in step with .github/workflows/ci.yml, which unit-tests the same rules.
+      CONFTEST_VERSION: "0.69.0"
     defaults:
       run:
         working-directory: infra/envs/${{ github.event.inputs.environment || 'dev' }}
@@ -41,13 +44,38 @@ jobs:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.DEPLOY_SA }}
 
+      - name: Install conftest
+        run: |
+          curl -sSfL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz conftest
+          sudo mv conftest /usr/local/bin/
+
       - name: Init
         run: terraform init -input=false
 
+      # Always plan to a FILE, on both paths. Apply then applies that exact plan rather
+      # than re-planning, so what the policy gate inspected is what reaches the project.
+      # Re-planning at apply time would leave a window in which the two differ, and the
+      # gate would be checking a plan nobody applied.
       - name: Plan
-        if: ${{ github.event_name == 'pull_request' || github.event.inputs.action == 'plan' }}
-        run: terraform plan -input=false -no-color
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      # Posture rules over the plan (ADR-0027). This runs before apply and after plan
+      # because it is the only point where the *effect* of the change is visible and
+      # nothing has happened yet.
+      #
+      # What this is: a pre-check that stops a merge. What it is NOT: the control. The
+      # platform-level equivalents — Org Policy constraints, IAM Conditions, policy tags
+      # — are enforcement, because they hold whether or not the change came through this
+      # pipeline. Someone with console access still bypasses everything here. The rules
+      # are worth having anyway; the distinction is worth stating so nobody reports a
+      # green check as compliance.
+      - name: Policy gate — Terraform posture
+        run: |
+          terraform show -json tfplan > tfplan.json
+          conftest test --policy "$GITHUB_WORKSPACE/policy/terraform" \
+            --namespace finchat.terraform tfplan.json
 
       - name: Apply
         if: ${{ github.event.inputs.action == 'apply' }}
-        run: terraform apply -input=false -auto-approve
+        run: terraform apply -input=false tfplan
