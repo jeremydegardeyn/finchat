@@ -76,7 +76,7 @@ jobs:
         run: pytest scripts/test_canary_eval.py -q
 
       - name: MCP surface — tool scoping, omissions, knowledge plane (ADR-0028)
-        run: pytest mcp_server -q
+        run: pip install mcp==1.27.2 && pytest mcp_server -q
       - name: Canary wiring smoke (no live endpoint)
         run: python scripts/canary_eval.py dev --offline
       - name: Generator invariant check (<=4 per customer)
