@@ -26,7 +26,7 @@ jobs:
       # a style linter here would be noise nobody reads.
       - name: Static check — undefined names
         run: |
-          python -m pyflakes ui/*.py scripts/*.py products/*/*/*.py products/*/*/*/*.py             2>/dev/null | grep -E "undefined name" && {
+          python -m pyflakes ui/*.py scripts/*.py mcp_server/*.py products/*/*/*.py products/*/*/*/*.py             2>/dev/null | grep -E "undefined name" && {
               echo "::error::undefined name(s) found — see above"; exit 1; } || true
       - name: Pipeline transform tests (Beam-free)
         working-directory: products/transactions/pipeline
@@ -74,6 +74,9 @@ jobs:
         run: pytest test_intent_router.py -q
       - name: Model pinning + canary drift control tests (ADR-0022)
         run: pytest scripts/test_canary_eval.py -q
+
+      - name: MCP surface — tool scoping, omissions, knowledge plane (ADR-0028)
+        run: pytest mcp_server -q
       - name: Canary wiring smoke (no live endpoint)
         run: python scripts/canary_eval.py dev --offline
       - name: Generator invariant check (<=4 per customer)
@@ -190,6 +193,15 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform validate
+
+  docker-build-mcp:
+    # Separate job: the MCP image copies modules owned by other services, so its
+    # build context is the repo root rather than its own directory.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build MCP image (no push)
+        run: docker build -f mcp_server/Dockerfile -t finchat-mcp-ci-test .
 
   docker-build:
     runs-on: ubuntu-latest

@@ -1,0 +1,5 @@
+mcp==1.27.2
+# Only needed for the HTTP transport on GCP; stdio + demo mode run on the
+# standard library alone, which is what keeps `claude mcp add` a one-liner.
+uvicorn[standard]==0.30.6
+google-auth==2.34.0

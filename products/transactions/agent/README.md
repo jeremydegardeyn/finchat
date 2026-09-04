@@ -31,7 +31,8 @@ only) so the data path is exercisable offline.
 
 **Cloud Run (default — true scale-to-zero, ~$0 idle).** Built & deployed by CI/CD
 (`build-deploy.yml` → service `finchat-<env>-agent`). It serves `server.py`
-(FastAPI + ADK Runner) with `POST /chat`; Gemini runs via Vertex (`GOOGLE_GENAI_USE_VERTEXAI=TRUE`,
+(FastAPI + ADK Runner) with `POST /chat` and `POST /search` (retrieval only —
+passages, no agent turn; used by the MCP server, ADR-0028); Gemini runs via Vertex (`GOOGLE_GENAI_USE_VERTEXAI=TRUE`,
 runtime SA has `roles/aiplatform.user`). Manual:
 ```bash
 REPO=us-central1-docker.pkg.dev/strongsville-city-schools/finchat-dev-images
@@ -40,6 +41,7 @@ gcloud run deploy finchat-dev-agent --image $REPO/agent --region us-central1 \
   --service-account finchat-dev-agent@strongsville-city-schools.iam.gserviceaccount.com \
   --set-env-vars GOOGLE_CLOUD_PROJECT=strongsville-city-schools,GOOGLE_CLOUD_LOCATION=us-central1,GOOGLE_GENAI_USE_VERTEXAI=TRUE,TXN_API_URL=<txn-api-url>
 curl -XPOST <agent-url>/chat -H 'content-type: application/json' -d '{"message":"balance for acct-001"}'
+curl -XPOST <agent-url>/search -H 'content-type: application/json' -d '{"query":"lakewood branch hours"}'
 ```
 Tools call the (private) txn-api with an **OIDC id-token** (the agent SA has `run.invoker`).
 
