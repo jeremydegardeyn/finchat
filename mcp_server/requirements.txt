@@ -1,5 +1,9 @@
+# NOTE: uvicorn is pinned to what the MCP SDK accepts, not to the UI's pin.
+# `uvicorn[standard]==0.30.6` was copied from ui/requirements.txt and is correct
+# there; here it is a build failure, because mcp 1.27.2 requires uvicorn>=0.31.1.
+# Copying a pin across services carries the other service's constraints with it.
 mcp==1.27.2
 # Only needed for the HTTP transport on GCP; stdio + demo mode run on the
 # standard library alone, which is what keeps `claude mcp add` a one-liner.
-uvicorn[standard]==0.30.6
+uvicorn[standard]==0.48.0
 google-auth==2.34.0
