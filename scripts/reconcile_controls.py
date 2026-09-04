@@ -41,6 +41,7 @@ import argparse
 import json
 import os
 import sys
+from collections import Counter
 from dataclasses import dataclass, field, asdict
 
 # Cloud Logging names its own destination table after the log id; for Cloud Run stdout
@@ -58,6 +59,7 @@ class Reconciliation:
     matched: list = field(default_factory=list)
     dropped: list = field(default_factory=list)       # evidence says yes, ServiceNow says no
     unexplained: list = field(default_factory=list)   # ServiceNow says yes, evidence says no
+    duplicated: list = field(default_factory=list)    # ServiceNow wrote a key more often than it happened
 
     @property
     def evidence_count(self) -> int:
@@ -68,8 +70,12 @@ class Reconciliation:
         return len(self.matched) + len(self.unexplained)
 
     @property
+    def duplicate_writes(self) -> int:
+        return sum(d["excess"] for d in self.duplicated)
+
+    @property
     def clean(self) -> bool:
-        return not self.dropped and not self.unexplained
+        return not self.dropped and not self.unexplained and not self.duplicated
 
 
 def normalise_keys(rows, key_field: str = "message_key") -> set:
@@ -87,13 +93,52 @@ def normalise_keys(rows, key_field: str = "message_key") -> set:
     return out
 
 
+def count_keys(rows, key_field: str = "message_key", count_field: str | None = None):
+    """How many times each message key occurs.
+
+    Set membership answers "did this arrive at all", which is why over-delivery was
+    invisible: three writes of one key look exactly like one. The evidence side is already
+    aggregated by the SQL and carries its own `occurrences`; the ServiceNow side is one row
+    per event, so a row counts as one.
+    """
+    counts = Counter()
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        k = (r.get(key_field) or "").strip()
+        if not k:
+            continue
+        n = 1
+        if count_field is not None:
+            try:
+                n = max(1, int(r.get(count_field) or 1))
+            except (TypeError, ValueError):
+                n = 1
+        counts[k] += n
+    return counts
+
+
 def reconcile(evidence_rows, servicenow_rows) -> Reconciliation:
-    ev = normalise_keys(evidence_rows)
-    sn = normalise_keys(servicenow_rows)
+    ev_counts = count_keys(evidence_rows, count_field="occurrences")
+    sn_counts = count_keys(servicenow_rows)
+    ev, sn = set(ev_counts), set(sn_counts)
+
+    # More ServiceNow rows than the control actually fired. One violation written three
+    # times is the signature of a fan-out: several pipelines consuming the same event
+    # (docs/26 F19). Correlation hides it downstream, because the duplicates share a
+    # message_key and collapse into a single alert, so this is the only place it shows.
+    duplicated = [
+        {"key": k, "evidence": ev_counts[k], "delivered": sn_counts[k],
+         "excess": sn_counts[k] - ev_counts[k]}
+        for k in sorted(ev & sn) if sn_counts[k] > ev_counts[k]
+    ]
+    duplicated.sort(key=lambda d: (-d["excess"], d["key"]))
+
     return Reconciliation(
         matched=sorted(ev & sn),
         dropped=sorted(ev - sn),
         unexplained=sorted(sn - ev),
+        duplicated=duplicated,
     )
 
 
@@ -103,10 +148,15 @@ def verdict(recon: Reconciliation) -> dict:
     Severity mirrors the em_event scale so the resulting control-failure event routes
     through the same promotion rules as everything else: 2 = Major, 3 = Minor, 4 = Warning.
 
-    A dropped notification outranks an unexplained one. A dropped event means a real
-    violation went unticketed; an unexplained event usually means a second writer, which
-    is untidy rather than dangerous — unless there are no matches at all, which suggests
-    the evidence sink itself is broken.
+    A dropped notification outranks everything else. A dropped event means a real violation
+    went unticketed; an unexplained event usually means a second writer, and a duplicated one
+    means the same violation was written more than once. Both are untidy rather than
+    dangerous, so they are Minor — unless there are no matches at all, which suggests the
+    evidence sink itself is broken.
+
+    Duplicates matter despite being Minor, because nothing downstream will ever report them:
+    the extra rows share a message_key, Event Management correlates them into one alert, and
+    every count a reviewer checks continues to look correct (docs/26 F19).
     """
     if recon.clean:
         return {"ok": True, "severity": "4", "summary":
@@ -117,6 +167,9 @@ def verdict(recon: Reconciliation) -> dict:
         parts.append(f"{len(recon.dropped)} control event(s) never reached ServiceNow")
     if recon.unexplained:
         parts.append(f"{len(recon.unexplained)} ServiceNow event(s) have no evidence record")
+    if recon.duplicated:
+        parts.append(f"{len(recon.duplicated)} key(s) written more often than they occurred "
+                     f"({recon.duplicate_writes} extra event(s))")
 
     severity = "2" if recon.dropped else "3"
     if recon.unexplained and not recon.matched and not recon.dropped:
@@ -145,6 +198,9 @@ def control_event(recon: Reconciliation, v: dict, environment: str) -> dict:
         "delivered_count": recon.delivered_count,
         "dropped_keys": recon.dropped[:20],
         "unexplained_keys": recon.unexplained[:20],
+        "duplicate_writes": recon.duplicate_writes,
+        "duplicated_keys": [f"{d['key']} x{d['delivered']} (expected {d['evidence']})"
+                            for d in recon.duplicated[:20]],
     }
 
 
