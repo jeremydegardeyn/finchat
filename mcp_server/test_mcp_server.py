@@ -137,6 +137,52 @@ def test_kb_routes_to_the_agent_when_one_is_configured():
     assert _load().backends.mode["knowledge_base"] == "local-bm25"
 
 
+@pytest.mark.parametrize("status,fragment", [
+    (403, "gcloud auth login"),
+    (401, "run.invoker"),
+    (404, "Redeploy the agent"),
+    (500, "returned 500"),
+    (None, "could not be reached"),
+])
+def test_every_agent_failure_degrades_and_names_the_cause(monkeypatch, status, fragment):
+    """Configuring the server harder must not make it answer less.
+
+    Pointing at a real agent that then refuses used to turn a working branch-hours
+    question into a bare error — worse than the demo-mode behaviour it replaced.
+    """
+    srv = _load(FINCHAT_AGENT_URL="https://agent.example.invalid/")
+    import backends
+
+    def boom(*a, **k):
+        raise backends.BackendError("simulated", status=status)
+
+    monkeypatch.setattr(backends, "_request", boom)
+    out = srv.search_knowledge_base("what time does the lakewood branch open")
+    assert "Degraded to local BM25" in out
+    assert fragment in out
+    assert "Lakewood" in out, "the fallback must still answer the question"
+    assert '"retriever": "sparse-local"' in out
+
+
+def test_account_tools_never_degrade_to_demo_data(monkeypatch):
+    """The contrast that makes the KB's fallback safe.
+
+    The KB corpus is public policy text either way, so degrading costs ranking
+    quality. A balance has no such equivalence: demo figures presented as a
+    customer's real ones is worse than any error, so these fail loudly.
+    """
+    srv = _load(FINCHAT_TXN_API_URL="https://txn.example.invalid/")
+    import backends
+
+    def boom(*a, **k):
+        raise backends.BackendError("simulated", status=403)
+
+    monkeypatch.setattr(backends, "_request", boom)
+    out = srv.get_account_balance("acct-001")
+    assert out.startswith("FinChat error:")
+    assert "balance" not in out.lower(), "a demo balance must never surface as real"
+
+
 def test_an_empty_kb_result_tells_the_model_not_to_improvise():
     """A miss must not read as an invitation to answer from general knowledge —
     these are one bank's policies, not an industry norm."""

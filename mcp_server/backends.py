@@ -46,7 +46,17 @@ KB_TOP_N = int(os.getenv("FINCHAT_MCP_KB_TOP_N", "4"))
 
 
 class BackendError(RuntimeError):
-    """A backend call failed. The message is written to be read by the model."""
+    """A backend call failed. The message is written to be read by the model.
+
+    `status` carries the HTTP code when there was one, and is None for a transport
+    failure. Callers decide how to degrade from the code rather than by matching
+    substrings of the message, which breaks the first time a response body happens
+    to contain the digits of a status.
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 # --- identity ----------------------------------------------------------------
@@ -123,10 +133,12 @@ def _request(base: str, path: str, *, method: str = "GET",
             raise BackendError(
                 f"{method} {path} was refused ({e.code}). The API is private, so the "
                 f"caller needs roles/run.invoker on it. Locally: `gcloud auth login`, "
-                f"then check `gcloud config get-value account`. Detail: {detail}") from None
+                f"then check `gcloud config get-value account`. Detail: {detail}",
+                status=e.code) from None
         if e.code == 404:
-            raise BackendError(f"Not found: {path}. Detail: {detail}") from None
-        raise BackendError(f"{method} {path} failed ({e.code}): {detail}") from None
+            raise BackendError(f"Not found: {path}. Detail: {detail}", status=404) from None
+        raise BackendError(f"{method} {path} failed ({e.code}): {detail}",
+                           status=e.code) from None
     except urllib.error.URLError as e:
         raise BackendError(f"{method} {path} could not reach {base}: {e.reason}") from None
 
@@ -189,6 +201,21 @@ def _local_kb_search(query: str, top_n: int = KB_TOP_N) -> list[dict]:
             for d, _ in ranked]
 
 
+def _degraded(err: BackendError) -> str:
+    """Say why retrieval fell back, in terms of the thing an operator has to fix."""
+    if err.status in (401, 403):
+        what = ("The agent refused the call (auth). Run `gcloud auth login`, or grant "
+                "the caller roles/run.invoker on the agent service.")
+    elif err.status == 404:
+        what = ("The agent has no /search endpoint — that revision predates it. "
+                "Redeploy the agent.")
+    elif err.status is None:
+        what = "The agent could not be reached."
+    else:
+        what = f"The agent returned {err.status}."
+    return f"Degraded to local BM25: {what} Ranking is sparse-only; see docs/21."
+
+
 class Backends:
     """One object the tools call, whichever transport is live."""
 
@@ -216,9 +243,19 @@ class Backends:
         """Passages from the bank's policy/product knowledge base.
 
         Prefers the agent service's `/search`, which runs dense + BM25 + RRF +
-        Gemini rerank in one BigQuery job (docs/21). Falls back to local BM25 —
-        including when `/search` 404s, which means the agent is deployed from a
-        revision that predates the endpoint and needs a redeploy, not a code fix.
+        Gemini rerank in one BigQuery job (docs/21). **Any** agent failure degrades
+        to local BM25 with the cause stated, rather than only the 404 case.
+
+        This tool degrades where the account tools deliberately do not, and the
+        difference is the content, not the code path. The local corpus is the same
+        public policy text committed in this repo, so serving it is a worse *answer*
+        and not a worse *disclosure*. An account balance has no such fallback: demo
+        figures presented as a customer's real ones is a far worse outcome than an
+        error, so those tools fail loudly and always will.
+
+        The note is not decoration. Configuring the server harder — pointing it at a
+        real agent — must not be able to make it answer less than it did before, and
+        an operator still has to be able to see that retrieval is running degraded.
         """
         if not self.agent_url:
             return _local_kb_search(query)
@@ -226,15 +263,11 @@ class Backends:
             out = _request(self.agent_url, "/search", method="POST", body={"query": query})
             results = (out or {}).get("results") or []
         except BackendError as e:
-            if "404" in str(e) or "Not found" in str(e):
-                return ([{"note": "agent /search not found — this revision predates the "
-                                  "endpoint; redeploy the agent. Served locally instead."}]
-                        + _local_kb_search(query))
-            return [{"error": str(e)}]
+            return [{"note": _degraded(e)}] + _local_kb_search(query)
         # The tool reports its own misconfiguration rather than raising; surface it.
         if len(results) == 1 and "error" in results[0]:
-            return [{"note": f"agent knowledge base unavailable ({results[0]['error']}) "
-                             "— served locally instead."}] + _local_kb_search(query)
+            return [{"note": f"Agent knowledge base unavailable ({results[0]['error']}). "
+                             "Served locally instead."}] + _local_kb_search(query)
         return results
 
     def _txn(self):
