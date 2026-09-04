@@ -55,9 +55,20 @@ the control has no detector for it.
 
 Two consequences outlive the fix. Each environment's evidence dataset holds control events from
 the other two for the period before 2026-09-04, so any query over `control_events` prior to that
-date must filter on `environment` rather than trusting the dataset it lives in. And a duplicate-
-detection arm — same `message_key`, same `evidence_ref`, more than one `em_event` — is the missing
-half of the reconciliation control.
+date must filter on `environment` rather than trusting the dataset it lives in.
+
+**Duplicate detection is now the reconciliation control's second arm.** It counts occurrences per
+key on both planes rather than testing set membership — the set logic was itself the blind spot,
+since three writes of one key are indistinguishable from one — and reports any key ServiceNow
+recorded more often than the control actually fired. Ranked Minor: nothing went unticketed, so it
+sits below a dropped notification, but it is reported at all because nothing downstream ever will.
+The extra rows share a `message_key`, Event Management folds them into one alert, and every count
+a reviewer checks stays correct. Run retrospectively over a 72-hour window spanning the fix, it
+found `…:anonymous:security` delivered 18 times against 6 occurrences and `…:anonymous:privacy`
+13 against 5.
+
+Still uncovered: under-delivery on a key that was partially delivered — 5 occurrences, 3 events —
+which the same counting makes cheap to add but which is not built.
 
 ## 3. Architecture
 

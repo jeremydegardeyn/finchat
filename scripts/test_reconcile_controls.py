@@ -138,3 +138,80 @@ def test_servicenow_query_uses_a_relative_window():
 
 def test_servicenow_query_asks_for_message_key():
     assert "message_key" in rc.servicenow_query(24)["sysparm_fields"]
+
+
+# --- over-delivery (docs/26 F19) --------------------------------------------
+#
+# The failure these cover is the inverse of a dropped notification, and it is the one the
+# control was blind to: the notification path wrote the same violation more than once.
+# Correlation collapses the duplicates into a single alert downstream, so reconciliation
+# is the only place the extra writes are still visible.
+
+def evn(**keys):
+    """Evidence rows as the SQL returns them: aggregated, with an occurrence count."""
+    return [{"message_key": k, "occurrences": n} for k, n in keys.items()]
+
+
+def test_one_violation_written_three_times_is_detected():
+    r = rc.reconcile(evn(a=1), ev("a", "a", "a"))
+    assert r.duplicated == [{"key": "a", "evidence": 1, "delivered": 3, "excess": 2}]
+    assert r.duplicate_writes == 2
+    assert not r.dropped and not r.unexplained
+    assert r.matched == ["a"]
+
+
+def test_duplicates_make_the_reconciliation_not_clean():
+    """The whole point: counts matched, so the old set logic called this clean."""
+    r = rc.reconcile(evn(a=1), ev("a", "a"))
+    assert not r.clean
+    v = rc.verdict(r)
+    assert v["ok"] is False
+    assert "written more often than they occurred" in v["summary"]
+
+
+def test_repeat_violations_delivered_once_each_are_not_duplicates():
+    """Five genuine hits on one key, five events. Correlation is doing its job, not failing."""
+    r = rc.reconcile(evn(a=5), ev("a", "a", "a", "a", "a"))
+    assert r.duplicated == []
+    assert r.clean
+
+
+def test_under_delivery_on_a_matched_key_is_not_reported_as_duplication():
+    r = rc.reconcile(evn(a=5), ev("a", "a"))
+    assert r.duplicated == []
+
+
+def test_duplication_alone_is_minor():
+    """Untidy, not dangerous. Nothing went unticketed."""
+    v = rc.verdict(rc.reconcile(evn(a=1), ev("a", "a")))
+    assert v["severity"] == "3"
+
+
+def test_a_dropped_event_still_outranks_duplication():
+    r = rc.reconcile(evn(a=1, b=1), ev("a", "a"))
+    assert r.dropped == ["b"]
+    assert r.duplicated
+    assert rc.verdict(r)["severity"] == "2"
+
+
+def test_evidence_rows_without_a_count_are_worth_one_each():
+    """Hand-built rows, and anything the SQL shape changes under, must not read as zero."""
+    r = rc.reconcile(ev("a", "a"), ev("a", "a"))
+    assert r.duplicated == []
+    assert r.clean
+
+
+def test_the_control_event_names_the_duplicated_keys():
+    r = rc.reconcile(evn(a=1), ev("a", "a", "a"))
+    e = rc.control_event(r, rc.verdict(r), "prod")
+    assert e["duplicate_writes"] == 2
+    assert e["duplicated_keys"] == ["a x3 (expected 1)"]
+
+
+def test_the_fan_out_as_it_actually_happened():
+    """One prod violation, three pipelines consuming the same log entry, three em_event rows."""
+    key = "model_armor:model_armor.prompt:anonymous:privacy"
+    r = rc.reconcile(evn(**{key: 1}), ev(key, key, key))
+    v = rc.verdict(r)
+    assert r.duplicate_writes == 2
+    assert v["ok"] is False and v["severity"] == "3"
