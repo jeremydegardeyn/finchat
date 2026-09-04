@@ -4,9 +4,10 @@
 Model Armor block -> redacted control event -> Pub/Sub -> Eventarc -> Cloud Workflows ->
 ServiceNow `em_event` -> `em_alert` -> **incident**, and in parallel to a Google Chat space.
 Prod computes severity 2, nonprod 4, from identical code. Model Armor floor settings ON (prod owns
-the project-level singleton). DLP templates regionalized in all three envs. CMDB CIs created and
-alerts bind to them. Promotion is a Business Rule, not the alert management rule — see §12.
-Remaining: `model_armor_use_dlp_templates` off, SCC trial undecided.
+the project-level singleton). DLP templates regionalized in all three envs. CMDB CIs created; binding is
+inconsistent (F20). Promotion is a Business Rule, not the alert management rule — see §12.
+Remaining: `model_armor_use_dlp_templates` off. SCC is **not** taken for this build — it belongs
+to the enterprise reference (§5), not to a near-zero-cost sandbox.
 **Related:** ADR-0023 (agent registry), ADR-0024 (AI gateway), `compliance/regulatory-map.md`,
 `orchestration` repo (`composer/dags/utils/alerting.py`).
 
@@ -39,9 +40,24 @@ Checked live against `strongsville-city-schools` and current vendor docs, 2026-0
 | F13 | SCC **AI Protection is GA in Premium at the organization level only.** Standard (free) excludes it. Premium has a 30-day trial that auto-converts to pay-as-you-go. | Org-level activation meters all 5 projects, indefinitely, after day 30. |
 | F14 | Org `datadinosaur.com` = `892617109147`; `strongsville-city-schools` sits under it with 4 other projects. | Org-level SCC is possible. |
 | F15 | One always-on VM: `instance-20260529-020710`, e2-medium, us-east1-c, tags `http-server,https-server,mysql,phpmyadmin,smtp-outbound` — the DataDinosaur LAMP host. All 17 Cloud Run services are `minScale=0`; `finchat-prod-steward` Cloud SQL is STOPPED. | That VM is effectively the entire SCC pay-as-you-go meter (~1,460 vCPU-hr/mo). It cannot scale to zero. |
-| F16 | `armor` is imported in **exactly one place** — `ui/server.py:532`, the `/api/agent/*` proxy. `AI_GATEWAY_URL` appears in five (BFF, loans agents, transactions agent, steward harness, gateway_client). | Four model paths are unscreened today. Per-agent instrumentation would be five integrations and growing. |
-| F17 | `gateway_llm.py`: *"Fallback is direct-to-Vertex, and it is counted."* | The gateway is a chokepoint by convention, not enforcement. Floor settings are the enforcing version. |
+| F16 | `armor` is imported in **exactly one place** — `ui/server.py:532`, the `/api/agent/*` proxy. `AI_GATEWAY_URL` appears in five (BFF, loans agents, transactions agent, steward harness, gateway_client). | Model Armor screens only the agent proxy; the other four reach a model through the gateway, which runs its own PII screening (`guards/pii.py`) — different screening, not none. Per-agent Model Armor instrumentation would still be five integrations and growing. |
+| F17 | `gateway_llm.py`: *"Fallback is direct-to-Vertex, and it is counted."* | The gateway is a chokepoint by convention, not enforcement. `AI_GATEWAY_REQUIRED=1` is the enforcing version and is live in prod: unconfigured or unreachable now raises `GatewayUnavailable` instead of reaching Vertex. Floor settings add a project-level minimum, but the console's "Services applied" panel lists only *Model Armor — Template create and update*, so they are narrower than "every caller regardless of application code". |
 | F18 | dev/test/prod all live in **one project** (`finchat-dev-*`, `finchat-test-*`, `finchat-prod-*` side by side). | "Prod project vs nonprod project" does not exist here. Environment is a label, not a boundary — a weaker trust signal. |
+| F19 | A log sink is scoped to a **project**, and all three sinks carried the same environment-agnostic filter. One prod violation matched all three, producing 3 workflow executions, 3 `em_event` rows and 2 chat posts (test had no webhook secret). Verified 2026-09-03: dev/test/prod each ran one execution for the same event. | The direct consequence of F18 — an environment-scoped module in a single-project topology fans out. Fixed by adding an environment predicate keyed on `resource.labels.service_name`, matching how the workflow derives `environment`. |
+| F20 | CI binding is inconsistent. A `cmdb_ci` named `strongsville-city-schools`, class **Application**, exists and matches `node` exactly, yet the 2026-09-03 18:57 event recorded *"No CI found for binding (Failed to resolve the event node to CI id) / Binding Failure Reason: Failed to find the host with name: strongsville-city-schools"* while `Alert0010015`/`0010016` bound to that same CI. | Host-class resolution is still running despite `ci_type: cmdb_ci_appl`. The `build_row` comment in `workflow.yaml` claims naming the class is what makes binding work; on this evidence that is overstated and should be softened. Assignment therefore still comes from a hardcoded group, not CI ownership. |
+
+**Why F19 stayed invisible.** All three rows carry the same `message_key`, so Event Management
+correlated them into one `em_alert` and one incident — alert and incident counts looked correct
+throughout. Only the chat plane, which has no correlation, exposed it. Reconciliation could not
+catch it either: it compares evidence rows to `em_event` rows and both sides were triplicated, so
+they agreed. Reconciliation answers *"was anything dropped"*; this was the opposite failure, and
+the control has no detector for it.
+
+Two consequences outlive the fix. Each environment's evidence dataset holds control events from
+the other two for the period before 2026-09-04, so any query over `control_events` prior to that
+date must filter on `environment` rather than trusting the dataset it lives in. And a duplicate-
+detection arm — same `message_key`, same `evidence_ref`, more than one `em_event` — is the missing
+half of the reconciliation control.
 
 ## 3. Architecture
 
@@ -207,8 +223,10 @@ Keep `notify_failure_lightweight` as **break-glass**, explicitly scoped as notif
 
 **A9. Docs.** ADR-0026, this doc, `docs/08` cost line for DLP inspection under advanced config.
 
-**A10. Optional.** SCC 30-day org trial — **dashboard and evidence only, do not wire to EM** (SCC
-finding IDs will not match `message_key`; double-ticketing). Nothing to unwire on day 30.
+**A10. Not taken.** The SCC 30-day org trial is deliberately out of scope here. Activation is
+org-level, so it meters all five projects, and F15 is why that is not free: the always-on
+DataDinosaur VM is the meter and cannot scale to zero. Nothing in Plan A depends on it —
+see §5 for where SCC does earn its place.
 
 ## 5. Plan B — Enterprise bank reference architecture
 
@@ -244,14 +262,12 @@ Scheduler 3 free jobs. Real line items:
 | Secret Manager (1 active version) | ~$0.06/mo | delete secret |
 | DLP inspection under Model Armor advanced config | per-inspection, negligible at demo volume | revert to `basic_config` |
 | Cloud Workflows (only if EM unavailable) | free tier | `enable_*` flag off |
-| **SCC Premium org trial** | **$0 for 30 days, then meters all 5 projects** | **deactivate before day 30** |
+| SCC Premium org trial | *not activated* — see A10 | n/a |
 
 Everything behind `enable_*` Terraform flags defaulted off — the existing repo pattern. Teardown
-order: SCC deactivate → alert policies → sinks → secret → flags off. No committed-use, no reserved
-capacity, nothing that survives `terraform destroy`.
-
-The SCC trial is the only irreversible-by-neglect item. F15 is why it matters: the DataDinosaur VM
-is the meter and it cannot scale to zero.
+order: alert policies → sinks → secret → flags off. No committed-use, no reserved capacity,
+nothing that survives `terraform destroy`, and with SCC left alone there is no
+irreversible-by-neglect item at all.
 
 ## 7. Open forks
 
@@ -259,7 +275,6 @@ is the meter and it cannot scale to zero.
    Remaining sub-question: whether the PDI's Event Management processing jobs actually promote a
    `Ready` event into an `em_alert`, or whether events sit inert. That is a ServiceNow-side
    configuration matter, not an architecture one — the GCP side is identical either way.
-2. **SCC trial** — willing; needs a day-25 reminder if taken.
 3. **Log-based alert payload** — confirm whether the raw entry rides along with `labelExtractors`,
    or only the extracted labels. Design assumes the safe path (alert on a purpose-built redacted
    entry) so it does not matter.

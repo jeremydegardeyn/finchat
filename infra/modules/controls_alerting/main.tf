@@ -21,9 +21,31 @@ locals {
   # Selects ONLY the redacted envelope emitted by our own control points. Model Armor's
   # raw sanitize logs match none of this by design — they carry the flagged prompt and
   # never leave GCP (docs/26 F3).
+  #
+  # The environment predicate is not optional. A log sink is scoped to a PROJECT, and this
+  # project holds dev, test and prod, so without it all three sinks match every control
+  # event: one violation became three workflow executions and three em_event rows, and
+  # each environment's evidence dataset accumulated the other two environments' events
+  # (docs/26 F19). It stayed invisible because all three rows carry the same message_key
+  # and Event Management correlated them into a single alert; only the chat plane, which
+  # has no correlation, showed the duplication. Reconciliation cannot catch it either —
+  # both sides are triplicated, so they agree.
+  #
+  # Discriminate on resource identity, matching how the workflow derives `environment`:
+  # the Cloud Run service name is stamped by the platform and the workload cannot forge
+  # it, whereas the copy in the payload is emitter-set and only advisory (docs/26 F18).
+  # Sources with no service_name — Composer, chiefly — fall back to the payload value,
+  # which is the same trade the workflow makes.
   sink_filter = <<-EOT
     jsonPayload.control_event.control_id != ""
     AND jsonPayload.control_event.source != ""
+    AND (
+      resource.labels.service_name =~ "^${local.prefix}-"
+      OR (
+        NOT resource.labels.service_name:*
+        AND jsonPayload.control_event.environment = "${var.env}"
+      )
+    )
   EOT
 
   notify_enabled = var.servicenow_instance_url != ""
