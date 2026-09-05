@@ -183,6 +183,40 @@ def test_account_tools_never_degrade_to_demo_data(monkeypatch):
     assert "balance" not in out.lower(), "a demo balance must never surface as real"
 
 
+def test_the_gcloud_fallback_never_inherits_the_protocol_stream(monkeypatch):
+    """`_id_token`'s subprocess must detach stdin, or the server hangs forever.
+
+    Over stdio, this process's stdin IS the MCP protocol stream, and subprocess.run
+    inherits it by default — `capture_output` covers only stdout and stderr. gcloud
+    then reads the client's JSON-RPC bytes, which are unrecoverable, and the server
+    waits forever for a message it already consumed. It looks like a tool that never
+    returns, with nothing in any log.
+
+    This shipped, and every manual test passed, because piping a fixed script into
+    the server closes stdin immediately: gcloud reads EOF and the bug cannot occur.
+    Only a client that holds stdin open reproduces it, so the guard is a unit test
+    on the call itself rather than an integration test nobody will run.
+    """
+    import subprocess as sp
+
+    import backends
+
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return sp.CompletedProcess(cmd, 0, stdout="tok\n", stderr="")
+
+    monkeypatch.setattr(backends.subprocess, "run", fake_run)
+    monkeypatch.setattr(backends, "_token_cache", {})
+    # Force the gcloud path: workload credentials must appear unavailable.
+    monkeypatch.setitem(sys.modules, "google.oauth2", None)
+
+    assert backends._id_token("https://svc.example.invalid") == "tok"
+    assert seen.get("stdin") is sp.DEVNULL, \
+        "subprocess must not inherit stdin — that is the MCP protocol stream"
+
+
 def test_an_empty_kb_result_tells_the_model_not_to_improvise():
     """A miss must not read as an invitation to answer from general knowledge —
     these are one bank's policies, not an industry norm."""

@@ -89,8 +89,19 @@ def _id_token(audience: str) -> str | None:
     if not token:
         gcloud = shutil.which("gcloud") or "gcloud"
         try:
+            # stdin=DEVNULL is load-bearing, not hygiene. Over the stdio transport this
+            # process's stdin IS the MCP protocol stream, and subprocess.run inherits it
+            # by default — `capture_output` only redirects stdout and stderr. gcloud then
+            # reads the client's JSON-RPC bytes, which are gone for good, and the server
+            # waits forever for a message it already lost. It presents as a tool that
+            # never returns, with no error anywhere.
+            #
+            # Piping a fixed script into the server hides this completely: stdin hits EOF
+            # immediately, so gcloud reads nothing and every manual test passes. Only a
+            # real client, which holds stdin open, reproduces it.
             out = subprocess.run([gcloud, "auth", "print-identity-token"],
-                                 capture_output=True, text=True, timeout=30)
+                                 capture_output=True, text=True, timeout=30,
+                                 stdin=subprocess.DEVNULL)
             if out.returncode == 0 and out.stdout.strip():
                 token = out.stdout.strip()
         except Exception:
