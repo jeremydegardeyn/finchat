@@ -15,6 +15,10 @@ on:
         type: choice
         options: [plan, apply]
         default: plan
+      allow_destroy:
+        description: "Permit a plan that destroys resources (read the plan first)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,6 +57,36 @@ jobs:
       - name: Init
         run: terraform init -input=false
 
+      # The per-environment tfvars are gitignored (they carry the billing account), so a
+      # CI checkout has none. `terraform plan` with no var-file does NOT fail — it plans
+      # against every variable's DEFAULT, and the cost toggles all default to false. The
+      # result reads as "destroy everything those toggles gate", which is not theoretical:
+      # run 33917709545 planned 2 to add, 4 to change, **22 to destroy** in dev — the whole
+      # controls-alerting stack, the CLS fine-grained-reader bindings, the budget, the
+      # alert policy and the domain mapping. Nothing was lost only because the deploy SA
+      # lacked delete permission, which is an accident rather than a control.
+      #
+      # So the variables are supplied from a per-environment secret, and their absence is
+      # a hard failure. Silently planning against defaults is the failure mode this exists
+      # to remove; refusing to plan is strictly safer than planning something misleading.
+      - name: Materialise environment variables
+        env:
+          TFVARS: ${{ secrets.TFVARS }}
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+        run: |
+          if [ -z "$TFVARS" ]; then
+            echo "::error::No TFVARS secret on the '${ENVIRONMENT}' GitHub Environment. \
+          Refusing to continue: without it Terraform evaluates every variable at its \
+          default and proposes destroying the resources the cost toggles gate. Add the \
+          contents of infra/envs/${ENVIRONMENT}/terraform.tfvars as a secret named TFVARS \
+          on that environment."
+            exit 1
+          fi
+          # `*.auto.tfvars` is loaded automatically and is matched by .gitignore's
+          # `*.tfvars`, so it cannot be committed by accident.
+          printf '%s\n' "$TFVARS" > ci.auto.tfvars
+          echo "Loaded $(grep -cvE '^\s*(#|$)' ci.auto.tfvars) variable assignments."
+
       # Always plan to a FILE, on both paths. Apply then applies that exact plan rather
       # than re-planning, so what the policy gate inspected is what reaches the project.
       # Re-planning at apply time would leave a window in which the two differ, and the
@@ -75,6 +109,34 @@ jobs:
           terraform show -json tfplan > tfplan.json
           conftest test --policy "$GITHUB_WORKSPACE/policy/terraform" \
             --namespace finchat.terraform tfplan.json
+
+      # Defence in depth for the same failure. The var-file step removes the known cause
+      # of a surprise destroy; this removes the *class*. Any future drift that makes
+      # Terraform believe a resource should go — a renamed variable, a changed default, a
+      # module refactor — now has to be acknowledged rather than discovered afterwards.
+      #
+      # Deliberately counts deletes rather than reading the summary line, because a
+      # replacement is delete+create and is a destroy of the existing resource whatever
+      # the summary calls it.
+      - name: Refuse an unacknowledged destroy
+        env:
+          ALLOW_DESTROY: ${{ github.event.inputs.allow_destroy }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          plan = json.load(open("tfplan.json"))
+          doomed = [c["address"] for c in plan.get("resource_changes", [])
+                    if "delete" in c["change"]["actions"]]
+          print(f"Resources this plan would destroy: {len(doomed)}")
+          for a in doomed:
+              print(f"  - {a}")
+          if doomed and os.environ.get("ALLOW_DESTROY") != "true":
+              print(f"::error::This plan destroys {len(doomed)} resource(s). If that is "
+                    "intended, re-run with allow_destroy=true. If it is not, the most "
+                    "likely cause is missing or wrong variables — check the TFVARS secret "
+                    "for this environment before changing anything else.")
+              sys.exit(1)
+          PY
 
       - name: Apply
         if: ${{ github.event.inputs.action == 'apply' }}
