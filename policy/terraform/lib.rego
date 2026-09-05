@@ -9,8 +9,8 @@
 #     exist to encourage.
 #   * An attribute that Terraform cannot resolve until apply is ABSENT from
 #     `change.after` and named in `change.after_unknown`. A rule that treats unknown
-#     as a violation fails builds for a reason nobody can act on, which is how a gate
-#     gets disabled. Where the distinction matters, the rule tests `after_unknown`
+#     as a violation denies a change that is actually fine, and the author has no way
+#     to satisfy it. Where the distinction matters, the rule tests `after_unknown`
 #     explicitly rather than inferring it from a missing key.
 package finchat.terraform
 

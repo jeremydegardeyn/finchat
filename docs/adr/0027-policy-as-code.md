@@ -49,8 +49,9 @@ Seven rules in `policy/terraform/`, evaluated in `.github/workflows/infra.yml`:
 
 `roles/viewer` is deliberately absent from IAM-1. The CI/CD deploy SA holds it so
 `terraform plan` can refresh state across every module; the grant is read-only and
-justified in `infra/modules/foundation/main.tf`. A rule with one permanent exception
-teaches people that exceptions are how you pass the gate.
+justified in `infra/modules/foundation/main.tf`. Including it would mean shipping the
+rule with a standing exception attached, so IAM-1 is scoped to the two roles that have
+no such argument.
 
 The plan is written to a file and **apply applies that exact plan**, rather than
 re-planning. Re-planning at apply time would leave a window in which what was inspected

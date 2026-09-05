@@ -23,10 +23,10 @@ iam_member_types := {
 # --- IAM-1: no basic roles ---------------------------------------------------
 # `roles/viewer` is deliberately NOT on this list. The CI/CD deploy SA holds it so
 # that `terraform plan` can refresh state across every module, and that grant is
-# read-only, justified in modules/foundation/main.tf, and reviewed. A rule with one
-# permanent exception teaches people that exceptions are how you pass the gate; a
-# rule with none does not. Owner and Editor carry write and IAM-admin capability
-# and have no such argument.
+# read-only, justified in modules/foundation/main.tf, and reviewed. Including it
+# would mean shipping this rule with a standing exception attached, so the rule is
+# scoped to the two roles that have no such argument: Owner and Editor both carry
+# write and IAM-admin capability across the whole project.
 basic_roles := {"roles/owner", "roles/editor"}
 
 deny contains msg if {

@@ -26,8 +26,8 @@ test_run1_rejects_a_junk_env_label if {
 	count(deny) == 1 with input as service({"name": "finchat-prod-ui", "labels": {"env": "production"}}, {})
 }
 
-# Unknown-at-plan is not a violation. Failing here would break builds for a reason
-# nobody can act on, which is how a gate gets switched off.
+# Unknown-at-plan is not a violation. Failing here would deny a change that is
+# actually fine, with nothing the author could do to satisfy the rule.
 test_run1_skips_labels_it_cannot_resolve_until_apply if {
 	count(deny) == 0 with input as service({"name": "finchat-prod-ui"}, {"labels": true})
 }

@@ -86,8 +86,8 @@ Two things the Terraform rules get wrong easily:
    `input.resource_changes`.
 2. **Unknown-at-plan is not a violation.** An attribute Terraform cannot resolve until
    apply is absent from `change.after` and named in `change.after_unknown`. A rule that
-   treats unknown as a violation fails builds for a reason nobody can act on, which is
-   how a gate gets switched off. Use `unknown(rc, "attr")` where the distinction matters
+   treats unknown as a violation denies a change that is actually fine, and the author
+   has no way to satisfy it. Use `unknown(rc, "attr")` where the distinction matters
    — and note that an attribute the author simply *omitted* is null in `after` and absent
    from `after_unknown`, which is a violation and must stay one.
 
