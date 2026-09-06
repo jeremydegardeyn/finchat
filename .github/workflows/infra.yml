@@ -28,7 +28,8 @@ permissions:
 jobs:
   terraform:
     runs-on: ubuntu-latest
-    # Env-scoped vars (WIF_PROVIDER/DEPLOY_SA) are supplied by the GitHub Environment.
+    # Env-scoped vars (WIF_PROVIDER/PROVISION_SA/TFVARS) come from the GitHub Environment.
+    # This workflow uses PROVISION_SA, not DEPLOY_SA — see the auth step (ADR-0029).
     environment: ${{ github.event.inputs.environment || 'dev' }}
     env:
       # Kept in step with .github/workflows/ci.yml, which unit-tests the same rules.
@@ -42,11 +43,29 @@ jobs:
         with:
           terraform_version: "1.8.5"
 
+      # Terraform runs as the PROVISIONING account, not the deploy account (ADR-0029).
+      # `finchat-<env>-cicd@` is scoped for build-and-deploy — Cloud Run, Artifact
+      # Registry, Dataflow — while Terraform manages Pub/Sub, Secret Manager, Eventarc,
+      # Workflows, Cloud SQL, Bigtable, DLP, Data Catalog and custom IAM roles. Giving
+      # that set to the deploy SA would mean the identity used on every push to main
+      # could also rewrite the project's IAM, its secrets and its data policies.
+      #
+      # No fallback to DEPLOY_SA on purpose. A workflow that quietly runs as the wrong
+      # identity when a variable is unset is how the split gets undone by accident.
+      - name: Require the provisioning identity
+        run: |
+          if [ -z "${{ vars.PROVISION_SA }}" ]; then
+            echo "::error::PROVISION_SA is not set on this GitHub Environment. Create the \
+          account with scripts/setup_provisioner.sh, then set the variable. Terraform \
+          deliberately does not fall back to DEPLOY_SA."
+            exit 1
+          fi
+
       - id: auth
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-          service_account: ${{ vars.DEPLOY_SA }}
+          service_account: ${{ vars.PROVISION_SA }}
 
       - name: Install conftest
         run: |

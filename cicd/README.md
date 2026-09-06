@@ -17,12 +17,28 @@ as an alternative build path. Promotion **dev → test → prod** is gated by **
 ## One-time setup
 
 ```bash
-./scripts/setup_wif.sh strongsville-city-schools jeremydegardeyn/finchat dev
+./scripts/setup_wif.sh          strongsville-city-schools jeremydegardeyn/finchat dev  # deploy identity
+./scripts/setup_provisioner.sh  strongsville-city-schools jeremydegardeyn/finchat dev  # Terraform identity
 ```
 
+**Two identities, on purpose** ([ADR-0029](../docs/adr/0029-separate-provisioning-identity.md)).
+`finchat-<env>-cicd@` builds and deploys, and runs on every push to `main`. `finchat-<env>-provisioner@`
+runs `infra.yml` only, holds the roles Terraform needs to own the project's Pub/Sub, secrets,
+Eventarc, Cloud SQL, DLP and IAM, and is reachable only through a manually dispatched workflow
+behind required reviewers.
+
 Then create **GitHub Environments** `dev`, `test`, `prod` (Settings → Environments) and set per-env
-**variables**: `GCP_PROJECT`, `GCP_REGION`, `WIF_PROVIDER`, `DEPLOY_SA` (printed by the script). Add
-**required reviewers** on `test` and `prod` to enforce promotion approval.
+**variables**: `GCP_PROJECT`, `GCP_REGION`, `WIF_PROVIDER`, `DEPLOY_SA`, `PROVISION_SA` (all printed
+by the scripts), plus the **secret** `TFVARS` — the contents of `infra/envs/<env>/terraform.tfvars`,
+which is gitignored and therefore absent from a CI checkout:
+
+```bash
+gh secret set TFVARS --env dev --repo jeremydegardeyn/finchat < infra/envs/dev/terraform.tfvars
+```
+
+Without it `terraform plan` evaluates every variable at its default and proposes destroying
+everything the cost toggles gate; `infra.yml` fails rather than allowing that. Add **required
+reviewers** on `test` and `prod` to enforce promotion approval.
 
 ## Deploy helper
 
