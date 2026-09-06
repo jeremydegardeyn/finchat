@@ -28,10 +28,41 @@ NUM="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 
 gcloud config set project "$PROJECT"
 
-gcloud iam service-accounts create "$NAME" \
-  --display-name="FinChat ${ENV} Terraform provisioner" \
-  --description="Runs infra.yml only. Separate from finchat-${ENV}-cicd (ADR-0029)." \
-  2>/dev/null || echo "service account already exists, continuing"
+# Distinguish "already exists" from a real failure. `2>/dev/null || true` hides a genuine
+# error and then grants roles to an account that is not there — which is how the first run
+# of this script produced a confusing "does not exist" from a completely different command.
+if err="$(gcloud iam service-accounts create "$NAME" \
+    --display-name="FinChat ${ENV} Terraform provisioner" \
+    --description="Runs infra.yml only. Separate from finchat-${ENV}-cicd (ADR-0029)." 2>&1)"; then
+  echo "created ${SA}"
+elif grep -qiE "already exists|ALREADY_EXISTS" <<<"$err"; then
+  echo "service account already exists, continuing"
+else
+  echo "$err" >&2
+  exit 1
+fi
+
+# A newly created service account is not immediately visible to the project IAM policy
+# API. The first add-iam-policy-binding after a create fails with
+#   INVALID_ARGUMENT: Service account ... does not exist
+# which is propagation lag, not absence — the account is already listable. With `set -e`
+# that aborted this script after creating the account and before granting it anything,
+# leaving a provisioner with no roles and no WIF binding. So retry on that one message,
+# and only that one.
+grant() {
+  local role="$1" out
+  for _ in 1 2 3 4 5 6 7 8; do
+    if out="$(gcloud projects add-iam-policy-binding "$PROJECT" \
+        --member="serviceAccount:${SA}" --role="$role" --condition=None --quiet 2>&1)"; then
+      return 0
+    fi
+    if grep -q "does not exist" <<<"$out"; then sleep 5; continue; fi
+    echo "$out" >&2
+    return 1
+  done
+  echo "gave up on ${role}: the account is still not visible to the IAM API" >&2
+  return 1
+}
 
 # Every role here is required by a resource type the Terraform actually declares —
 # derived from `grep -rhoE '^resource "google_[a-z0-9_]+"' infra/`, not from guesswork,
@@ -64,9 +95,7 @@ ROLES=(
 )
 
 for role in "${ROLES[@]}"; do
-  gcloud projects add-iam-policy-binding "$PROJECT" \
-    --member="serviceAccount:${SA}" --role="$role" \
-    --condition=None --quiet >/dev/null
+  grant "$role"
   echo "  granted ${role}"
 done
 
