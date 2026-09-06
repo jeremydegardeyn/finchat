@@ -56,6 +56,9 @@ jobs:
       - name: Analytics denial names the right cause and owner (ADR-0018 / ADR-0019)
         working-directory: ui
         run: pytest test_analytics_denial.py -q
+      - name: A masked column never reaches the user as a zero (ADR-0019)
+        working-directory: ui
+        run: pytest test_masked_results.py -q
       - name: Controls dispatch workflow — drift guard (ADR-0026)
         run: pip install pyyaml && pytest scripts/test_controls_workflow.py -q
       - name: Reconciliation control — divergence logic (ADR-0026)

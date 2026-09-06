@@ -26,6 +26,7 @@ from _okf_context import (ANALYST_PERIMETER, ANALYST_JOIN_BULLETS, ANALYST_KNOWL
 # one, which pulls in FastAPI. CI installs only pytest, so a test that reaches through
 # server.py fails on collection — which is exactly how this arrangement was arrived at.
 from analytics_denial import REQUEST_ACCESS_URL, analytics_denied
+from masked_results import annotate as annotate_masked
 
 LOAN_API_URL = os.getenv("LOAN_API_URL", "")
 TXN_API_URL = os.getenv("TXN_API_URL", "")
@@ -919,7 +920,10 @@ async def _run_ca(q: str, user_token: str | None = None) -> dict:
                          "(column-level security). Request elevated access from the data "
                          "product owner.",
                 "request_url": _REQUEST_ACCESS_URL, "detail": cae[:400]}
-    return {"mode": "analytics", **parsed}
+    # A masked column reaches the user as NULL, and the managed agent has narrated that
+    # as zero. `restricted` is true whenever the query ran under a propagated end-user or
+    # anonymous-tier token, which is exactly when masking is a live explanation.
+    return {"mode": "analytics", **annotate_masked(parsed, user_credentials=restricted)}
 
 
 async def _run_kb(q: str) -> dict:
