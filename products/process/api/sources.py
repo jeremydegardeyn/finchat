@@ -41,8 +41,9 @@ def _resolve(*parts: str) -> Path:
         if (root / rel).is_file():
             return root / rel
     raise FileNotFoundError(
-        f"{rel} not found under {[str(r) for r in SEARCH_ROOTS]} — if this is the "
-        "container, the Dockerfile is missing a COPY.")
+        f"{rel} not found under {[str(r) for r in SEARCH_ROOTS]}. The demo repositories "
+        "are a checkout-only convenience and are not shipped in the image — set "
+        "TXN_API_URL and LOAN_API_URL, which a deployed service always has.")
 
 TXN_API_URL = os.getenv("TXN_API_URL", "").rstrip("/")
 LOAN_API_URL = os.getenv("LOAN_API_URL", "").rstrip("/")

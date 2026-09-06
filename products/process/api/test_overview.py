@@ -144,11 +144,16 @@ def test_demo_modules_resolve_under_the_image_layout_too(tmp_path, monkeypatch):
     assert backends._resolve("products", "loans", "api", "store.py") == target
 
 
-def test_an_unresolvable_module_names_the_dockerfile():
-    """A missing COPY should say so, not raise a bare FileNotFoundError from importlib."""
+def test_an_unresolvable_module_points_at_the_real_fix():
+    """The demo path is checkout-only; in a container the answer is to set the URLs.
+
+    Worth a specific message rather than a bare importlib FileNotFoundError, because the
+    reader hitting it is most likely running the image and wondering what is missing —
+    and the answer is configuration, not a file.
+    """
     with pytest.raises(FileNotFoundError) as e:
         backends._resolve("products", "nope", "missing.py")
-    assert "Dockerfile" in str(e.value)
+    assert "TXN_API_URL" in str(e.value)
 
 
 def test_the_rule_lives_outside_the_web_framework():

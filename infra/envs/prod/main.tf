@@ -135,8 +135,13 @@ module "txn_api" {
     ACCOUNT_SUMMARY = module.bigquery.gold_account_summary
   }
   # When API Gateway is enabled, let its SA invoke this (private) service.
-  invokers = var.enable_api_gateway ? ["serviceAccount:${module.foundation.service_account_emails["txn_api"]}"] : []
-  labels   = local.labels
+  # The process API composes over this one (ADR-0030); the API Gateway SA is added only
+  # when the gateway is enabled.
+  invokers = concat(
+    ["serviceAccount:${module.foundation.service_account_emails["process"]}"],
+    var.enable_api_gateway ? ["serviceAccount:${module.foundation.service_account_emails["txn_api"]}"] : [],
+  )
+  labels = local.labels
 }
 
 module "loan_api" {
@@ -154,6 +159,7 @@ module "loan_api" {
   invokers = [
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
     "serviceAccount:${module.foundation.service_account_emails["agent"]}",
+    "serviceAccount:${module.foundation.service_account_emails["process"]}",
   ]
   labels = local.labels
 }
@@ -173,6 +179,43 @@ module "agent" {
   # UI BFF (runs as txn_api SA) invokes this private agent with an OIDC token.
   invokers = ["serviceAccount:${module.foundation.service_account_emails["txn_api"]}"]
   labels   = local.labels
+}
+
+# --- Process layer (ADR-0030) ------------------------------------------------
+# Composes the transactions and loan domains and owns next_action — the business rule
+# the web, mobile and agent channels share. Scale-to-zero like every other service here.
+module "process_api" {
+  source          = "../../modules/cloud_run"
+  project_id      = var.project_id
+  region          = var.region
+  service_name    = "${var.name_prefix}-${var.env}-process"
+  service_account = module.foundation.service_account_emails["process"]
+  min_instances   = var.run_min_instances
+  # Backend URLs are set by CI/CD alongside the image (the module ignores env drift for
+  # exactly this reason), so Terraform provisions the shell and never fights the deploy.
+  env_vars = {}
+  # Invoked by the channels: the mobile experience API, the web BFF, and the MCP server
+  # once it is deployed. All go through here rather than composing for themselves.
+  invokers = [
+    "serviceAccount:${module.foundation.service_account_emails["mobile"]}",
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+  ]
+  labels = local.labels
+}
+
+# --- Experience layer: the mobile channel (ADR-0030) -------------------------
+# One screen, one round trip. Calls the process API and nothing else — LAYER-1 is a CI
+# rule, and this is the same constraint expressed in IAM: it holds no invoker grant on
+# any system API.
+module "mobile_api" {
+  source          = "../../modules/cloud_run"
+  project_id      = var.project_id
+  region          = var.region
+  service_name    = "${var.name_prefix}-${var.env}-mobile"
+  service_account = module.foundation.service_account_emails["mobile"]
+  min_instances   = var.run_min_instances
+  env_vars        = {}
+  labels          = local.labels
 }
 
 module "ui" {

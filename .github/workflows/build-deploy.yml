@@ -56,6 +56,8 @@ jobs:
             [txn-api]=products/transactions/api
             [txn-generator]=products/transactions/generator
             [loan-api]=products/loans/api
+            [process]=products/process/api
+            [mobile]=products/experience/mobile
             [agent]=products/transactions/agent
             [steward]=products/steward/harness
             [ui]=ui
@@ -119,6 +121,12 @@ jobs:
             "--set-env-vars=GCP_PROJECT=${PROJECT},GOLD_DATASET=finchat_gold_${ENV},SILVER_DATASET=finchat_silver_${ENV} --no-allow-unauthenticated"
           deploy loan-api loan-api loan-api \
             "--set-env-vars=GCP_PROJECT=${PROJECT},LOANS_DATASET=finchat_loans_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+          # Process layer (ADR-0030). Composes the two system APIs above, so it is deployed
+          # after them and resolves their URLs the same way the loan API resolves txn-api.
+          deploy process process process             "--set-env-vars=TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+          # Mobile experience API. PROCESS_API_URL is its ONLY backend — LAYER-1 as
+          # configuration, matching the IAM: this SA holds no invoker grant on any system API.
+          deploy mobile mobile mobile             "--set-env-vars=PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           # ADK agent on Cloud Run (scale-to-zero). Gemini via Vertex (agent SA has aiplatform.user).
           deploy agent agent agent \
             "--set-env-vars=GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,KB_DATASET=finchat_kb_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),AI_GATEWAY_URL=${AI_GATEWAY_URL},AI_GATEWAY_REQUIRED=${{ vars.AI_GATEWAY_REQUIRED || '0' }}${AGENT_PINS} --memory=1Gi --no-allow-unauthenticated"

@@ -222,8 +222,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build MCP image (no push)
         run: docker build -f mcp_server/Dockerfile -t finchat-mcp-ci-test .
-      - name: Build Process API image (no push)
-        run: docker build -f products/process/api/Dockerfile -t finchat-process-ci-test .
+
 
   docker-build:
     runs-on: ubuntu-latest
@@ -233,6 +232,7 @@ jobs:
           - products/transactions/api
           - products/transactions/generator
           - products/loans/api
+          - products/process/api
           - products/experience/mobile
           - products/steward/harness
           - ui

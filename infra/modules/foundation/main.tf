@@ -38,6 +38,12 @@ locals {
       "roles/datastore.user",               # refresh-token store (Firestore)
       "roles/secretmanager.secretAccessor", # OAuth client secret for the code exchange
     ] }
+    # Process + experience layers (ADR-0030). Both hold NO project roles on purpose:
+    # they reach nothing directly, only other Cloud Run services, and that is granted
+    # per-target via `invokers` rather than project-wide. A process API that needed
+    # bigquery.dataViewer would be a process API that had started querying.
+    process = { display = "Process API — cross-domain composition (Cloud Run)", roles = [] }
+    mobile  = { display = "Mobile Experience API (Cloud Run)", roles = [] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [
       "roles/bigquery.dataEditor",
       "roles/bigquery.jobUser",
