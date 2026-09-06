@@ -138,3 +138,35 @@ def test_the_experience_layer_knows_exactly_one_backend():
             assert "PROCESS_API_URL" in src, (
                 f"LAYER-1: {path.name} makes outbound calls but never names "
                 "PROCESS_API_URL — what is it calling?")
+
+
+# --- how services authenticate to each other ---------------------------------
+# Not a layering rule, but it lives here because it is the same kind of failure: a
+# structural mistake that every local test passes over.
+SERVICE_DIRS = EXPERIENCE_DIRS + PROCESS_DIRS
+
+
+def test_service_to_service_auth_uses_the_metadata_identity_endpoint():
+    """Any file that mints an id-token must try the metadata endpoint first.
+
+    `google.oauth2.id_token.fetch_id_token` is the obvious call and does not work on
+    Cloud Run — it wants a service-account key or an impersonation target, not the
+    metadata server. It returns None, the request goes out with no Authorization
+    header, and the caller reports the *other* service as unavailable.
+
+    That shipped: the process API reached its backends unauthenticated and every
+    composed view came back as "transactions service unavailable". Nothing local caught
+    it, because demo mode never mints a token and there is no metadata server on a
+    laptop — this only fails where it runs.
+    """
+    offenders = []
+    for path in _sources(SERVICE_DIRS):
+        src = path.read_text(encoding="utf-8")
+        if "fetch_id_token" not in src and "IDTokenCredentials" not in src:
+            continue  # this file does not authenticate to another service
+        if "use_metadata_identity_endpoint" not in src:
+            offenders.append(str(path.relative_to(REPO)))
+    assert not offenders, (
+        f"{offenders} mint an id-token without the metadata identity endpoint. On Cloud "
+        "Run that yields None and the call goes out unauthenticated — see ui/server.py's "
+        "_mint_token for the shape that works.")

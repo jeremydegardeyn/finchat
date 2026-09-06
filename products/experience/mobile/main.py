@@ -36,6 +36,23 @@ ACTIVITY_ON_SCREEN = int(os.getenv("MOBILE_ACTIVITY_ROWS", "3"))
 
 
 def _id_token(audience: str) -> str | None:
+    # The metadata identity endpoint — the canonical path for Cloud Run
+    # service-to-service auth. `google.oauth2.id_token.fetch_id_token` is the
+    # obvious-looking call and does NOT work here: it wants a service-account key or an
+    # impersonation target, not the metadata server. It returns None, the request goes
+    # out with no Authorization header, and the failure reads as "the other service is
+    # down" rather than "we never authenticated".
+    try:
+        from google.auth import compute_engine
+        from google.auth.transport.requests import Request as GReq
+
+        creds = compute_engine.IDTokenCredentials(
+            GReq(), target_audience=audience, use_metadata_identity_endpoint=True)
+        creds.refresh(GReq())
+        return creds.token
+    except Exception:
+        pass
+
     try:
         from google.auth.transport.requests import Request
         from google.oauth2 import id_token as gid

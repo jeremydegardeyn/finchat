@@ -74,12 +74,40 @@ def _load(name: str, path: Path):
 
 
 def _id_token(audience: str) -> str | None:
+    """Mint an OIDC id-token for a private Cloud Run audience.
+
+    The metadata identity endpoint, which is the canonical path for Cloud Run
+    service-to-service auth and the one `ui/server.py` already uses.
+    `google.oauth2.id_token.fetch_id_token` is the obvious-looking call and does NOT
+    work here — it wants a service-account key or an impersonation target, not the
+    metadata server — so it returned None, the request went out with no Authorization
+    header, and every composed view came back as "transactions service unavailable".
+
+    `fetch_id_token` is kept as the second attempt because it is what works off-cluster
+    with an explicit credential, and the failure is logged rather than swallowed: a
+    silent None here is indistinguishable from a service being down, which is exactly
+    how this cost a deploy cycle to find.
+    """
+    try:
+        from google.auth import compute_engine
+        from google.auth.transport.requests import Request as GReq
+
+        creds = compute_engine.IDTokenCredentials(
+            GReq(), target_audience=audience, use_metadata_identity_endpoint=True)
+        creds.refresh(GReq())
+        return creds.token
+    except Exception as e:
+        metadata_err = e
+
     try:
         from google.auth.transport.requests import Request
         from google.oauth2 import id_token as gid
 
         return gid.fetch_id_token(Request(), audience)
-    except Exception:
+    except Exception as e:
+        print(f"process: no id-token for {audience} "
+              f"(metadata: {type(metadata_err).__name__}: {metadata_err}; "
+              f"fetch_id_token: {type(e).__name__}: {e})")
         return None
 
 

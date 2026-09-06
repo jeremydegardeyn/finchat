@@ -79,13 +79,29 @@ def _id_token(audience: str) -> str | None:
         return hit[0]
 
     token = None
+    # Metadata identity endpoint first: it is the only one of the three that works when
+    # this server runs ON Cloud Run. `fetch_id_token` looked sufficient and is not — the
+    # process API shipped with only that call and reached its backends unauthenticated.
+    # Here the gcloud fallback below masked it, which is why it went unnoticed.
     try:
-        from google.auth.transport.requests import Request
-        from google.oauth2 import id_token as gid
+        from google.auth import compute_engine
+        from google.auth.transport.requests import Request as GReq
 
-        token = gid.fetch_id_token(Request(), audience)
+        creds = compute_engine.IDTokenCredentials(
+            GReq(), target_audience=audience, use_metadata_identity_endpoint=True)
+        creds.refresh(GReq())
+        token = creds.token
     except Exception:
         token = None
+
+    if not token:
+        try:
+            from google.auth.transport.requests import Request
+            from google.oauth2 import id_token as gid
+
+            token = gid.fetch_id_token(Request(), audience)
+        except Exception:
+            token = None
 
     if not token:
         gcloud = shutil.which("gcloud") or "gcloud"
