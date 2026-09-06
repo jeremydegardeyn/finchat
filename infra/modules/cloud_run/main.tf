@@ -49,6 +49,16 @@ resource "google_cloud_run_v2_service" "this" {
       template[0].containers[0].env,
       client,
       client_version,
+      # SERVICE-level scaling, which is not the `template.scaling` block above. Nothing
+      # here declares it, but the API materialises it with zeros, so Terraform proposed
+      # removing a block the API will not remove — every plan showed all four services
+      # "will be updated in-place" and every apply completed the update in 0s. A plan
+      # that never reaches zero changes is a plan nobody reads, which is the real cost.
+      #
+      # Ignored rather than declared: `manual_instance_count` only means anything with
+      # manual scaling, which these scale-to-zero services do not use, and writing 0 to
+      # match the API would be asserting a value we do not actually manage.
+      scaling,
     ]
   }
 }

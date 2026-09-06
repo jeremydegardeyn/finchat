@@ -4,6 +4,13 @@
 # Artifact Registry, platform buckets, and an optional billing budget.
 ###############################################################################
 
+# Resolves the project NUMBER. Several Google APIs — the Budget API among them — accept
+# a project id on write and return the number on read, so anything comparing the two
+# needs the number to avoid a diff that can never converge.
+data "google_project" "this" {
+  project_id = var.project_id
+}
+
 locals {
   prefix = "${var.name_prefix}-${var.env}"
 
@@ -212,7 +219,11 @@ resource "google_billing_budget" "budget" {
   display_name    = "${local.prefix}-budget"
 
   budget_filter {
-    projects = ["projects/${var.project_id}"]
+    # The Budget API stores the project NUMBER and returns it on read, so writing the
+    # project ID here produced a permanent diff: every plan proposed swapping
+    # "projects/strongsville-city-schools" back in, and every apply wrote it and read
+    # the number out again. Resolve the number instead of arguing with the API.
+    projects = ["projects/${data.google_project.this.number}"]
   }
 
   amount {
