@@ -79,10 +79,10 @@ jobs:
         run: pytest scripts/test_api_layering.py -q
       - name: Process API — customer overview + next-action rule (ADR-0030)
         working-directory: products/process/api
-        run: pytest test_overview.py -q
+        run: pip install fastapi==0.115.0 pydantic==2.9.2 && pytest test_overview.py -q
       - name: Mobile experience API — one round trip, decides nothing (ADR-0030)
         working-directory: products/experience/mobile
-        run: pytest test_home.py -q
+        run: pip install fastapi==0.115.0 && pytest test_home.py -q
       - name: UI image — every runtime module is COPYed
         working-directory: ui
         run: pytest test_ui_image.py -q
