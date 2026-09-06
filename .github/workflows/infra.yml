@@ -123,39 +123,19 @@ jobs:
       # pipeline. Someone with console access still bypasses everything here. The rules
       # are worth having anyway; the distinction is worth stating so nobody reports a
       # green check as compliance.
-      - name: Policy gate — Terraform posture
-        run: |
-          terraform show -json tfplan > tfplan.json
-          conftest test --policy "$GITHUB_WORKSPACE/policy/terraform" \
-            --namespace finchat.terraform tfplan.json
-
-      # Defence in depth for the same failure. The var-file step removes the known cause
-      # of a surprise destroy; this removes the *class*. Any future drift that makes
-      # Terraform believe a resource should go — a renamed variable, a changed default, a
-      # module refactor — now has to be acknowledged rather than discovered afterwards.
       #
-      # Deliberately counts deletes rather than reading the summary line, because a
-      # replacement is delete+create and is a destroy of the existing resource whatever
-      # the summary calls it.
-      - name: Refuse an unacknowledged destroy
+      # DESTROY-1 lives here too, so `allow_destroy` has to reach the policy. `conftest
+      # --data` merges a file's keys into the ROOT of `data`, so this lands as
+      # `data.allow_destroy` rather than being namespaced by filename.
+      - name: Policy gate — Terraform posture
         env:
           ALLOW_DESTROY: ${{ github.event.inputs.allow_destroy }}
         run: |
-          python3 - <<'PY'
-          import json, os, sys
-          plan = json.load(open("tfplan.json"))
-          doomed = [c["address"] for c in plan.get("resource_changes", [])
-                    if "delete" in c["change"]["actions"]]
-          print(f"Resources this plan would destroy: {len(doomed)}")
-          for a in doomed:
-              print(f"  - {a}")
-          if doomed and os.environ.get("ALLOW_DESTROY") != "true":
-              print(f"::error::This plan destroys {len(doomed)} resource(s). If that is "
-                    "intended, re-run with allow_destroy=true. If it is not, the most "
-                    "likely cause is missing or wrong variables — check the TFVARS secret "
-                    "for this environment before changing anything else.")
-              sys.exit(1)
-          PY
+          terraform show -json tfplan > tfplan.json
+          mkdir -p policy-data
+          printf '{"allow_destroy": %s}\n' "${ALLOW_DESTROY:-false}" > policy-data/ci.json
+          conftest test --policy "$GITHUB_WORKSPACE/policy/terraform" \
+            --namespace finchat.terraform --data policy-data tfplan.json
 
       - name: Apply
         if: ${{ github.event.inputs.action == 'apply' }}

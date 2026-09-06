@@ -23,6 +23,23 @@ Two policy sets, two inputs, two places they run.
 | `BQ-1` | A production evidence table without deletion protection |
 | `GCS-1` | A bucket with uniform bucket-level access disabled |
 | `SA-1` | An agent service account with no owner and recertification date |
+| `IAM-4` | A provisioning-class role granted to the deploy account (ADR-0029) |
+| `DESTROY-1` | A plan that destroys resources without `allow_destroy` |
+
+`DESTROY-1` is the one rule that does not iterate `changed`: every other rule judges what
+a resource will look like after apply, and a deletion has nothing to judge. It reads the
+`allow_destroy` acknowledgement from `conftest --data`, which merges a file's keys into
+the **root** of `data` rather than namespacing them by filename, so
+`{"allow_destroy": true}` in any file under the directory lands at `data.allow_destroy`.
+
+Two properties of that wiring are worth knowing, because both were checked rather than
+assumed. A `--data` path conftest cannot read is a hard error, not a silent skip, so the
+gate cannot quietly run without the acknowledgement. And if the document loads but the key
+is absent, the rule denies — an unacknowledged destroy is the safe reading of silence.
+
+An acknowledged destroy still lists every doomed resource, as a `warn` rather than a
+`deny`. The acknowledgement means somebody looked, and a silent apply gives them nothing
+to look at.
 
 ### Agent registry (ADR-0023)
 

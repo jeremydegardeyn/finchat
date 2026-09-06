@@ -68,10 +68,16 @@ test_iam3_rejects_an_iam_policy if {
 	})
 }
 
-# --- Scope: destroys are not policed ----------------------------------------
-test_a_destroyed_resource_is_not_policed if {
-	count(deny) == 0 with input as plan({
+# --- Scope: the POSTURE rules do not police destroys -------------------------
+# A resource being destroyed has no configuration left to judge, so IAM-1/2/3 must stay
+# silent on it. The deletion itself is DESTROY-1's business, and that rule is expected to
+# fire here — this asserts which rule speaks, not that nothing does.
+test_a_destroyed_resource_is_judged_only_by_destroy1 if {
+	msgs := deny with input as plan({
 		"type": "google_project_iam_member",
 		"change": {"actions": ["delete"], "after": null, "after_unknown": {}},
 	})
+	count(msgs) == 1
+	some m in msgs
+	startswith(m, "DESTROY-1")
 }
