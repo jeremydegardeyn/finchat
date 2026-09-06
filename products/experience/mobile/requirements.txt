@@ -1,5 +1,8 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 google-auth==2.34.0
+# google-auth's requests transport needs this explicitly — `google-auth` alone
+# installs, imports, and then raises ImportError at the first token mint.
+requests==2.32.3
 # One backend, one dependency set. No BigQuery, no system-API client: this layer
 # composes through the process API or not at all (LAYER-1, ADR-0030).

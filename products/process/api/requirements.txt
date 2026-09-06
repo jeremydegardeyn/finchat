@@ -2,6 +2,9 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
 google-auth==2.34.0
+# google-auth's requests transport needs this explicitly — `google-auth` alone
+# installs, imports, and then raises ImportError at the first token mint.
+requests==2.32.3
 # No BigQuery client, and that absence is the point: a process API reaches data only
 # through the system APIs that own it (LAYER-2, ADR-0030). Adding one here would make
 # this a second copy of the domain model.

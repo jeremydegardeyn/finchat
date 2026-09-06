@@ -77,6 +77,8 @@ jobs:
         run: pytest test_gateway_coverage.py -q
       - name: API layering — experience/process/system stay apart (ADR-0030)
         run: pytest scripts/test_api_layering.py -q
+      - name: Service requirements — google-auth's transport has its dependency
+        run: pytest scripts/test_service_requirements.py -q
       - name: Analyst routing — the two copies stay identical (ADR-0030)
         run: pytest scripts/test_routing_copies.py -q
       - name: Process API — customer overview + next-action rule (ADR-0030)
