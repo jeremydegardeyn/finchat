@@ -155,6 +155,11 @@ resource "google_cloud_run_v2_service" "steward" {
       template[0].volumes,
       client,
       client_version,
+      # Service-level scaling, same API-populated block as in modules/cloud_run. This
+      # module declares its own google_cloud_run_v2_service rather than reusing that
+      # one, so the fix does not carry across — and because agent_harness is prod-only,
+      # dev and test both planned clean while prod still did not.
+      scaling,
     ]
   }
 }
