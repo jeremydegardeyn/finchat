@@ -13,6 +13,13 @@ import os
 REQUEST_ACCESS_URL = ("https://console.cloud.google.com/dataplex/govern/data-products"
                       "?project=" + os.getenv("GCP_PROJECT", ""))
 
+# A 403 whose reason is the TOKEN's scope, not the caller's entitlement. Checked before
+# everything else: the body names no table, dataset or column, so it would otherwise fall
+# through to the entitlement branch and send the user to a platform team who cannot help.
+# Re-consenting fixes it; nothing else does.
+SCOPE_SIGNALS = ("access_token_scope_insufficient", "insufficient authentication scopes",
+                 "insufficient_scope")
+
 # Signals in a Conversational Analytics error body that mean BigQuery refused the
 # caller's own credentials, rather than the API refusing the call outright.
 DATA_DENIAL_SIGNALS = ("policy tag", "policytag", "bigquery", "dataset", "table",
@@ -39,6 +46,13 @@ def analytics_denied(status: int, body: str) -> dict:
     """
     detail = (body or "")[:400]
     lowered = detail.lower()
+
+    if any(signal in lowered for signal in SCOPE_SIGNALS):
+        return {"mode": "analytics", "denial": "scope",
+                "error": "Your sign-in didn't grant the analytics service the access it "
+                         "needs. Sign out and sign in again, and accept the permission "
+                         "prompt; this is the sign-in scope, not your data access.",
+                "detail": detail}
 
     if any(signal in lowered for signal in DATA_DENIAL_SIGNALS):
         return {"mode": "analytics", "action": "request_access", "denial": "data",

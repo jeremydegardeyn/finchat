@@ -77,3 +77,26 @@ def test_an_empty_body_still_produces_a_message_rather_than_an_exception():
 def test_the_detail_is_bounded():
     out = analytics_denial.analytics_denied(403, "x" * 5000)
     assert len(out["detail"]) == 400
+
+
+def test_an_insufficient_scope_is_named_as_a_sign_in_problem():
+    """The real body from the live 403. It names no table, dataset or column, so without
+    an explicit signal it falls through to the entitlement branch and sends the user to a
+    platform team who cannot help — re-consenting is the only thing that fixes it."""
+    body = ('[{ "error": { "code": 403, "message": "Request had insufficient '
+            'authentication scopes.", "status": "PERMISSION_DENIED", "details": '
+            '[ { "@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": '
+            '"ACCESS_TOKEN_SCOPE_INSUFFICIENT", "metadata": { "method": '
+            '"google.cloud.geminidataanalytics.v1beta.DataChatService.Chat"')
+    out = analytics_denial.analytics_denied(403, body)
+    assert out["denial"] == "scope"
+    assert "sign in again" in out["error"].lower()
+    assert "platform team" not in out["error"].lower()
+    assert "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in out["detail"]
+
+
+def test_scope_is_decided_before_entitlement():
+    """A scope failure that happens to mention a table must still read as scope."""
+    out = analytics_denial.analytics_denied(
+        403, "insufficient authentication scopes while reading table dim_customer")
+    assert out["denial"] == "scope"

@@ -174,8 +174,16 @@ def config():
         # two-grant GIS path. Falls back automatically when the secret isn't configured.
         "auth": {"enabled": _auth_enabled(), "client_id": OAUTH_CLIENT_ID,
                  "code_flow": _code_flow_enabled(),
+                 # cloud-platform, not bigquery.readonly. The Conversational Analytics
+                 # API (geminidataanalytics DataChatService.Chat) rejects a narrower
+                 # token with ACCESS_TOKEN_SCOPE_INSUFFICIENT, and the two-grant path
+                 # this replaced requested cloud-platform for exactly that reason —
+                 # narrowing it here is what stopped analyst questions working under
+                 # ADR-0025. cloud-platform subsumes bigquery.readonly, so BigQuery
+                 # access is unchanged; what widens is the API surface the token can
+                 # reach, which is the cost of the end-user propagation in ADR-0019.
                  "scope": "openid email profile "
-                          "https://www.googleapis.com/auth/bigquery.readonly"},
+                          "https://www.googleapis.com/auth/cloud-platform"},
     }
 
 
