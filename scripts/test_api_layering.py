@@ -39,7 +39,11 @@ PROCESS_DIRS = [REPO / "products" / "process"]
 # How a caller names a system API. Matching the env vars rather than hostnames keeps the
 # rule true in every environment and independent of the URLs themselves.
 SYSTEM_API_MARKERS = ("TXN_API_URL", "LOAN_API_URL", "AGENT_URL", "STEWARD_URL")
-DATA_STORE_MARKERS = ("bigquery", "bigtable", "firestore", "google.cloud.sql")
+# LAYER-2 reads IMPORTS, not string constants. `analyst_routing.py`'s keyword table
+# legitimately contains "bigtable", "firestore" and "cloud run" — they are words an
+# analyst types, not clients it uses — and a rule that cannot tell a dependency from a
+# noun would be satisfied by making the router worse at its job.
+DATA_STORE_IMPORTS = ("bigquery", "bigtable", "firestore", "spanner", "sqlalchemy", "psycopg")
 
 
 def _sources(dirs: list[Path]) -> list[Path]:
@@ -48,6 +52,20 @@ def _sources(dirs: list[Path]) -> list[Path]:
         if d.is_dir():
             out += [p for p in d.rglob("*.py") if not p.name.startswith("test_")]
     return out
+
+
+def _imports(path: Path) -> set[str]:
+    """Every module name this file imports, flattened to its parts."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                names |= set(a.name.split("."))
+        elif isinstance(node, ast.ImportFrom):
+            names |= set((node.module or "").split("."))
+            names |= {a.name for a in node.names}
+    return names
 
 
 def _code_text(path: Path) -> str:
@@ -102,10 +120,10 @@ def test_layer1_experience_apis_do_not_reach_system_apis(marker):
         "becomes optional and then becomes wrong (ADR-0030).")
 
 
-@pytest.mark.parametrize("marker", DATA_STORE_MARKERS)
+@pytest.mark.parametrize("marker", DATA_STORE_IMPORTS)
 def test_layer2_process_apis_do_not_touch_data_stores(marker):
     offenders = [str(p.relative_to(REPO)) for p in _sources(PROCESS_DIRS)
-                 if marker in _code_text(p)]
+                 if marker in _imports(p)]
     assert not offenders, (
         f"LAYER-2: {offenders} reference {marker}. A process API reaches data only "
         "through the system APIs that own it; querying directly makes it a second copy "

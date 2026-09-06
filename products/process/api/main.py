@@ -23,7 +23,8 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-import backends
+import analyst_routing
+import sources as backends
 import overview as capability
 
 app = FastAPI(
@@ -72,6 +73,26 @@ def customer_overview(account_id: str):
         raise HTTPException(404, f"account {account_id} not found") from None
     except backends.SourceUnavailable:
         raise HTTPException(503, "transactions service unavailable") from None
+
+
+class RouteReq(BaseModel):
+    question: str
+
+
+@app.post("/v1/analyst/route", tags=["analyst"])
+def analyst_route(req: RouteReq):
+    """Which capability should answer this question.
+
+    Keyword-only here: the model classifiers need credentials the BFF holds (the gateway's
+    `on_behalf_of`, the platform token for Vertex), so this endpoint answers with the
+    deterministic half rather than pretending to the full decision. Honest about it in the
+    response — a caller that reads `classifier` knows whether it got the model's verdict
+    or the fallback, which is exactly what nobody could see the session the model path
+    failed silently.
+    """
+    return {"mode": analyst_routing.heuristic_intent(req.question),
+            "classifier": "heuristic",
+            "modes": list(analyst_routing.MODES)}
 
 
 if __name__ == "__main__":

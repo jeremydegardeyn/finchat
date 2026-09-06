@@ -6,7 +6,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY products/process/api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY products/process/api/main.py products/process/api/backends.py ./
+COPY products/process/api/main.py products/process/api/sources.py ./
 # Demo-mode repositories, owned by the services they belong to.
 COPY products/transactions/api/bq.py ./products/transactions/api/
 COPY products/loans/api/store.py ./products/loans/api/

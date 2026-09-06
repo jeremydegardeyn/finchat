@@ -100,16 +100,45 @@ explanation.
 `overdraft`, balance comparisons) appears in the mobile channel, because that drift would
 be gradual and each step defensible.
 
-## What is still in the wrong place
+## The analyst router
 
-**The analyst router is inside the BFF.** `_classify_intent`, `_run_kb` and `_run_okf` in
-`ui/server.py` are the largest genuine process capability in the platform — three-way
-orchestration across Conversational Analytics, the KB agent and the semantics corpus. It
-belongs in the process layer.
+The **decision** moved; the **handlers** did not, and the split is deliberate.
 
-It stays where it is because moving it means changing a live prod path on every analyst
-question, and this increment did not need to touch it. So the layering here is
-**established, not complete**, and that is the honest status.
+`products/process/api/analyst_routing.py` now owns the keyword tables, the model prompt,
+the precedence rules and the order classifiers are tried in. `ui/server.py`'s
+`_classify_intent` is reduced to its two transports and their credentials, and calls
+`classify_async` with them injected.
+
+That removed a real hazard rather than just moving code: **the precedence rules existed
+in two copies** in `server.py`, one per model path, so a fix to one silently missed the
+other. There is one copy now, and `parse_intent` is the only place a model's answer is read.
+
+**The handlers stay in the BFF because they carry credentials.** `_run_ca` propagates the
+signed-in analyst's own OAuth token so BigQuery evaluates column-level security against
+them ([ADR-0019](adr/0019-end-user-credential-propagation.md)); `_run_okf` and
+`_run_platform` pass `on_behalf_of` to the gateway. Moving those to another service means
+forwarding end-user tokens service-to-service — a security design change, not a refactor,
+and the confused-deputy risk [docs/27 §2.3](27-mcp-service.md) already names. So the rule
+is shared and the credential-bound execution is not, which is the honest boundary.
+
+`POST /v1/analyst/route` exposes the keyword half to other channels and **says so** in the
+response (`"classifier": "heuristic"`), because a caller that cannot tell the model's
+verdict from the fallback is exactly what nobody could see the session the model path
+failed silently.
+
+### The two copies
+
+`analyst_routing.py` and `ui/intent.py` are **byte-identical, enforced by
+`scripts/test_routing_copies.py`**. One file would be better and is not reachable: every
+service image is built with its own directory as the Docker context, so `ui/` cannot COPY
+out of `products/`. Moving the UI to a repo-root context would change how the live front
+end deploys — a worse trade than a copy that cannot drift. Same pattern, same reasoning,
+as the two copies of `gateway_llm.py`.
+
+Verified by moving the file rather than retyping it: a first attempt reconstructed the
+tables by hand and got `hits()` (word-boundary regex, not substring), the weighted scoring
+and half of `PLATFORM_WORDS` wrong — each a documented fix for a real misrouting. The 16
+existing router tests were not touched and are the regression proof.
 
 **Neither new service is deployed.** They run, they are tested, and no Terraform or Cloud
 Run configuration exists for them — the same position as `mcp_server/`, for the same

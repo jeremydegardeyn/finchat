@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import importlib.util
 import os
 import sys
 
@@ -27,7 +28,16 @@ def _load(**env):
     for mod in ("server", "backends", "knowledge"):
         if mod in sys.modules:
             del sys.modules[mod]
-    return importlib.import_module("server")
+    # Loaded by path, not by name. `ui/server.py` also exists, and any suite that puts
+    # ui/ on sys.path first — test_intent_router.py does — makes `import server` resolve
+    # to the BFF instead. Each suite passes alone and the combination fails, which is the
+    # third variant of this collision in this repo.
+    spec = importlib.util.spec_from_file_location(
+        "server", os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["server"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _tools(srv) -> set[str]:

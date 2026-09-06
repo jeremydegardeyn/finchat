@@ -34,7 +34,7 @@ def _load_module(name, filename):
     return mod
 
 
-import backends  # noqa: E402
+import sources as backends  # noqa: E402
 
 main = _load_module("finchat_process_main", "main.py")
 capability = _load_module("finchat_process_capability", "overview.py")
@@ -122,7 +122,7 @@ def test_loans_are_selected_by_the_system_api_not_filtered_here():
     Pinned because filtering in Python would pass every other test in this file while
     quietly moving 200 records over the wire to keep two.
     """
-    src = open(os.path.join(os.path.dirname(__file__), "backends.py"),
+    src = open(os.path.join(os.path.dirname(__file__), "sources.py"),
                encoding="utf-8").read()
     assert '"account_id": account_id' in src or "{\"account_id\": account_id}" in src, \
         "loans_for_account must pass account_id to the loan API"

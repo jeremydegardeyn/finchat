@@ -1083,7 +1083,8 @@ async def _run_platform(q: str, user_email: str | None = None) -> dict:
 # there on why that mattered.
 from intent import (KB_WORDS as _KB_WORDS, AN_WORDS as _AN_WORDS,  # noqa: E402,F401
                     SEM_WORDS as _SEM_WORDS, PLATFORM_WORDS as _PLATFORM_WORDS,
-                    heuristic_intent as _heuristic_intent, hits as _hits)
+                    heuristic_intent as _heuristic_intent, hits as _hits,
+                    classify_async as _classify_async)
 
 
 async def _live_budget(email: str) -> dict | None:
@@ -1123,48 +1124,25 @@ async def _live_budget(email: str) -> dict | None:
 
 
 async def _classify_intent(q: str, user_email: str | None = None) -> str:
-    """Decide ANALYTICS vs KB via Gemini (Vertex), falling back to a keyword
-    heuristic if the model isn't reachable (e.g. SA lacks aiplatform.user)."""
-    prompt = (
-        "You route a bank analyst's question to one of four tools. Reply with ONE word.\n"
-        "ANALYTICS = a quantitative question about the bank's DATA VALUES (counts, sums, averages, "
-        "lists, per-segment/per-customer metrics over transactions, accounts, customers, loans, "
-        "overdrafts).\n"
-        "KB = a question answerable from the bank's POLICY/PRODUCT DOCUMENTS (fees, policies, "
-        "branch hours, terms, eligibility, rates offered, how-to).\n"
-        "SEMANTICS = a question about the DATA MODEL ITSELF — what a metric means, how it is "
-        "defined/calculated, what a table or view contains, or how tables join. (Not a data "
-        "value; not a policy.)\n"
-        "PLATFORM = a question about how the FinChat PLATFORM ITSELF is built or operated — "
-        "architecture, an ADR or design decision, a service, module, pipeline, the gateway, "
-        "the agent registry, CI/CD, Terraform, runbooks, or what the platform supports. "
-        "(About the SYSTEM, not the bank's data or the bank's policies.)\n"
-        f"Question: {q}\nAnswer (ANALYTICS, KB, SEMANTICS, or PLATFORM):")
-    # Governed path first. Intent routing is the highest-volume, cheapest call site, so
-    # it is also the one the gateway clamps to the standard tier — a one-word answer must
-    # never reach a premium model.
-    try:
+    """Decide the analyst route: governed gateway first, direct Vertex second, keywords last.
+
+    The prompt and the precedence rules now live in the process layer (ADR-0030), which
+    also removed a real hazard: those rules existed in TWO copies here, one per model
+    path, so a fix to one silently missed the other. This function is now only the two
+    transports and their credentials — the part that cannot move, because the gateway
+    call carries `on_behalf_of` and Vertex needs the platform token (ADR-0019).
+    """
+    async def _via_gateway(prompt: str) -> str | None:
+        # Intent routing is the highest-volume, cheapest call site, so it is also the one
+        # the gateway clamps to the standard tier — a one-word answer must never reach a
+        # premium model.
         gw = _gw_complete(prompt, agent_id="analyst_intent_router",
                           workload_class="classification",
                           owner="platform-ai@datadinosaur.com", max_output_tokens=16,
                           on_behalf_of=user_email)
-        if gw:
-            txt = (gw[0] or "").upper()
-            # PLATFORM is checked first: it is the most specific intent, and a question
-            # like "how is the analytics pipeline built" contains tokens that would
-            # otherwise match ANALYTICS.
-            if "PLATFORM" in txt:
-                return "platform"
-            if "SEMANTIC" in txt:
-                return "semantics"
-            if "KB" in txt and "ANALYTIC" not in txt:
-                return "kb"
-            if "ANALYTIC" in txt:
-                return "analytics"
-    except Exception:
-        pass
+        return gw[0] if gw else None
 
-    try:
+    async def _via_vertex(prompt: str) -> str | None:
         token = _access_token()
         url = (f"https://{_vertex_host(ROUTER_LOCATION)}/v1/projects/{GCP_PROJECT}"
                f"/locations/{ROUTER_LOCATION}/publishers/google/models/{ROUTER_MODEL}:generateContent")
@@ -1188,18 +1166,9 @@ async def _classify_intent(q: str, user_email: str | None = None) -> str:
             print(f"intent router: no text returned (finishReason="
                   f"{cand.get('finishReason')}); falling back to keywords")
             raise ValueError("no candidate text")
-        txt = (parts[0].get("text") or "").upper()
-        if "PLATFORM" in txt:
-            return "platform"
-        if "SEMANTIC" in txt:
-            return "semantics"
-        if "KB" in txt and "ANALYTIC" not in txt:
-            return "kb"
-        if "ANALYTIC" in txt:
-            return "analytics"
-    except Exception:
-        pass
-    return _heuristic_intent(q)
+        return parts[0].get("text")
+
+    return await _classify_async(q, (_via_gateway, _via_vertex))
 
 
 # Ask-the-Data is open to ALL personas including the anonymous customer (ADR-0019):

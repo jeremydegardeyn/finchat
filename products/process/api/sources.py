@@ -1,5 +1,10 @@
 """System-API access for the process layer (ADR-0030).
 
+Named `sources`, not `backends`, because `mcp_server/backends.py` already exists: two
+modules with one name resolve to whichever imported first in a whole-repo pytest run,
+and CI's per-directory working directories hide it completely. That is the third time
+that collision has bitten in this codebase.
+
 The process layer reaches data only through the system APIs that own it. It holds no
 schema, no dataset name and no SQL — if this file ever imports `google.cloud.bigquery`,
 the layering has collapsed and the middle tier has become a second copy of the domain.

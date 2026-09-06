@@ -70,7 +70,7 @@ tier acquiring its own schema. Everything else is left to review, because a rule
 can satisfy gets an exception list and then gets deleted.
 
 The guard reads the **AST**, not the source text. Its first version failed on
-`process/api/backends.py`, whose docstring says that importing BigQuery would break the
+`process/api/sources.py`, whose docstring says that importing BigQuery would break the
 layering — a rule that fires on the prose explaining the rule is one people fix by
 deleting the explanation.
 
@@ -89,10 +89,13 @@ because that drift would be gradual and every individual step would look defensi
 - **Two new services that are not deployed.** They run, they are tested, and no Terraform
   or Cloud Run configuration exists for them yet — the same position `mcp_server/` is in,
   and for the same reason: standing them up is a cost decision that has not been taken.
-- **The analyst router is still inside the BFF**, and it is the largest genuine process
-  capability in the platform. Moving it means changing a live prod path that this ADR did
-  not need to touch, so it stays a stated debt rather than a claim. The layering is
-  therefore *established* rather than *complete*.
+- **The analyst router is split by what can move.** The routing decision — tables,
+  prompt, precedence, classifier ordering — now lives in the process layer, and doing so
+  collapsed two copies of the precedence rules into one. The handlers stay in the BFF
+  because they carry the end-user's OAuth token ([ADR-0019](0019-end-user-credential-propagation.md))
+  and the gateway's `on_behalf_of`; moving those means forwarding end-user credentials
+  between services, which is a security design change rather than a refactor. The rule is
+  shared, the credential-bound execution is not.
 - The process layer degrades per source: an unreachable loan API costs the customer their
   loan section, named in `partial`, not their balance. A channel can then say what is
   missing instead of showing a spinner or a confidently incomplete screen.
