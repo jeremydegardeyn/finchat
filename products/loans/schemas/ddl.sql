@@ -98,6 +98,11 @@ latest_risk AS (
 )
 SELECT
   r.loan_id, r.customer_name, r.amount, r.term_months, r.status,
+  -- Projected because `GET /v1/loans?account_id=` filters on it (ADR-0030). The
+  -- base table has always had the column and this view did not, so the filter
+  -- 400'd on every deployed call while passing every test: the tests run against
+  -- the in-memory demo store, which is a dict and has no view to disagree with.
+  r.account_id,
   r.submitted_at, r.updated_at,
   lr.risk_score, lr.recommendation, lr.reasons, lr.factors,
   ld.decision AS final_decision, ld.counteroffer_amount, ld.approver, ld.decided_at
