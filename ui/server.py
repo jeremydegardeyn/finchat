@@ -208,8 +208,11 @@ def _id_token(audience: str):
         tok = _mint_token(audience)
         _token_cache[audience] = (tok, now + 3000)  # tokens last ~1h; cache 50m
         return tok
-    except Exception as workload_err:
-        pass
+    except Exception as e:
+        # Bound to a second name on purpose: `except ... as workload_err` UNBINDS the
+        # name at the end of the handler, so the reference below is a NameError — on
+        # exactly the failure path that exists to explain a failure.
+        workload_err = e
 
     tok = _gcloud_token()
     if tok:

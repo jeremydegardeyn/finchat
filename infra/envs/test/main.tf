@@ -133,7 +133,7 @@ module "txn_api" {
   # when the gateway is enabled.
   invokers = concat(
     ["serviceAccount:${module.foundation.service_account_emails["process"]}",
-      "serviceAccount:${module.foundation.service_account_emails["mcp"]}"],
+    "serviceAccount:${module.foundation.service_account_emails["mcp"]}"],
     var.enable_api_gateway ? ["serviceAccount:${module.foundation.service_account_emails["txn_api"]}"] : [],
   )
   labels = local.labels
@@ -179,7 +179,7 @@ module "agent" {
     # /search endpoint. Without this it degrades to local BM25 and says so.
     "serviceAccount:${module.foundation.service_account_emails["mcp"]}",
   ]
-  labels   = local.labels
+  labels = local.labels
 }
 
 # --- Process layer (ADR-0030) ------------------------------------------------
