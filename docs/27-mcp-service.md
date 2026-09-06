@@ -109,8 +109,11 @@ client-side control and does not substitute.
 
 ## 2. Consuming it from another service on GCP
 
-Yes, and this is the easier of the two remote cases: service-to-service on Cloud Run
-needs no authorization server at all, because Google already is one.
+**Built and deployed** (ADR-0031). This is the easier of the two remote cases:
+service-to-service on Cloud Run needs no authorization server at all, because Google
+already is one. The first consumer is a separate AI gateway in its own repo, which
+discovers the tool catalogue, runs the tool-calling loop, and applies its own governance
+around it — see §2.6.
 
 ```mermaid
 flowchart LR
@@ -131,6 +134,13 @@ flowchart LR
 ```
 
 ### 2.1 Deploy
+
+Wired into `build-deploy.yml`: the image builds from the repo root with
+`-f mcp_server/Dockerfile`, and the deploy step resolves the service's own URL for
+`FINCHAT_MCP_ALLOWED_HOSTS` before setting it. Terraform owns the service shell, so an
+environment that has not been applied is *skipped* rather than failing the pipeline —
+`describe` on a missing service is a non-zero exit, and under `bash -e` that would have
+taken the UI deploy down with it.
 
 The image is built from the repo root (`mcp_server/Dockerfile`; it copies four modules
 and the KB corpus from other services, guarded by `test_mcp_image.py`). Deploy it exactly like the
@@ -202,7 +212,25 @@ nothing in the error says why — an unauthenticated probe returns 401 first, wh
 it. Set `FINCHAT_MCP_ALLOWED_HOSTS` to the service's public host; `server.py` wires it
 into `TransportSecuritySettings`.
 
-### 2.5 Reaching it from a hosted assistant
+### 2.5 What the consumer owes you
+
+The first remote consumer had to add four controls that had no equivalent on its
+prompt-only surface. They are not specific to that gateway; anything putting a model in
+front of someone else's MCP server needs them.
+
+| Control | Why it does not carry over from prompt governance |
+|---|---|
+| **Screen tool results** | They come from a service you do not own, enter the model's context, and leave on someone's screen. Screening only the final reply misses what the trace shows. |
+| **Budget the whole loop** | A tool-calling answer is N model calls, and each one re-sends every result accumulated so far. Charging the first turn understates it by more than half. |
+| **Audit the tool names** | "Which model answered" is half the record. "What did it read" is the half that gets asked about. |
+| **Refuse when the server is down** | A model asked for a balance will produce a plausible one. The safe behaviour is to not call the model at all — same rule as `GatewayRefused` in [ADR-0024](adr/0024-ai-gateway-chokepoint.md), reached independently. |
+
+And one the protocol hands you for free and clients routinely drop: **the server's
+`instructions`**. It is the only place MCP lets a server constrain a client's model, and
+for FinChat it carries the refusal policy. A client that discards it produces answers
+this platform cannot stand behind.
+
+### 2.6 Reaching it from a hosted assistant
 
 Claude's connector flow, and the MCP authorization spec generally, does **OAuth 2.1 with
 Dynamic Client Registration**. There is no field for a static token, and Google does not
