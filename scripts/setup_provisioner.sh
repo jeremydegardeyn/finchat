@@ -91,7 +91,13 @@ ROLES=(
   roles/storage.admin                    # buckets (incl. the Terraform state bucket)
   roles/artifactregistry.admin           # google_artifact_registry_repository
   roles/apigateway.admin                 # api, api config, gateway
-  roles/modelarmor.admin                 # template + floor setting
+  roles/modelarmor.admin                 # google_model_armor_template
+  # google_model_armor_floorsetting. NOT covered by modelarmor.admin, which contains no
+  # floorSettings permissions at all — the name suggests otherwise, which is why prod
+  # failed on `modelarmor.floorSettings.get` after dev and test had both gone green.
+  # Only prod sets enable_model_armor_floor = true, so it is the only environment that
+  # reaches this resource, and the only one where the gap was visible.
+  roles/modelarmor.floorSettingsAdmin
 )
 
 for role in "${ROLES[@]}"; do
