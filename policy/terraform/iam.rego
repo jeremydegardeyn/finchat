@@ -82,3 +82,62 @@ deny contains msg if {
 authoritative(t) if endswith(t, "_iam_binding")
 
 authoritative(t) if endswith(t, "_iam_policy")
+
+# --- IAM-5: nobody gets the power to grant -----------------------------------
+# IAM-4 (lifecycle.rego) withholds provisioning rights from the deploy account by
+# identity. This rule is about capability regardless of identity: no principal this
+# pipeline manages gets a role that can change an IAM policy, because such a role makes
+# every other restriction here self-serviceable.
+#
+# IAM-1 matches role NAMES, and that is the hole. `roles/resourcemanager.projectIamAdmin`
+# confers precisely the IAM-admin capability IAM-1's own rationale names, and passes it
+# untouched because it is not called Owner or Editor. It was granted to the deploy account
+# in September 2026 to clear a 403 and no control objected.
+#
+# The line is the ability to CHANGE an IAM policy, not to act as another identity.
+# `serviceAccountTokenCreator` and `serviceAccountUser` are impersonation: real escalation
+# vectors, but bounded by the target's own privileges, unavoidable under workload identity,
+# and already granted here. Including them would ship this rule with a standing exception
+# list attached, which is the failure IAM-1's comment warns about. `iam.securityReviewer`
+# is read-only and stays allowed for the reason it is granted: reading a policy is not
+# changing one.
+policy_mutating_roles := {
+	"roles/resourcemanager.projectIamAdmin",
+	"roles/resourcemanager.folderIamAdmin",
+	"roles/resourcemanager.organizationAdmin",
+	"roles/iam.securityAdmin",
+	"roles/iam.roleAdmin",
+	"roles/iam.organizationRoleAdmin",
+	"roles/iam.serviceAccountAdmin",
+	"roles/iam.workloadIdentityPoolAdmin",
+}
+
+deny contains msg if {
+	some rc in changed
+	rc.type in iam_member_types
+	role := rc.change.after.role
+	role in policy_mutating_roles
+
+	# The deploy account is IAM-4's case. Deferring keeps one finding per grant and the
+	# more specific message, rather than two rules shouting about the same line.
+	not contains(rc.change.after.member, deploy_sa_marker)
+	msg := sprintf(
+		"IAM-5: %s grants %q, which lets the grantee change IAM policy and therefore grant itself anything else. Privileged provisioning identities are bootstrapped outside Terraform (scripts/setup_provisioner.sh, ADR-0029) so this pipeline cannot escalate itself.",
+		[rc.address, role],
+	)
+}
+
+# The obvious way around any list of role names: define a custom role carrying a
+# setIamPolicy permission and grant that instead. A name-based check that is sidestepped
+# by choosing a different name is the weakness IAM-5 exists to fix, so it would be a poor
+# rule that reproduced it one level down.
+deny contains msg if {
+	some rc in changed
+	rc.type == "google_project_iam_custom_role"
+	some permission in rc.change.after.permissions
+	endswith(lower(permission), ".setiampolicy")
+	msg := sprintf(
+		"IAM-5: %s defines a custom role including %q. setIamPolicy is the power to grant, whatever the role is called.",
+		[rc.address, permission],
+	)
+}

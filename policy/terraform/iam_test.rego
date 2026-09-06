@@ -81,3 +81,65 @@ test_a_destroyed_resource_is_judged_only_by_destroy1 if {
 	some m in msgs
 	startswith(m, "DESTROY-1")
 }
+
+# --- IAM-5 -------------------------------------------------------------------
+# The grant that went unchallenged in September 2026, and the reason this rule exists:
+# it passes IAM-1 because it is not called Owner or Editor.
+test_iam5_rejects_iam_admin_on_any_principal if {
+	count(deny) == 1 with input as iam(
+		"google_project_iam_member",
+		{"role": "roles/resourcemanager.projectIamAdmin", "member": "serviceAccount:agent@b"},
+	)
+}
+
+test_iam5_rejects_role_admin if {
+	count(deny) == 1 with input as iam("google_project_iam_member", {"role": "roles/iam.roleAdmin", "member": "serviceAccount:a@b"})
+}
+
+test_iam5_rejects_security_admin if {
+	count(deny) == 1 with input as iam("google_project_iam_member", {"role": "roles/iam.securityAdmin", "member": "user:someone@b"})
+}
+
+# IAM-4 owns the deploy account. One grant should produce one finding, and it should be
+# the one that names the identity split — not two rules shouting about the same line.
+test_iam5_defers_to_iam4_on_the_deploy_account if {
+	msgs := deny with input as iam(
+		"google_project_iam_member",
+		{"role": "roles/resourcemanager.projectIamAdmin", "member": "serviceAccount:finchat-dev-cicd@p.iam.gserviceaccount.com"},
+	)
+	count(msgs) == 1
+	some m in msgs
+	startswith(m, "IAM-4:")
+}
+
+# Impersonation is deliberately out of scope. Both are granted in this repo today, so
+# denying them would ship the rule with a standing exception list — the failure IAM-1's
+# own comment warns about.
+test_iam5_allows_token_creator if {
+	count(deny) == 0 with input as iam("google_project_iam_member", {"role": "roles/iam.serviceAccountTokenCreator", "member": "serviceAccount:a@b"})
+}
+
+test_iam5_allows_service_account_user if {
+	count(deny) == 0 with input as iam("google_project_iam_member", {"role": "roles/iam.serviceAccountUser", "member": "serviceAccount:a@b"})
+}
+
+# Reading a policy is not changing one, which is why the deploy SA holds it.
+test_iam5_allows_security_reviewer if {
+	count(deny) == 0 with input as iam("google_project_iam_member", {"role": "roles/iam.securityReviewer", "member": "serviceAccount:a@b"})
+}
+
+# The way around a list of role names, closed.
+test_iam5_rejects_a_custom_role_carrying_setiampolicy if {
+	count(deny) == 1 with input as plan({
+		"type": "google_project_iam_custom_role",
+		"change": {"actions": ["create"], "after": {"permissions": ["bigquery.tables.get", "resourcemanager.projects.setIamPolicy"]}, "after_unknown": {}},
+	})
+}
+
+# The three custom roles this repo actually defines must keep passing.
+test_iam5_allows_a_scoped_custom_role if {
+	count(deny) == 0 with input as plan({
+		"type": "google_project_iam_custom_role",
+		"change": {"actions": ["create"], "after": {"permissions": ["bigquery.tables.get", "bigquery.tables.getData"]}, "after_unknown": {}},
+	})
+}

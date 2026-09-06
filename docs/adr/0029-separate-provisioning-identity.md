@@ -84,8 +84,20 @@ identity to carry.
   radius is bounded by the project rather than by the role list.
 - **A gap this exposed and does not close:** IAM-1 matches role names. `projectIamAdmin`,
   `iam.roleAdmin` and `iam.serviceAccountAdmin` all pass a rule written to stop exactly the
-  capability they confer. A candidate IAM-4 should deny IAM-mutating roles on any principal
-  the pipeline can assume, and it is not written yet.
+  capability they confer. **Closed by two rules, deliberately split by what they reason
+  about.** `IAM-4` (lifecycle.rego) is about *identity*: the deploy account may never be
+  granted provisioning roles, so the split survives someone editing the workflow.
+  `IAM-5` (iam.rego) is about *capability* regardless of identity: no principal this
+  pipeline manages may receive a role that changes an IAM policy, and a custom role
+  carrying a `setIamPolicy` permission is refused too — otherwise IAM-5 would reproduce
+  IAM-1's name-matching weakness one level down. IAM-5 defers to IAM-4 on the deploy
+  account so one grant yields one finding.
+
+  What neither rule covers is impersonation. `serviceAccountTokenCreator` and
+  `serviceAccountUser` are real escalation paths, bounded by the target's privileges and
+  unavoidable under workload identity; both are granted in this repo today. Denying them
+  would ship a rule with a standing exception list attached, which is the failure IAM-1's
+  own comment warns about — so it is a stated gap rather than a rule nobody can satisfy.
 
 ## Alternatives considered
 
