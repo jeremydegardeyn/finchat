@@ -99,8 +99,16 @@ def get_loan(loan_id: str):
 
 # --- employee ----------------------------------------------------------------
 @app.get("/v1/loans", tags=["employee"])
-def list_loans(status: Optional[str] = Query(None)):
-    return store.list_loans(status)
+def list_loans(status: Optional[str] = Query(None),
+               account_id: Optional[str] = Query(None)):
+    """List loans, optionally by workflow status and/or originating account.
+
+    `account_id` exists so a caller composing a customer view can ask for the loans
+    it needs rather than fetching the queue and filtering. Selection belongs to the
+    system that owns the data (ADR-0030); a process API doing it in Python would be
+    pulling 200 rows over the wire to keep two.
+    """
+    return store.list_loans(status, account_id=account_id)
 
 
 @app.get("/v1/loans/{loan_id}/audit", tags=["employee"])

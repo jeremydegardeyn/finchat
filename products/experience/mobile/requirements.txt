@@ -1,0 +1,5 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+google-auth==2.34.0
+# One backend, one dependency set. No BigQuery, no system-API client: this layer
+# composes through the process API or not at all (LAYER-1, ADR-0030).

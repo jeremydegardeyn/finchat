@@ -33,6 +33,7 @@ Lightweight ADRs capturing significant, hard-to-reverse decisions and their rati
 | [0027](0027-policy-as-code.md) | Policy-as-code (OPA/Rego) for infrastructure posture and the agent registry | Proposed |
 | [0028](0028-mcp-as-the-agent-channel.md) | MCP is the agent channel's experience API, not a second data path | Accepted |
 | [0029](0029-separate-provisioning-identity.md) | Terraform runs as a separate provisioning identity, not the deploy account | Accepted |
+| [0030](0030-api-led-layering.md) | Name the API layers, and enforce the two rules that keep them apart | Accepted |
 
 _Future ADRs (planned): row/column-level security model, idempotency & exactly-once strategy,
 environment promotion gating._

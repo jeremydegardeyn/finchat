@@ -362,7 +362,8 @@ sounds like a tool problem. It is usually a missing process API.
 
 ### 4.4 Sequencing
 
-Inc 28 (this) is the MCP server. Inc 29 is the layering, and it is worth doing **before**
+Inc 28 (this) is the MCP server. Inc 29 is the layering — **built, see
+[docs/28](28-api-led-layering.md) and [ADR-0030](adr/0030-api-led-layering.md)** — and it was worth doing **before**
 deploying the HTTP transport publicly: extracting process APIs will change what the MCP
 tools call, and it is cheaper to move a tool's implementation before anyone depends on
 its behaviour than after.

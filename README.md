@@ -93,6 +93,8 @@ finchat/
 │       ├── api/                   # loan submission + approver decision API
 │       └── agents/                # Planner / Credit / TxnReview / Approval / Notification
 ├── ui/                            # lightweight web UI (Customer / Employee / Admin personas)
+│   ├── process/                   # Process APIs — cross-domain capabilities (ADR-0030)
+│   └── experience/mobile/         # Mobile experience API — one screen, one round trip
 ├── mcp_server/                    # MCP server — the agent channel's experience API (ADR-0028)
 ├── eval/                          # agent evaluation framework (datasets, pipelines, reports)
 ├── cicd/                          # GitHub Actions + Cloud Build + promotion strategy
@@ -132,6 +134,7 @@ finchat/
 | — | Platform Docs RAG (ask FinChat about FinChat) | [`docs/24`](docs/24-platform-docs-rag.md) |
 | — | **End-to-End Flow** (one diagram, whole platform) | [`docs/25`](docs/25-end-to-end-flow.md) |
 | — | **MCP as a service surface** (agent channel · experience APIs) | [`docs/27`](docs/27-mcp-service.md) |
+| — | **API-led layering** (system · process · experience) | [`docs/28`](docs/28-api-led-layering.md) |
 | — | Architecture Decision Records | [`docs/adr/`](docs/adr/) |
 
 ---

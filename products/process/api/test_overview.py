@@ -1,0 +1,150 @@
+"""Offline tests for the process layer. No GCP, no network.
+
+The next-action rule is the reason this service exists, so it gets the most attention:
+it is the piece that would otherwise be reimplemented per channel and drift.
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load_module(name, filename):
+    """Import this service's module under a unique name.
+
+    Every service in this repo names its app module `main.py`, so `import main` in a
+    whole-repo pytest run resolves to whichever service was imported first. CI runs each
+    suite with its own working-directory and would never see it; running the suite from
+    the repo root does. Loading by path keeps the module addressable by where it lives.
+    """
+    import importlib.util
+    import sys
+
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(os.path.dirname(os.path.abspath(__file__)), filename))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+import backends  # noqa: E402
+
+main = _load_module("finchat_process_main", "main.py")
+decide_next_action = main.decide_next_action
+
+
+# --- the business rule -------------------------------------------------------
+def test_a_pending_decision_outranks_an_overdraft():
+    """Ordered by what the customer most needs to know, not by severity.
+
+    Both are true at once here. The pending decision wins because the customer can act
+    on neither, and only one of them is news.
+    """
+    a = decide_next_action(-500.0, [{"loan_id": "l1", "status": "PENDING_APPROVAL"}], [])
+    assert a.kind == "await_loan_decision"
+    assert "l1" in a.reason
+
+
+def test_a_decided_loan_surfaces_after_pending_ones():
+    a = decide_next_action(100.0, [{"loan_id": "l9", "status": "APPROVED"}], [])
+    assert a.kind == "review_loan_decision"
+    assert "approved" in a.label.lower()
+
+
+def test_a_negative_balance_is_flagged():
+    a = decide_next_action(-12.5, [], [{"transaction_id": "t"}])
+    assert a.kind == "cover_overdraft"
+
+
+def test_a_masked_balance_is_not_treated_as_zero():
+    """The rule this service would most plausibly get wrong.
+
+    Column-level security returns NULL to a reader without fine-grained access
+    (ADR-0019). Reading that as "no money" turns a policy outcome into a false alarm —
+    the masked_null refusal rule, applied to a decision instead of to prose.
+    """
+    a = decide_next_action(None, [], [])
+    assert a.kind == "none"
+    assert "masked" in a.reason
+
+
+def test_a_healthy_account_gets_no_manufactured_action():
+    a = decide_next_action(250.0, [], [{"transaction_id": "t"}])
+    assert a.kind == "none"
+
+
+# --- composition over the demo repositories ----------------------------------
+def test_the_overview_composes_both_domains_offline():
+    o = main.customer_overview("acct-001")
+    assert o.account_id == "acct-001"
+    assert o.currency
+    assert isinstance(o.recent_activity, list)
+    assert o.next_action.kind
+    assert o.partial == []
+
+
+def test_a_missing_account_is_a_404_not_an_empty_screen():
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as e:
+        main.customer_overview("acct-does-not-exist")
+    assert e.value.status_code == 404
+
+
+def test_one_dead_source_degrades_that_section_not_the_view(monkeypatch):
+    """A loan service outage must not cost the customer their balance.
+
+    The alternative — failing the whole view — is what makes a channel show a spinner
+    where a balance should be, and it is a worse outcome than a named gap.
+    """
+    def boom(*a, **k):
+        raise backends.SourceUnavailable("simulated")
+
+    monkeypatch.setattr(backends, "loans_for_account", boom)
+    o = main.customer_overview("acct-001")
+    assert o.balance is not None
+    assert o.loans == []
+    assert "loans" in o.partial
+
+
+# --- the layering itself -----------------------------------------------------
+def test_loans_are_selected_by_the_system_api_not_filtered_here():
+    """Selection belongs to the system that owns the rows.
+
+    Pinned because filtering in Python would pass every other test in this file while
+    quietly moving 200 records over the wire to keep two.
+    """
+    src = open(os.path.join(os.path.dirname(__file__), "backends.py"),
+               encoding="utf-8").read()
+    assert '"account_id": account_id' in src or "{\"account_id\": account_id}" in src, \
+        "loans_for_account must pass account_id to the loan API"
+
+
+def test_demo_modules_resolve_under_the_image_layout_too(tmp_path, monkeypatch):
+    """The bug the Dockerfile hides until the first request.
+
+    In the repo this file is four levels below the root; in the image it is at /app with
+    the copied modules beside it. A fixed number of `.parent` walks is correct in exactly
+    one of those, and the wrong one climbs out of /app — a build that goes green and a
+    service that fails on its first demo call.
+    """
+    (tmp_path / "products" / "loans" / "api").mkdir(parents=True)
+    target = tmp_path / "products" / "loans" / "api" / "store.py"
+    target.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(backends, "SEARCH_ROOTS", (tmp_path, backends.REPO_ROOT))
+    assert backends._resolve("products", "loans", "api", "store.py") == target
+
+
+def test_an_unresolvable_module_names_the_dockerfile():
+    """A missing COPY should say so, not raise a bare FileNotFoundError from importlib."""
+    with pytest.raises(FileNotFoundError) as e:
+        backends._resolve("products", "nope", "missing.py")
+    assert "Dockerfile" in str(e.value)

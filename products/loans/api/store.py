@@ -153,13 +153,22 @@ class LoanStore:
             bigquery.ScalarQueryParameter("id", "STRING", loan_id)])).result())
         return dict(rows[0]) if rows else None
 
-    def list_loans(self, status: str | None = None) -> list[dict]:
+    def list_loans(self, status: str | None = None,
+                   account_id: str | None = None) -> list[dict]:
         if self._demo:
             items = list(self._loans.values())
-            return [x for x in items if not status or x["status"] == status]
-        clause = "WHERE status=@s" if status else ""
+            return [x for x in items
+                    if (not status or x["status"] == status)
+                    and (not account_id or x.get("account_id") == account_id)]
         from google.cloud import bigquery
-        params = [bigquery.ScalarQueryParameter("s", "STRING", status)] if status else []
+        where, params = [], []
+        if status:
+            where.append("status=@s")
+            params.append(bigquery.ScalarQueryParameter("s", "STRING", status))
+        if account_id:
+            where.append("account_id=@a")
+            params.append(bigquery.ScalarQueryParameter("a", "STRING", account_id))
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
         sql = f"SELECT * FROM `{self._t('loan_status')}` {clause} ORDER BY submitted_at DESC LIMIT 200"
         return [dict(r) for r in self._client.query(
             sql, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()]

@@ -75,6 +75,14 @@ jobs:
       - name: Gateway coverage — no tool-level model call bypasses it (ADR-0024)
         working-directory: products/transactions/agent
         run: pytest test_gateway_coverage.py -q
+      - name: API layering — experience/process/system stay apart (ADR-0030)
+        run: pytest scripts/test_api_layering.py -q
+      - name: Process API — customer overview + next-action rule (ADR-0030)
+        working-directory: products/process/api
+        run: pytest test_overview.py -q
+      - name: Mobile experience API — one round trip, decides nothing (ADR-0030)
+        working-directory: products/experience/mobile
+        run: pytest test_home.py -q
       - name: UI image — every runtime module is COPYed
         working-directory: ui
         run: pytest test_ui_image.py -q
@@ -203,14 +211,17 @@ jobs:
           terraform init -backend=false -input=false
           terraform validate
 
-  docker-build-mcp:
-    # Separate job: the MCP image copies modules owned by other services, so its
-    # build context is the repo root rather than its own directory.
+  docker-build-rootcontext:
+    # Images that copy modules owned by other services, so their build context is the
+    # repo root rather than their own directory. Kept out of the docker-build matrix
+    # because that job passes the service directory as the context.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: Build MCP image (no push)
         run: docker build -f mcp_server/Dockerfile -t finchat-mcp-ci-test .
+      - name: Build Process API image (no push)
+        run: docker build -f products/process/api/Dockerfile -t finchat-process-ci-test .
 
   docker-build:
     runs-on: ubuntu-latest
@@ -220,6 +231,7 @@ jobs:
           - products/transactions/api
           - products/transactions/generator
           - products/loans/api
+          - products/experience/mobile
           - products/steward/harness
           - ui
     steps:
