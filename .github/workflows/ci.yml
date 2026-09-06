@@ -72,6 +72,9 @@ jobs:
       - name: Gateway client — bypass accounting + refusal handling (ADR-0024)
         working-directory: ui
         run: pytest test_gateway_client.py -q
+      - name: Gateway coverage — no tool-level model call bypasses it (ADR-0024)
+        working-directory: products/transactions/agent
+        run: pytest test_gateway_coverage.py -q
       - name: UI image — every runtime module is COPYed
         working-directory: ui
         run: pytest test_ui_image.py -q

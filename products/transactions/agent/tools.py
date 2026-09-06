@@ -252,15 +252,44 @@ def _rerank(query: str, candidates: list[dict]) -> list[dict]:
         return candidates
     try:
         import retrieval
-        from google import genai
-        client = genai.Client(vertexai=True, project=PROJECT,
-                              location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=retrieval.rerank_prompt(query, candidates),
-            config={"temperature": 0, "max_output_tokens": 64},
-        )
-        order = retrieval.parse_rerank(getattr(resp, "text", "") or "", len(candidates))
+        prompt = retrieval.rerank_prompt(query, candidates)
+
+        # Governed path first (ADR-0024). This call site used to go straight to Vertex,
+        # so it was screened by nothing, charged to no agent, and absent from the transit
+        # numbers in docs/23 — a bypass that existed because DRIFT-4 checks agents and
+        # this is a tool.
+        text = None
+        try:
+            import gateway_llm
+            text = gateway_llm.complete(
+                prompt, agent_id="kb_reranker", workload_class="classification",
+                owner="platform-ai@datadinosaur.com", max_output_tokens=64, temperature=0)
+        except ImportError:
+            text = None  # offline/unit-test import path; direct call below
+        except Exception as e:
+            # A policy refusal is not a reason to call Vertex directly. Returning the
+            # fused order is the retrieval contract's own degrade path, and it does not
+            # route around the control the way a direct retry would.
+            if type(e).__name__ == "GatewayRefused":
+                print(f"KB rerank refused by gateway ({getattr(e, 'outcome', '?')}); "
+                      "using fusion order")
+                return candidates
+            raise
+
+        if text is None:
+            # Unconfigured or unreachable: counted as a bypass by gateway_llm, then
+            # answered directly, because retrieval must not break on the reranker.
+            from google import genai
+            client = genai.Client(vertexai=True, project=PROJECT,
+                                  location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={"temperature": 0, "max_output_tokens": 64},
+            )
+            text = getattr(resp, "text", "") or ""
+
+        order = retrieval.parse_rerank(text, len(candidates))
         if not order:
             return candidates
         reranked = [candidates[i] for i in order]

@@ -79,6 +79,55 @@ def _id_token(audience: str) -> str | None:
         return None
 
 
+def complete(prompt: str, *, agent_id: str, workload_class: str, owner: str,
+             max_output_tokens: int = 64, temperature: float = 0.0) -> str | None:
+    """Governed single-shot completion for call sites that are not ADK agents.
+
+    `gateway_model` covers agents, and DRIFT-4 in `verify_agent_registry.py` checks
+    that agents use it — by AST-scanning agent definitions. A model call inside a
+    *tool* is invisible to that check, which is how the KB reranker called Vertex
+    directly for weeks while docs/23 reported six call sites and counted none of it.
+
+    Returns None when the caller should fall back to a direct call (unconfigured or
+    unreachable), and **raises GatewayRefused on a policy outcome** — a refusal is
+    never a reason to retry against Vertex, which would route around the control in
+    the same request that fired it.
+    """
+    if not GATEWAY_URL:
+        if GATEWAY_REQUIRED:
+            raise GatewayRefused("unconfigured", {"agent_id": agent_id})
+        _count("bypass_error")
+        return None
+
+    body = {"agent_id": agent_id, "workload_class": workload_class, "owner": owner,
+            "prompt": prompt, "max_output_tokens": max_output_tokens,
+            "temperature": temperature}
+    headers = {"Content-Type": "application/json"}
+    tok = _id_token(GATEWAY_URL)
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+
+    try:
+        req = urllib.request.Request(f"{GATEWAY_URL}/v1/complete",
+                                     data=json.dumps(body).encode(),
+                                     method="POST", headers=headers)
+        with urllib.request.urlopen(req, timeout=GATEWAY_TIMEOUT) as r:
+            payload = json.loads(r.read())
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        _count("bypass_error")
+        return None
+
+    outcome = payload.get("outcome")
+    if outcome in ("pii_blocked", "budget_exceeded", "unregistered_workload"):
+        _count("blocked")
+        raise GatewayRefused(outcome, payload)
+    if outcome != "ok":
+        _count("bypass_error")
+        return None
+    _count("transited")
+    return (payload.get("text") or "").strip()
+
+
 def _build_body(llm_request) -> dict:
     """Serialize an ADK LlmRequest into a Vertex generateContent body.
 

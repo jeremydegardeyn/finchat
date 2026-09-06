@@ -22,10 +22,25 @@ to work.
 | 3 | Steward generator | `reasoning` | ✅ | — |
 | 4 | Banking Assistant | `tool_calling_agent` | ✅ | via the ADK `BaseLlm` adapter |
 | 5 | Loan agents (×5) | `tool_calling_agent` | ✅ | Same — each under its own registry id |
-| 6 | Analyst Data Agent | — | ❌ | Managed Conversational Analytics; no injectable model endpoint exists |
+| 6 | KB reranker (`tools.py::_rerank`) | `classification` | ✅ | via `gateway_llm.complete()` |
+| 7 | Analyst Data Agent | — | ❌ | Managed Conversational Analytics; no injectable model endpoint exists |
 
-**5 of 6 call sites.** The remaining gap is structural: there is no seam in a managed
+**6 of 7 call sites.** The remaining gap is structural: there is no seam in a managed
 service to route through, so it will not close by finishing wiring.
+
+Row 6 was missing from this table entirely until 2026-09-06. The reranker called Vertex
+directly from inside a tool, so it was screened by nothing, charged to no agent, and
+absent from the denominator — while this document reported "5 of 6" and read as though
+the only gap left was the managed one. It is listed here because a bypass you have not
+noticed is indistinguishable from a bypass you are hiding, and the number was wrong in
+the flattering direction.
+
+The reason it went unnoticed is worth more than the fix. **DRIFT-4 in
+`verify_agent_registry.py` checks that registered *agents* transit the gateway**, by
+AST-scanning agent definitions for `gateway_model`. A model call inside a *tool* is
+invisible to it, and tools are where retrieval, ranking and classification calls
+naturally live. `test_gateway_coverage.py` now covers that class: any direct genai
+client construction must sit in a function that also reaches for the gateway.
 
 This now includes the customer-facing traffic, which is the volume that matters — the
 earlier 3/6 state governed only the cheap analytical paths.
