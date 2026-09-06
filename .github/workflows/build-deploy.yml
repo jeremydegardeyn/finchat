@@ -3,7 +3,11 @@ name: Build & Deploy
 on:
   push:
     branches: [main]
-    paths: ["products/**", "ui/**", ".github/workflows/build-deploy.yml"]
+    # mcp_server/** is here because it is a deployed service (ADR-0031), not only a
+    # local stdio entry point. Without it a change to the agent channel builds
+    # nothing and the running service silently keeps the previous image.
+    paths: ["products/**", "ui/**", "mcp_server/**",
+            ".github/workflows/build-deploy.yml"]
   workflow_dispatch:
     inputs:
       environment:
