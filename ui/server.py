@@ -208,8 +208,21 @@ def _id_token(audience: str):
         tok = _mint_token(audience)
         _token_cache[audience] = (tok, now + 3000)  # tokens last ~1h; cache 50m
         return tok
-    except Exception:
-        return None
+    except Exception as workload_err:
+        pass
+
+    tok = _gcloud_token()
+    if tok:
+        _token_cache[audience] = (tok, now + 3000)
+        return tok
+
+    # Never silently. Returning None here sends the request out with no Authorization
+    # header, and the 403 that comes back reads as "the backend rejected us" rather than
+    # "we never authenticated" — which is exactly how a missing dependency in the process
+    # API's image passed for a broken transactions service for a whole deploy cycle.
+    print(f"ui: no id-token for {audience} "
+          f"({type(workload_err).__name__}: {workload_err})")
+    return None
 
 
 def _mint_token(audience: str) -> str:
@@ -220,6 +233,43 @@ def _mint_token(audience: str) -> str:
         GReq(), target_audience=audience, use_metadata_identity_endpoint=True)
     creds.refresh(GReq())
     return creds.token
+
+
+def _gcloud_token() -> str | None:
+    """The token gcloud already holds, for running this BFF on a laptop.
+
+    There is no metadata server on a developer machine, so the only way to exercise the
+    UI against DEPLOYED backends — the configuration where integration bugs actually
+    live — is the signed-in human's own token. Cloud Run accepts it from anyone holding
+    run.invoker, and it has the property the deployed path cannot have: the call is
+    attributable to a person, so ADR-0019 column-level security is evaluated against
+    them rather than against a shared service identity.
+
+    Two details that are load-bearing rather than tidy:
+      * `stdin=DEVNULL` — subprocess.run inherits stdin, and `capture_output` covers only
+        stdout and stderr. In a process speaking a stdio protocol that loses the stream.
+      * the JWT is matched by shape, not taken as the whole of stdout. The launcher can
+        print a line of its own first, and the resulting header is rejected with a
+        message about return characters that says nothing about gcloud.
+    """
+    import shutil
+    import subprocess
+
+    exe = shutil.which("gcloud")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "auth", "print-identity-token"], capture_output=True,
+                             text=True, timeout=30, stdin=subprocess.DEVNULL)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    for line in reversed((out.stdout or "").splitlines()):
+        line = line.strip()
+        if line.count(".") == 2 and " " not in line and len(line) > 100:
+            return line
+    return None
 
 
 _http = None  # shared pooled HTTP client (keep-alive: saves a TLS handshake per hop)
