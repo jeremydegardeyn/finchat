@@ -78,15 +78,22 @@ def _id_token(audience: str) -> str | None:
 
     The metadata identity endpoint, which is the canonical path for Cloud Run
     service-to-service auth and the one `ui/server.py` already uses.
-    `google.oauth2.id_token.fetch_id_token` is the obvious-looking call and does NOT
-    work here — it wants a service-account key or an impersonation target, not the
-    metadata server — so it returned None, the request went out with no Authorization
-    header, and every composed view came back as "transactions service unavailable".
 
-    `fetch_id_token` is kept as the second attempt because it is what works off-cluster
-    with an explicit credential, and the failure is logged rather than swallowed: a
-    silent None here is indistinguishable from a service being down, which is exactly
-    how this cost a deploy cycle to find.
+    `google.oauth2.id_token.fetch_id_token` would also work here — contrary to what an
+    earlier version of this comment claimed, it pings the metadata server and falls back
+    to exactly these credentials on Cloud Run. It is not used because it reports failure
+    as `DefaultCredentialsError: Neither metadata server or valid service account
+    credentials are found`, and the fault it most often hides is neither of those: it
+    catches `ImportError` from `google.auth.transport.requests`, which needs the
+    `requests` package that `google-auth` does not install. That is the bug that shipped
+    — a missing dependency, reported as missing credentials, surfacing to the caller as
+    "the other service is unavailable". Constructing the credentials directly lets the
+    ImportError out where it says what it is, and `scripts/test_service_requirements.py`
+    stops it recurring.
+
+    Either way the failure is logged rather than swallowed. A silent None here is
+    indistinguishable from a service being down, and that is what actually cost a deploy
+    cycle: the first fix changed which call minted the token, which was never the fault.
     """
     try:
         from google.auth import compute_engine

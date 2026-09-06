@@ -158,3 +158,17 @@ variable "controls_chat_provider" {
   description = "Chat destination for control events: \"teams\", \"google_chat\", or \"\" for none."
   default     = ""
 }
+
+variable "mcp_client_service_accounts" {
+  type        = list(string)
+  description = <<-EOT
+    Members granted roles/run.invoker on the MCP service (ADR-0031), as fully-qualified
+    IAM members, e.g. "serviceAccount:ai-gateway-sa@PROJECT.iam.gserviceaccount.com".
+
+    This is the whole access-control story for the MCP endpoint, so it is a variable
+    rather than a hardcoded list: the consumers live in other repos and other teams, and
+    the grant should be reviewable as configuration. Default empty — an MCP endpoint
+    nobody can invoke is the right thing to ship by accident.
+  EOT
+  default     = []
+}

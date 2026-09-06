@@ -61,11 +61,18 @@ jobs:
             [agent]=products/transactions/agent
             [steward]=products/steward/harness
             [ui]=ui
+            # Repo root, not mcp_server/: the MCP server reuses modules owned by the
+            # services it fronts, and copying them at build time is what keeps the
+            # knowledge plane one source of truth instead of a snapshot (ADR-0028).
+            [mcp]=.
+          )
+          declare -A DOCKERFILE=(
+            [mcp]=mcp_server/Dockerfile
           )
           for name in "${!SVC[@]}"; do
             img="${REPO}/${name}:${SHA}"
             echo "::group::build ${name}"
-            docker build -t "$img" -t "${REPO}/${name}:latest" "${SVC[$name]}"
+            docker build -f "${DOCKERFILE[$name]:-${SVC[$name]}/Dockerfile}"               -t "$img" -t "${REPO}/${name}:latest" "${SVC[$name]}"
             docker push "$img"; docker push "${REPO}/${name}:latest"
             echo "::endgroup::"
           done
@@ -130,6 +137,14 @@ jobs:
           # ADK agent on Cloud Run (scale-to-zero). Gemini via Vertex (agent SA has aiplatform.user).
           deploy agent agent agent \
             "--set-env-vars=GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,KB_DATASET=finchat_kb_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),AI_GATEWAY_URL=${AI_GATEWAY_URL},AI_GATEWAY_REQUIRED=${{ vars.AI_GATEWAY_REQUIRED || '0' }}${AGENT_PINS} --memory=1Gi --no-allow-unauthenticated"
+          # Agent channel over HTTP (ADR-0031). Deployed last of the read services because
+          # it is a client of all of them, and its own URL has to exist before it can be
+          # told about itself: the MCP SDK's DNS-rebinding protection trusts localhost
+          # only, so Cloud Run's proxied Host is rejected with a bare 421 unless it is
+          # allow-listed. Terraform provisions the service shell, which is what makes
+          # `describe` answer here on the very first deploy.
+          MCP_URL="$(gcloud run services describe finchat-${ENV}-mcp --region ${REGION} --format='value(status.url)')"
+          deploy mcp mcp mcp             "--set-env-vars=FINCHAT_MCP_TRANSPORT=http,FINCHAT_MCP_ALLOWED_HOSTS=${MCP_URL#https://},FINCHAT_MCP_PERSONA=customer,FINCHAT_TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),FINCHAT_LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),FINCHAT_PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)'),FINCHAT_AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           # Durable steward — deploy ONLY where the harness infra is applied (DB-URL
           # secret) AND its Cloud SQL instance is actually running. The instance is
           # parked (STOPPED) for cost in some envs; DBOS runs migrations against it on

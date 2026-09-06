@@ -4,3 +4,10 @@ google-adk==2.2.0
 google-cloud-bigquery==3.25.0
 google-cloud-dataplex==2.4.0
 httpx>=0.27
+
+# Declared rather than inherited: google.auth.transport.requests imports `requests`
+# lazily, and it arrives here only as a transitive dep of a google-cloud-* client.
+# A package imported directly is a package pinned directly. The version differs from
+# the other services on purpose: google-adk 2.2.0 floors it at 2.32.4, and copying
+# their 2.32.3 across made this the one service that would not resolve at all.
+requests==2.32.4

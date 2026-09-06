@@ -146,27 +146,59 @@ def test_the_experience_layer_knows_exactly_one_backend():
 SERVICE_DIRS = EXPERIENCE_DIRS + PROCESS_DIRS
 
 
-def test_service_to_service_auth_uses_the_metadata_identity_endpoint():
-    """Any file that mints an id-token must try the metadata endpoint first.
+def test_an_id_token_helper_never_fails_silently():
+    """A helper that mints an id-token must say why it could not.
 
-    `google.oauth2.id_token.fetch_id_token` is the obvious call and does not work on
-    Cloud Run — it wants a service-account key or an impersonation target, not the
-    metadata server. It returns None, the request goes out with no Authorization
-    header, and the caller reports the *other* service as unavailable.
+    This guard used to assert something else — that every such helper call the metadata
+    identity endpoint, because `fetch_id_token` "does not work on Cloud Run". That is
+    false. `google.oauth2.id_token.fetch_id_token` pings the metadata server and returns
+    exactly those credentials; its own source says it covers Cloud Run. Switching to the
+    explicit call fixed nothing, and a guard whose stated reason is wrong is worse than
+    no guard, because the next person obeys it for a reason that will mislead them.
 
-    That shipped: the process API reached its backends unauthenticated and every
-    composed view came back as "transactions service unavailable". Nothing local caught
-    it, because demo mode never mints a token and there is no metadata server on a
-    laptop — this only fails where it runs.
+    What actually shipped was a missing `requests` package, which `google-auth` imports
+    lazily. `fetch_id_token` catches that ImportError and re-raises it as "Neither
+    metadata server or valid service account credentials are found", and the helper
+    turned *that* into a bare `None`. The request then went out unauthenticated and the
+    caller reported the other service as unavailable. Three layers, each one discarding
+    the sentence that named the fault.
+
+    So the rule worth enforcing is the one that would have made it a one-line diagnosis:
+    if a token helper can return without a token, it has to report the reason. The
+    missing dependency itself is guarded separately, by
+    `scripts/test_service_requirements.py`.
     """
     offenders = []
     for path in _sources(SERVICE_DIRS):
-        src = path.read_text(encoding="utf-8")
-        if "fetch_id_token" not in src and "IDTokenCredentials" not in src:
-            continue  # this file does not authenticate to another service
-        if "use_metadata_identity_endpoint" not in src:
-            offenders.append(str(path.relative_to(REPO)))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = ast.dump(fn)
+            if "fetch_id_token" not in body and "IDTokenCredentials" not in body:
+                continue
+            handlers = [h for h in ast.walk(fn) if isinstance(h, ast.ExceptHandler)]
+            if not handlers:
+                continue  # nothing swallowed: an exception reaches the caller intact
+            reports = any(
+                isinstance(n, ast.Raise)
+                or (isinstance(n, ast.Call) and _callee(n) in _REPORTERS)
+                for n in ast.walk(fn))
+            if not reports:
+                offenders.append(f"{path.relative_to(REPO)}::{fn.name}")
     assert not offenders, (
-        f"{offenders} mint an id-token without the metadata identity endpoint. On Cloud "
-        "Run that yields None and the call goes out unauthenticated — see ui/server.py's "
-        "_mint_token for the shape that works.")
+        f"{offenders} can fail to mint an id-token without saying why. A bare None is "
+        "indistinguishable from the callee being down, which is how a missing "
+        "dependency read as a broken service for a whole deploy cycle.")
+
+
+_REPORTERS = {"print", "warning", "error", "exception", "critical", "info", "log"}
+
+
+def _callee(node: ast.Call) -> str:
+    f = node.func
+    if isinstance(f, ast.Name):
+        return f.id
+    if isinstance(f, ast.Attribute):
+        return f.attr
+    return ""

@@ -1,3 +1,8 @@
 google-adk>=0.3.0
 google-cloud-aiplatform[agent_engines]>=1.70.0
 httpx>=0.27.0
+
+# Declared rather than inherited: google.auth.transport.requests imports `requests`
+# lazily, and it arrives here only as a transitive dep of a google-cloud-* client.
+# A package imported directly is a package pinned directly.
+requests==2.32.3

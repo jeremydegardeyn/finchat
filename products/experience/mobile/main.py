@@ -36,12 +36,19 @@ ACTIVITY_ON_SCREEN = int(os.getenv("MOBILE_ACTIVITY_ROWS", "3"))
 
 
 def _id_token(audience: str) -> str | None:
-    # The metadata identity endpoint — the canonical path for Cloud Run
-    # service-to-service auth. `google.oauth2.id_token.fetch_id_token` is the
-    # obvious-looking call and does NOT work here: it wants a service-account key or an
-    # impersonation target, not the metadata server. It returns None, the request goes
-    # out with no Authorization header, and the failure reads as "the other service is
-    # down" rather than "we never authenticated".
+    """An OIDC id-token for a private Cloud Run audience, or None with a reason.
+
+    The metadata identity endpoint, which is the canonical path for Cloud Run
+    service-to-service auth. `google.oauth2.id_token.fetch_id_token` reaches the same
+    credentials — it pings the metadata server itself — so this is a choice about error
+    reporting, not about what works: `fetch_id_token` catches `ImportError` from
+    `google.auth.transport.requests` and re-raises it as "Neither metadata server or
+    valid service account credentials are found", which sends you looking at IAM when
+    the actual fault is that this image never installed `requests`.
+
+    Whatever the cause, it is printed. Returning a bare None here is what made a missing
+    dependency look like a broken upstream service for a whole deploy cycle.
+    """
     try:
         from google.auth import compute_engine
         from google.auth.transport.requests import Request as GReq
@@ -50,15 +57,18 @@ def _id_token(audience: str) -> str | None:
             GReq(), target_audience=audience, use_metadata_identity_endpoint=True)
         creds.refresh(GReq())
         return creds.token
-    except Exception:
-        pass
+    except Exception as e:
+        metadata_err = e
 
     try:
         from google.auth.transport.requests import Request
         from google.oauth2 import id_token as gid
 
         return gid.fetch_id_token(Request(), audience)
-    except Exception:
+    except Exception as e:
+        print(f"mobile: no id-token for {audience} "
+              f"(metadata: {type(metadata_err).__name__}: {metadata_err}; "
+              f"fetch_id_token: {type(e).__name__}: {e})")
         return None
 
 

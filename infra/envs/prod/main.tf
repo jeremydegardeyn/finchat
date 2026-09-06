@@ -138,7 +138,8 @@ module "txn_api" {
   # The process API composes over this one (ADR-0030); the API Gateway SA is added only
   # when the gateway is enabled.
   invokers = concat(
-    ["serviceAccount:${module.foundation.service_account_emails["process"]}"],
+    ["serviceAccount:${module.foundation.service_account_emails["process"]}",
+      "serviceAccount:${module.foundation.service_account_emails["mcp"]}"],
     var.enable_api_gateway ? ["serviceAccount:${module.foundation.service_account_emails["txn_api"]}"] : [],
   )
   labels = local.labels
@@ -160,6 +161,7 @@ module "loan_api" {
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
     "serviceAccount:${module.foundation.service_account_emails["agent"]}",
     "serviceAccount:${module.foundation.service_account_emails["process"]}",
+    "serviceAccount:${module.foundation.service_account_emails["mcp"]}",
   ]
   labels = local.labels
 }
@@ -177,7 +179,12 @@ module "agent" {
     REGION      = var.region
   }
   # UI BFF (runs as txn_api SA) invokes this private agent with an OIDC token.
-  invokers = ["serviceAccount:${module.foundation.service_account_emails["txn_api"]}"]
+  invokers = [
+    "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+    # The MCP server's knowledge-base tool calls the agent's retrieval-only
+    # /search endpoint. Without this it degrades to local BM25 and says so.
+    "serviceAccount:${module.foundation.service_account_emails["mcp"]}",
+  ]
   labels   = local.labels
 }
 
@@ -199,6 +206,7 @@ module "process_api" {
   invokers = [
     "serviceAccount:${module.foundation.service_account_emails["mobile"]}",
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
+    "serviceAccount:${module.foundation.service_account_emails["mcp"]}",
   ]
   labels = local.labels
 }
@@ -216,6 +224,34 @@ module "mobile_api" {
   min_instances   = var.run_min_instances
   env_vars        = {}
   labels          = local.labels
+}
+
+# --- Experience layer: the agent channel over HTTP (ADR-0031) ----------------
+# The same MCP server that runs locally over stdio, deployed so a *remote* client can
+# reach it. Private, and deliberately so: MCP has no authentication of its own, and the
+# spec's answer (OAuth + dynamic client registration, ADR-0020) is not built. Cloud Run
+# IAM is the authentication here, which is why every caller must be named below.
+#
+# The identity trade this makes is worth stating rather than discovering: a stdio client
+# authenticates as the *person* running it, so ADR-0019 column-level security is
+# evaluated against them. This service authenticates as itself, so a remote caller sees
+# what THIS service account is entitled to, not what the caller is. That is the honest
+# limit of a service-identity MCP endpoint and the reason ADR-0020 still matters.
+module "mcp_server" {
+  source          = "../../modules/cloud_run"
+  project_id      = var.project_id
+  region          = var.region
+  service_name    = "${var.name_prefix}-${var.env}-mcp"
+  service_account = module.foundation.service_account_emails["mcp"]
+  min_instances   = var.run_min_instances
+  # Backend URLs + the allowed-hosts allow-list are set by CI/CD alongside the image.
+  env_vars = {}
+  # Remote MCP clients. Empty by default: a service with no named callers is a service
+  # nobody can reach, which is the correct default for an endpoint that exposes banking
+  # tools. Each entry is one consuming workload's runtime identity — never a human, and
+  # never a default compute SA, which several workloads share.
+  invokers = var.mcp_client_service_accounts
+  labels   = local.labels
 }
 
 module "ui" {

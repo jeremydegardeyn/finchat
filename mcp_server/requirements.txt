@@ -7,3 +7,7 @@ mcp==1.27.2
 # standard library alone, which is what keeps `claude mcp add` a one-liner.
 uvicorn[standard]==0.48.0
 google-auth==2.34.0
+# google.auth.transport.requests imports this lazily: google-auth alone imports fine
+# and raises ImportError at the first token mint, which reads as "the backend is down".
+# Nothing else here pulls it in — this image has no google-cloud-* client.
+requests==2.32.3

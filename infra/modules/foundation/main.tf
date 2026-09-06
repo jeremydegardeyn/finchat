@@ -44,6 +44,12 @@ locals {
     # bigquery.dataViewer would be a process API that had started querying.
     process = { display = "Process API — cross-domain composition (Cloud Run)", roles = [] }
     mobile  = { display = "Mobile Experience API (Cloud Run)", roles = [] }
+    # The agent channel (ADR-0028/0031), deployed over streamable HTTP. Also empty, and
+    # for a sharper reason than the two above: this identity is what a remote MCP client
+    # is ultimately acting as, so every project role granted here is a role granted to
+    # every caller of the MCP endpoint. It reaches data only through the same governed
+    # APIs the web channel uses, each granted per-target below.
+    mcp = { display = "MCP server — agent channel over HTTP (Cloud Run)", roles = [] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [
       "roles/bigquery.dataEditor",
       "roles/bigquery.jobUser",

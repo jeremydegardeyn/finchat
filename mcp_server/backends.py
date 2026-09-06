@@ -41,6 +41,10 @@ LOAN_API_URL = os.getenv("FINCHAT_LOAN_API_URL", "").rstrip("/")
 AGENT_URL = os.getenv("FINCHAT_AGENT_URL", "").rstrip("/")
 PROCESS_API_URL = os.getenv("FINCHAT_PROCESS_API_URL", "").rstrip("/")
 TIMEOUT = float(os.getenv("FINCHAT_MCP_TIMEOUT", "30"))
+# True when any backend is configured, i.e. this process talks to real services
+# rather than the in-repo demo repositories. Used to decide whether a failure to
+# mint an id-token is worth a log line or is simply how local mode works.
+HTTP_MODE = bool(TXN_API_URL or LOAN_API_URL or AGENT_URL or PROCESS_API_URL)
 
 KB_CORPUS = REPO_ROOT / "products" / "transactions" / "agent" / "kb" / "corpus.jsonl"
 KB_TOP_N = int(os.getenv("FINCHAT_MCP_KB_TOP_N", "4"))
@@ -79,10 +83,16 @@ def _id_token(audience: str) -> str | None:
         return hit[0]
 
     token = None
-    # Metadata identity endpoint first: it is the only one of the three that works when
-    # this server runs ON Cloud Run. `fetch_id_token` looked sufficient and is not — the
-    # process API shipped with only that call and reached its backends unauthenticated.
-    # Here the gcloud fallback below masked it, which is why it went unnoticed.
+    # Metadata identity endpoint first, because it is the most direct statement of what
+    # this process is: a workload on Cloud Run asking for its own identity.
+    #
+    # `fetch_id_token` below would reach the same credentials — it pings the metadata
+    # server itself, and its source says so. What it does badly is fail: it catches the
+    # ImportError raised when `google-auth`'s requests transport has no `requests`
+    # package and reports "Neither metadata server or valid service account credentials
+    # are found", which is a sentence about IAM describing a missing dependency. That
+    # cost a deploy cycle on the process API, and an earlier version of this comment
+    # blamed the wrong call for it.
     try:
         from google.auth import compute_engine
         from google.auth.transport.requests import Request as GReq
@@ -127,6 +137,12 @@ def _id_token(audience: str) -> str | None:
     if token:
         # Google ID tokens live an hour; re-mint well before the edge.
         _token_cache[audience] = (token, time.time() + 45 * 60)
+    elif HTTP_MODE:
+        # Only when a backend URL is configured. Running locally against demo data there
+        # is no token to mint and nothing has gone wrong, but a *deployed* server about
+        # to call a private endpoint with no Authorization header has one job here:
+        # say so, in the log, before the callee reports itself as unavailable.
+        print(f"mcp: no id-token for {audience} — the next call goes out unauthenticated")
     return token
 
 
