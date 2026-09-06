@@ -8,6 +8,13 @@
 
 ## The layers
 
+> ![API layers](diagrams/api-layers.svg)
+>
+> Source: [`diagrams/api-layers.mmd`](diagrams/api-layers.mmd). Solid arrows are calls
+> that exist; grey dashed are **passthrough**, which the rules permit; red dashed are the
+> three shapes CI refuses. The analyst router is drawn in the process band with a dashed
+> red border because that is where it *belongs* — it still lives in the BFF.
+
 ```
 Experience   │  ui/server.py (web)   mcp_server/ (agent)   products/experience/mobile/
 ─────────────┼──────────────────────────────────────────────────────────────────────
@@ -41,6 +48,17 @@ named in `partial`, not their balance:
 ```json
 { "balance": -2972.49, "loans": [], "partial": ["loans"] }
 ```
+
+**`mcp_server/` gained `get_customer_overview`** — the same composed view, for the agent
+channel. It calls the **process** API, not the mobile one: the MCP server is itself an
+experience API ([ADR-0028](adr/0028-mcp-as-the-agent-channel.md)), and composing via
+another channel would make one channel depend on another's shape and uptime while putting
+`next_action` in a third place.
+
+With no process service deployed it loads `products/process/api/overview.py` **in-process**
+— the same rule from the same file, not a reimplementation. That module is deliberately
+free of FastAPI and pydantic so the MCP image need not ship a web framework to reuse it,
+and a test asserts it stays that way.
 
 **`products/experience/mobile/`** — `GET /v1/home?account_id=`. The same screen in **one**
 round trip, shaped for a phone: `next_action` becomes a headline, amounts are

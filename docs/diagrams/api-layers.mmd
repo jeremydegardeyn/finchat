@@ -1,0 +1,76 @@
+%% FinChat API-led layering (ADR-0030). Source for api-layers.svg.
+%% Solid arrows are calls that exist. Dashed red arrows are the two shapes CI refuses.
+flowchart TB
+    subgraph EXP["EXPERIENCE — shaped by one channel · aggregates, reshapes, formats · NEVER decides"]
+        direction LR
+        WEB["Web BFF<br/><small>ui/server.py</small>"]
+        MCP["MCP server<br/><small>mcp_server/ · ADR-0028</small>"]
+        MOB["Mobile API<br/><small>experience/mobile · GET /v1/home</small>"]
+    end
+
+    subgraph PROC["PROCESS — shaped by a business capability · composes and DECIDES"]
+        direction LR
+        OVR["Customer Overview<br/><small>process/api · /v1/customers/by-account/{id}/overview</small>"]
+        RULE["next_action<br/><small>overview.py — the one shared rule</small>"]
+        ROUTER["Analyst router<br/><small>STILL IN THE BFF — debt</small>"]
+    end
+
+    subgraph SYS["SYSTEM — shaped by the domain it owns · owns schema, enforces access"]
+        direction LR
+        TXN["txn-api<br/><small>balance · activity · summary</small>"]
+        LOAN["loan-api<br/><small>loans · decisions · audit</small>"]
+        AGT["agent<br/><small>/chat · /search</small>"]
+        CA["Conversational<br/>Analytics"]
+    end
+
+    STORE[("BigQuery Gold · CLS · Dataplex")]
+
+    OVR --- RULE
+
+    %% Composition goes through the process layer.
+    MOB -->|"1 round trip"| OVR
+    MCP -->|"get_customer_overview"| OVR
+
+    %% Passthrough of a single resource is allowed, and is what the BFF does.
+    WEB -.->|"passthrough<br/>3 calls per screen"| TXN
+    WEB -.->|passthrough| LOAN
+    MCP -.->|"passthrough<br/>get_account_balance"| TXN
+    MCP -.->|passthrough| LOAN
+    MCP -.->|passthrough| AGT
+
+    OVR --> TXN
+    OVR --> LOAN
+    ROUTER --> AGT
+    ROUTER --> CA
+
+    TXN --> STORE
+    LOAN --> STORE
+    AGT --> STORE
+    CA --> STORE
+
+    %% What the guards refuse.
+    MOB -. "LAYER-1 ✗<br/>compose via a system API" .-> TXN
+    OVR -. "LAYER-2 ✗<br/>query a store directly" .-> STORE
+    MCP -. "✗ experience → experience" .-> MOB
+
+    %% Indices are positional and 0-based, counted in declaration order:
+    %%   3-7  passthrough (allowed)      16-18  refused by the guards
+    linkStyle 3,4,5,6,7 stroke:#888,stroke-dasharray:4 3
+    linkStyle 16,17,18 stroke:#c0392b,stroke-width:2px,stroke-dasharray:6 4,color:#c0392b
+
+    %% The three bands, so the layering reads before any single node does.
+    style EXP fill:#f4f8ff,stroke:#4285f4,stroke-width:2px,color:#0b2b5c
+    style PROC fill:#f2fbf5,stroke:#34a853,stroke-width:2px,color:#0d3b1e
+    style SYS fill:#fffaf0,stroke:#f9ab00,stroke-width:2px,color:#4a3200
+
+    classDef exp fill:#e8f0fe,stroke:#4285f4,color:#0b2b5c
+    classDef proc fill:#e6f4ea,stroke:#34a853,color:#0d3b1e
+    classDef sys fill:#fef7e0,stroke:#f9ab00,color:#4a3200
+    classDef debt fill:#fce8e6,stroke:#c0392b,color:#5c1a12,stroke-dasharray:5 3
+    classDef store fill:#f1f3f4,stroke:#5f6368,color:#202124
+
+    class WEB,MCP,MOB exp
+    class OVR,RULE proc
+    class ROUTER debt
+    class TXN,LOAN,AGT,CA sys
+    class STORE store

@@ -158,6 +158,25 @@ def get_account_summary(account_id: str) -> str:
 
 # --- loans (Data Product 2) --------------------------------------------------
 @mcp.tool(annotations=_READ)
+def get_customer_overview(account_id: str) -> str:
+    """One composed view of an account: balance, recent activity, loans, next action.
+
+    Prefer this over calling the balance, activity and loan tools separately — it is
+    one request, and `next_action` is the platform's own judgement about what this
+    customer should do now rather than one you infer from the parts.
+
+    `next_action.kind` is one of `await_loan_decision`, `review_loan_decision`,
+    `cover_overdraft` or `none`. Report it as given. A `balance` of null means the
+    value is masked at this access level, not that the account is empty, and
+    `partial` names any section a source could not supply.
+    """
+    try:
+        return json.dumps(backends.customer_overview(account_id), indent=2, default=str)
+    except Exception as e:
+        return _err(e)
+
+
+@mcp.tool(annotations=_READ)
 def get_loan_status(loan_id: str) -> str:
     """Current state of a loan application, including risk score and reason codes.
 

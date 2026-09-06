@@ -39,6 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TXN_API_URL = os.getenv("FINCHAT_TXN_API_URL", "").rstrip("/")
 LOAN_API_URL = os.getenv("FINCHAT_LOAN_API_URL", "").rstrip("/")
 AGENT_URL = os.getenv("FINCHAT_AGENT_URL", "").rstrip("/")
+PROCESS_API_URL = os.getenv("FINCHAT_PROCESS_API_URL", "").rstrip("/")
 TIMEOUT = float(os.getenv("FINCHAT_MCP_TIMEOUT", "30"))
 
 KB_CORPUS = REPO_ROOT / "products" / "transactions" / "agent" / "kb" / "corpus.jsonl"
@@ -231,10 +232,11 @@ class Backends:
     """One object the tools call, whichever transport is live."""
 
     def __init__(self, txn_url: str = TXN_API_URL, loan_url: str = LOAN_API_URL,
-                 agent_url: str = AGENT_URL):
+                 agent_url: str = AGENT_URL, process_url: str = PROCESS_API_URL):
         self.txn_url = txn_url
         self.loan_url = loan_url
         self.agent_url = agent_url
+        self.process_url = process_url
         self._txn_demo = None
         self._loan_demo = None
 
@@ -244,10 +246,34 @@ class Backends:
             "transactions": "http" if self.txn_url else "demo",
             "loans": "http" if self.loan_url else "demo",
             "knowledge_base": "agent" if self.agent_url else "local-bm25",
+            "overview": "process-api" if self.process_url else "in-process-capability",
             "txn_api_url": self.txn_url or None,
             "loan_api_url": self.loan_url or None,
             "agent_url": self.agent_url or None,
+            "process_api_url": self.process_url or None,
         }
+
+    # -- composed views -------------------------------------------------------
+    def customer_overview(self, account_id: str) -> dict:
+        """The composed customer view, from the PROCESS layer (ADR-0030).
+
+        This server is an experience API (ADR-0028), so it must not compose across
+        domains itself and must not call another experience API to do it. Both would
+        put `next_action` — a business rule two channels already share — into a third
+        place, which is the drift the process layer exists to prevent.
+
+        With no process service deployed it loads that layer's capability module
+        in-process. That is still the same rule from the same file; it is not a
+        reimplementation, and `overview.py` is framework-free precisely so this image
+        need not ship FastAPI to do it.
+        """
+        if self.process_url:
+            return _request(self.process_url,
+                            f"/v1/customers/by-account/{account_id}/overview")
+        capability = loader.load(
+            "finchat_process_capability",
+            REPO_ROOT / "products" / "process" / "api" / "overview.py")
+        return capability.build_overview(account_id, _ProcessSources(self))
 
     # -- knowledge base -------------------------------------------------------
     def search_kb(self, query: str) -> list[dict]:
@@ -370,3 +396,29 @@ class Backends:
         if self.loan_url:
             return _request(self.loan_url, f"/v1/loans/{loan_id}/audit")
         return self._loans()[0].get_audit(loan_id)
+
+
+class _ProcessSources:
+    """Adapts this server's backends to what `build_overview` expects.
+
+    The capability takes its sources as an argument rather than importing them, so the
+    demo path can supply these without the process service's own transport, its
+    `SourceUnavailable`, or its dependencies.
+    """
+
+    SourceUnavailable = BackendError
+
+    def __init__(self, b: "Backends"):
+        self._b = b
+
+    def balance(self, account_id: str) -> dict:
+        return self._b.balance(account_id)
+
+    def recent_transactions(self, account_id: str, limit: int) -> list[dict]:
+        try:
+            return self._b.transactions(account_id, limit)
+        except BackendError:
+            return []  # an account with no transactions is not a failed source
+
+    def loans_for_account(self, account_id: str) -> list[dict]:
+        return [l for l in self._b.loans() if l.get("account_id") == account_id]

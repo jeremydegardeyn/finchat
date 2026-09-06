@@ -33,6 +33,7 @@ Call `finchat_status` to see which data source is live.
 | `FINCHAT_TXN_API_URL` | unset | unset → in-process demo data |
 | `FINCHAT_LOAN_API_URL` | unset | unset → in-process demo data |
 | `FINCHAT_AGENT_URL` | unset | knowledge base via the agent's `/search`; unset → local BM25 |
+| `FINCHAT_PROCESS_API_URL` | unset | composed overview via the process API; unset → its capability in-process |
 | `FINCHAT_MCP_PERSONA` | `customer` | `approver` adds `list_loans`, `get_loan_audit` |
 | `FINCHAT_MCP_ALLOW_WRITES` | off | enables `submit_loan_application` |
 | `FINCHAT_MCP_TRANSPORT` | `stdio` | `http` for streamable-HTTP on Cloud Run |
@@ -74,6 +75,17 @@ survives the build, boot and health check, then breaks one tool in production.
 - **No loan decisions.** `POST /v1/loans/{id}/decision` is exposed to no persona.
 - **No OAuth.** Header-capable clients (Claude Code, Claude Desktop) work today; hosted
   connector flows need the DCR proxy in [ADR-0020](../docs/adr/0020-remote-mcp-workspace-federation.md), which is designed and not built.
+
+## The composed view
+
+`get_customer_overview` returns balance, recent activity, loans and `next_action` in one
+call. It goes through the **process** API ([ADR-0030](../docs/adr/0030-api-led-layering.md)),
+never through another experience API: this server is a channel, and a channel that composes
+puts a shared business rule somewhere no other channel reads.
+
+Unconfigured, it loads `products/process/api/overview.py` in-process — the same rule from
+the same file. That module has no FastAPI or pydantic import precisely so this image does
+not need them.
 
 ## The knowledge base
 

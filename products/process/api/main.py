@@ -24,6 +24,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 import backends
+import overview as capability
 
 app = FastAPI(
     title="FinChat Process API",
@@ -56,89 +57,21 @@ def healthz():
     return {"status": "ok", "sources": backends.mode()}
 
 
-def decide_next_action(balance: Optional[float], loans: list[dict],
-                       recent: list[dict]) -> NextAction:
-    """The one business rule in this service, and the reason the layer exists.
-
-    Ordered by what a customer most needs to know, not by what is easiest to compute.
-    A pending loan decision outranks an overdraft because the customer can act on
-    neither, but only one of them is news.
-
-    A masked balance is deliberately NOT treated as zero. Column-level security returns
-    NULL to a reader without fine-grained access (ADR-0019), and reading that as "no
-    money" would turn a policy outcome into a false alarm — the `masked_null` refusal
-    rule, applied to a decision rather than to prose.
-    """
-    pending = [l for l in loans if l.get("status") == "PENDING_APPROVAL"]
-    if pending:
-        return NextAction(kind="await_loan_decision",
-                          label="Your loan application is with an approver",
-                          reason=f"loan {pending[0].get('loan_id')} is PENDING_APPROVAL")
-
-    decided = [l for l in loans if l.get("status") in ("APPROVED", "REJECTED")]
-    if decided:
-        latest = decided[0]
-        return NextAction(kind="review_loan_decision",
-                          label=f"Your loan was {latest.get('status', '').lower()}",
-                          reason=f"loan {latest.get('loan_id')} has a final decision")
-
-    if balance is None:
-        return NextAction(kind="none", label="Nothing needs your attention",
-                          reason="balance is masked at this access level, so no "
-                                 "balance-based advice is offered")
-
-    if balance < 0:
-        return NextAction(kind="cover_overdraft",
-                          label="Your balance is negative",
-                          reason=f"balance {balance} is below zero")
-
-    if not recent:
-        return NextAction(kind="none", label="Nothing needs your attention",
-                          reason="no posted activity in the recent window")
-
-    return NextAction(kind="none", label="Nothing needs your attention",
-                      reason="no pending decision and the balance is positive")
-
-
 @app.get("/v1/customers/by-account/{account_id}/overview",
          response_model=Overview, tags=["customer"])
 def customer_overview(account_id: str):
     """One customer view across the transactions and loan domains.
 
-    Degrades per source rather than failing whole. A loan service that is down should
-    not cost the customer their balance, so an unreachable source is named in `partial`
-    and the view is returned without it — the channel can then say what is missing
-    instead of showing a spinner or, worse, a confident but incomplete page.
+    This function is transport, not logic. The composition and the next-action rule
+    live in `overview.py` so a caller without a deployed process service can reuse
+    them rather than growing a second copy — which is the whole argument for the layer.
     """
-    partial: list[str] = []
-
     try:
-        bal = backends.balance(account_id)
+        return capability.build_overview(account_id, backends, RECENT_LIMIT)
     except backends.NotFound:
         raise HTTPException(404, f"account {account_id} not found") from None
     except backends.SourceUnavailable:
         raise HTTPException(503, "transactions service unavailable") from None
-
-    try:
-        recent = backends.recent_transactions(account_id, RECENT_LIMIT)
-    except backends.SourceUnavailable:
-        recent, _ = [], partial.append("recent_activity")
-
-    try:
-        loans = backends.loans_for_account(account_id)
-    except backends.SourceUnavailable:
-        loans, _ = [], partial.append("loans")
-
-    return Overview(
-        account_id=account_id,
-        currency=bal.get("currency", "USD"),
-        balance=bal.get("balance"),
-        last_activity_at=bal.get("last_activity_at"),
-        recent_activity=recent,
-        loans=loans,
-        next_action=decide_next_action(bal.get("balance"), loans, recent),
-        partial=partial,
-    )
 
 
 if __name__ == "__main__":

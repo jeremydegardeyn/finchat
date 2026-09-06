@@ -25,6 +25,9 @@ COPY products/transactions/agent/retrieval.py ./products/transactions/agent/
 # agent service is unreachable or predates its /search endpoint.
 COPY products/transactions/agent/kb/corpus.jsonl ./products/transactions/agent/kb/
 COPY products/loans/api/store.py products/loans/api/risk.py ./products/loans/api/
+# The process layer's capability, reused rather than reimplemented when no process
+# service is deployed. Framework-free on purpose so this image needs no FastAPI.
+COPY products/process/api/overview.py ./products/process/api/
 COPY knowledge/ontology.yaml ./knowledge/
 COPY contracts/ ./contracts/
 

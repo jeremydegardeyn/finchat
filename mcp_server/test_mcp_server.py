@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 def _load(**env):
     """Import the server with a specific configuration, from scratch."""
     for key in ("FINCHAT_MCP_PERSONA", "FINCHAT_MCP_ALLOW_WRITES",
-                "FINCHAT_TXN_API_URL", "FINCHAT_LOAN_API_URL", "FINCHAT_AGENT_URL"):
+                "FINCHAT_TXN_API_URL", "FINCHAT_LOAN_API_URL", "FINCHAT_AGENT_URL",
+                "FINCHAT_PROCESS_API_URL"):
         os.environ.pop(key, None)
     os.environ.update(env)
     for mod in ("server", "backends", "knowledge"):
@@ -256,3 +257,53 @@ def test_http_mode_is_selected_by_configuration_not_by_flag():
     assert srv.backends.mode["transactions"] == "http"
     assert srv.backends.mode["txn_api_url"] == "https://txn.example.invalid"
     assert srv.backends.mode["loans"] == "demo"
+
+
+# --- the composed view (ADR-0030) --------------------------------------------
+def test_the_overview_tool_is_offered_and_composes_offline():
+    srv = _load()
+    assert "get_customer_overview" in _tools(_load())
+    out = srv.get_customer_overview("acct-001")
+    for key in ('"balance"', '"recent_activity"', '"loans"', '"next_action"'):
+        assert key in out, key
+
+
+def test_the_overview_routes_to_the_process_layer_when_one_is_configured():
+    srv = _load(FINCHAT_PROCESS_API_URL="https://process.example.invalid/")
+    assert srv.backends.mode()["overview"] == "process-api" \
+        if callable(srv.backends.mode) else srv.backends.mode["overview"] == "process-api"
+
+
+def test_this_server_does_not_own_the_next_action_rule():
+    """It is an experience API (ADR-0028), so the rule is not its to hold.
+
+    Asserted as a property rather than by scanning for words. An earlier version banned
+    the status strings anywhere in the package and failed twice for the wrong reasons:
+    the tool's docstring names the possible values so the calling model knows what it
+    will receive, and the demo loan-submit path legitimately writes PENDING_APPROVAL
+    because it mirrors the loan API. Neither is next_action logic.
+    """
+    import pathlib
+
+    here = pathlib.Path(__file__).resolve().parent
+    src = ((here / "backends.py").read_text(encoding="utf-8")
+           + (here / "server.py").read_text(encoding="utf-8"))
+
+    assert "def decide_next_action" not in src, (
+        "the next-action rule is defined here; it belongs to the process layer")
+    assert "overview.py" in src, (
+        "the demo path must load the process layer's capability rather than "
+        "reimplementing the rule")
+
+
+def test_the_overview_never_calls_another_experience_api():
+    """Experience-to-experience is the wrong direction.
+
+    Composing via the mobile API would work and would make one channel depend on
+    another's shape and uptime. The only composed source is the process layer.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).resolve().parent / "backends.py").read_text(encoding="utf-8")
+    assert "MOBILE" not in src.upper()
+    assert "FINCHAT_PROCESS_API_URL" in src

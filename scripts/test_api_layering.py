@@ -26,6 +26,13 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 
+# `mcp_server/` and `ui/server.py` are experience APIs too (ADR-0028) and are deliberately
+# NOT listed here. Both do permitted passthrough — one resource, forwarded unchanged — so
+# they legitimately name the system APIs, and a marker-based rule cannot tell that apart
+# from composing. Their composed views are covered where the distinction is visible: each
+# has a test asserting the composed path goes through the process layer and that
+# `next_action` is not recomputed locally. Listing them here would produce a failure that
+# is wrong, which is how a guard gets an exception list and then gets deleted.
 EXPERIENCE_DIRS = [REPO / "products" / "experience"]
 PROCESS_DIRS = [REPO / "products" / "process"]
 

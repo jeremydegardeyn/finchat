@@ -89,6 +89,11 @@ it: IAM on the private services, CLS in BigQuery, the approver check inside the 
   BigQuery behind the agent, so exposing it meant giving the agent service a retrieval-only
   `POST /search` and calling that — not querying BigQuery from a tool, and not wrapping
   `/chat` and returning another model's prose. Retrieval stays one implementation.
+- **Composed views come from the process layer** ([ADR-0030](0030-api-led-layering.md)).
+  `get_customer_overview` calls the process API rather than composing here or calling the
+  mobile experience API — this server is a channel, and a channel that composes puts a
+  shared business rule in a place no other channel reads. With no process service deployed
+  it loads that layer's capability module in-process, which is reuse rather than a copy.
 - Adding a capability means adding it to a **system or process API first**, then
   exposing it. That is friction, and it is the intended friction: it is what stops the
   agent channel from becoming the place undocumented capabilities accumulate.

@@ -37,7 +37,8 @@ def _load_module(name, filename):
 import backends  # noqa: E402
 
 main = _load_module("finchat_process_main", "main.py")
-decide_next_action = main.decide_next_action
+capability = _load_module("finchat_process_capability", "overview.py")
+decide_next_action = capability.decide_next_action
 
 
 # --- the business rule -------------------------------------------------------
@@ -48,19 +49,19 @@ def test_a_pending_decision_outranks_an_overdraft():
     on neither, and only one of them is news.
     """
     a = decide_next_action(-500.0, [{"loan_id": "l1", "status": "PENDING_APPROVAL"}], [])
-    assert a.kind == "await_loan_decision"
-    assert "l1" in a.reason
+    assert a["kind"] == "await_loan_decision"
+    assert "l1" in a["reason"]
 
 
 def test_a_decided_loan_surfaces_after_pending_ones():
     a = decide_next_action(100.0, [{"loan_id": "l9", "status": "APPROVED"}], [])
-    assert a.kind == "review_loan_decision"
-    assert "approved" in a.label.lower()
+    assert a["kind"] == "review_loan_decision"
+    assert "approved" in a["label"].lower()
 
 
 def test_a_negative_balance_is_flagged():
     a = decide_next_action(-12.5, [], [{"transaction_id": "t"}])
-    assert a.kind == "cover_overdraft"
+    assert a["kind"] == "cover_overdraft"
 
 
 def test_a_masked_balance_is_not_treated_as_zero():
@@ -71,23 +72,23 @@ def test_a_masked_balance_is_not_treated_as_zero():
     the masked_null refusal rule, applied to a decision instead of to prose.
     """
     a = decide_next_action(None, [], [])
-    assert a.kind == "none"
-    assert "masked" in a.reason
+    assert a["kind"] == "none"
+    assert "masked" in a["reason"]
 
 
 def test_a_healthy_account_gets_no_manufactured_action():
     a = decide_next_action(250.0, [], [{"transaction_id": "t"}])
-    assert a.kind == "none"
+    assert a["kind"] == "none"
 
 
 # --- composition over the demo repositories ----------------------------------
 def test_the_overview_composes_both_domains_offline():
-    o = main.customer_overview("acct-001")
-    assert o.account_id == "acct-001"
-    assert o.currency
-    assert isinstance(o.recent_activity, list)
-    assert o.next_action.kind
-    assert o.partial == []
+    o = capability.build_overview("acct-001", backends)
+    assert o["account_id"] == "acct-001"
+    assert o["currency"]
+    assert isinstance(o["recent_activity"], list)
+    assert o["next_action"]["kind"]
+    assert o["partial"] == []
 
 
 def test_a_missing_account_is_a_404_not_an_empty_screen():
@@ -108,10 +109,10 @@ def test_one_dead_source_degrades_that_section_not_the_view(monkeypatch):
         raise backends.SourceUnavailable("simulated")
 
     monkeypatch.setattr(backends, "loans_for_account", boom)
-    o = main.customer_overview("acct-001")
-    assert o.balance is not None
-    assert o.loans == []
-    assert "loans" in o.partial
+    o = capability.build_overview("acct-001", backends)
+    assert o["balance"] is not None
+    assert o["loans"] == []
+    assert "loans" in o["partial"]
 
 
 # --- the layering itself -----------------------------------------------------
@@ -148,3 +149,28 @@ def test_an_unresolvable_module_names_the_dockerfile():
     with pytest.raises(FileNotFoundError) as e:
         backends._resolve("products", "nope", "missing.py")
     assert "Dockerfile" in str(e.value)
+
+
+def test_the_rule_lives_outside_the_web_framework():
+    """`overview.py` must stay importable without FastAPI.
+
+    The MCP server reuses this capability in demo mode and its image does not ship a
+    web framework. If the rule drifts back into `main.py`, the alternative for that
+    caller is a second copy of next_action — the one thing this layer exists to prevent.
+    """
+    import ast
+
+    tree = ast.parse(open(os.path.join(os.path.dirname(__file__), "overview.py"),
+                          encoding="utf-8").read())
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add((node.module or "").split(".")[0])
+    # Read imports rather than source text: the module docstring names both frameworks
+    # deliberately, and a check that fires on the explanation gets fixed by deleting it.
+    assert not ({"fastapi", "pydantic"} & imported), imported
+
+    wrapper = open(os.path.join(os.path.dirname(__file__), "main.py"), encoding="utf-8").read()
+    assert "def decide_next_action" not in wrapper,         "the rule belongs in overview.py; main.py is transport"
