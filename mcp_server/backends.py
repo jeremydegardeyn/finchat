@@ -129,8 +129,15 @@ def _id_token(audience: str) -> str | None:
             out = subprocess.run([gcloud, "auth", "print-identity-token"],
                                  capture_output=True, text=True, timeout=30,
                                  stdin=subprocess.DEVNULL)
-            if out.returncode == 0 and out.stdout.strip():
-                token = out.stdout.strip()
+            # NOT out.stdout.strip(). The gcloud launcher on Windows can print a
+            # stray line before the token — a temp-file path, in the case that found
+            # this — and the whole blob then goes into an Authorization header. The
+            # symptom is a 401, or `InvalidHeader: return character(s) in header
+            # value`, neither of which mentions gcloud.
+            if out.returncode == 0:
+                token = next((l.strip() for l in reversed(out.stdout.splitlines())
+                              if l.strip().count(".") == 2 and " " not in l.strip()
+                              and len(l.strip()) > 100), None)
         except Exception:
             token = None
 

@@ -216,16 +216,50 @@ def test_the_gcloud_fallback_never_inherits_the_protocol_stream(monkeypatch):
 
     def fake_run(cmd, **kw):
         seen.update(kw)
-        return sp.CompletedProcess(cmd, 0, stdout="tok\n", stderr="")
+        stray = 'C:\\tmp\\some-launcher-tempfile'
+        return sp.CompletedProcess(
+            cmd, 0, stdout=stray + "\n" + _FAKE_JWT + "\n", stderr="")
 
     monkeypatch.setattr(backends.subprocess, "run", fake_run)
     monkeypatch.setattr(backends, "_token_cache", {})
     # Force the gcloud path: workload credentials must appear unavailable.
     monkeypatch.setitem(sys.modules, "google.oauth2", None)
 
-    assert backends._id_token("https://svc.example.invalid") == "tok"
+    assert backends._id_token("https://svc.example.invalid") == _FAKE_JWT
     assert seen.get("stdin") is sp.DEVNULL, \
         "subprocess must not inherit stdin — that is the MCP protocol stream"
+
+
+# Shaped like a real one: three base64url segments, no spaces, long. `_id_token` matches
+# that shape rather than trusting everything the launcher printed.
+_FAKE_JWT = ("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9."
+             "eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhdWQiOiJodHRwczovL3N2Yy5"
+             "leGFtcGxlLmludmFsaWQiLCJlbWFpbCI6ImRldkBleGFtcGxlLmNvbSJ9."
+             "c2lnbmF0dXJlLXRoYXQtaXMtbm90LXJlYWwtYnV0LWlzLWxvbmctZW5vdWdo")
+
+
+def test_a_stray_line_from_the_gcloud_launcher_does_not_end_up_in_the_header(monkeypatch):
+    """`out.stdout.strip()` is the obvious spelling and it is wrong.
+
+    The gcloud launcher on Windows can print something of its own before the token — a
+    temp-file path, in the case that found this. Taking the whole blob puts a newline
+    inside an Authorization header, and what surfaces is `InvalidHeader: return
+    character(s) in header value`, or a bare 401 from the callee. Neither says gcloud.
+    """
+    import subprocess as sp
+
+    import backends
+
+    def fake_run(cmd, **kw):
+        stray = "C:\\Users\\dev\\AppData\\Local\\Temp\\launcher-tempfile"
+        return sp.CompletedProcess(cmd, 0, stdout=stray + "\n" + _FAKE_JWT + "\n",
+                                   stderr="")
+
+    monkeypatch.setattr(backends.subprocess, "run", fake_run)
+    monkeypatch.setattr(backends, "_token_cache", {})
+    monkeypatch.setitem(sys.modules, "google.oauth2", None)
+
+    assert backends._id_token("https://svc.example.invalid") == _FAKE_JWT
 
 
 def test_an_empty_kb_result_tells_the_model_not_to_improvise():
