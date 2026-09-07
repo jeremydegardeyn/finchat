@@ -168,6 +168,14 @@ jobs:
           else
             echo "finchat-${ENV}-mcp-auth not provisioned (enable_mcp_oauth is false) — skipping."
           fi
+          # ADR-0020 token validation turns on only when the issuer and resource are set,
+          # and those are per-environment variables rather than code. Unset — the default
+          # everywhere — the service stays private and Cloud Run IAM is the only control.
+          # Set, the server validates every request itself, which is what makes going
+          # public survivable: the two are meant to move together, and the deploy flag
+          # below is deliberately NOT derived from them, so nobody opens the door by
+          # editing one variable.
+          #
           # Agent channel over HTTP (ADR-0031). Deployed after the services it calls,
           # and it has to be told its own hostname: the MCP SDK's DNS-rebinding protection
           # trusts localhost only, so Cloud Run's proxied Host comes back as a bare 421
@@ -178,7 +186,7 @@ jobs:
           # env without it must still get its UI. Same posture as the steward guard below.
           if gcloud run services describe "finchat-${ENV}-mcp" --region "${REGION}" >/dev/null 2>&1; then
             MCP_URL="$(gcloud run services describe finchat-${ENV}-mcp --region ${REGION} --format='value(status.url)')"
-            deploy mcp mcp mcp             "--set-env-vars=FINCHAT_MCP_TRANSPORT=http,FINCHAT_MCP_ALLOWED_HOSTS=${MCP_URL#https://},FINCHAT_MCP_PERSONA=customer,FINCHAT_TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),FINCHAT_LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),FINCHAT_PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)'),FINCHAT_AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+            deploy mcp mcp mcp             "--set-env-vars=FINCHAT_MCP_TRANSPORT=http,FINCHAT_MCP_ALLOWED_HOSTS=${MCP_URL#https://},FINCHAT_MCP_PERSONA=customer,FINCHAT_MCP_OAUTH_ISSUER=${{ vars.FINCHAT_MCP_OAUTH_ISSUER }},FINCHAT_MCP_RESOURCE=${{ vars.FINCHAT_MCP_RESOURCE }},FINCHAT_MCP_SERVICE_CALLERS=${{ vars.FINCHAT_MCP_SERVICE_CALLERS }},FINCHAT_TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),FINCHAT_LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),FINCHAT_PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)'),FINCHAT_AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           else
             echo "finchat-${ENV}-mcp not provisioned (terraform apply pending) — skipping."
           fi
