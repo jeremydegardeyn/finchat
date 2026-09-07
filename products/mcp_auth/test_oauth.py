@@ -357,6 +357,43 @@ def test_metadata_reports_deployment_faults_that_would_look_intermittent():
     assert set(body["grant_types_supported"]) == {"authorization_code", "refresh_token"}
 
 
+def test_probe_registrations_do_not_accumulate_forever():
+    """The live verifier registers a client on every run, and it runs on a schedule.
+
+    Each record grants nothing — a client_id is an identifier, and a token still needs a
+    human — so this is housekeeping rather than a control. It exists because unbounded
+    growth driven by a cron is fine until it is not.
+    """
+    def probe() -> str:
+        r = client.post("/register", json={"client_name": main.PROBE_CLIENT_NAME,
+                                           "redirect_uris": ["http://127.0.0.1:47821/cb"]})
+        assert r.status_code == 201, r.text
+        return r.json()["client_id"]
+
+    fresh = probe()
+    stale = probe()
+    main.STORE._clients[stale].created_at -= main.PROBE_CLIENT_TTL + 60
+
+    probe()  # any probe registration triggers the sweep
+
+    assert stale not in main.STORE._clients, "a stale probe client should be gone"
+    assert fresh in main.STORE._clients, "a recent one is still in use"
+
+
+def test_pruning_cannot_reach_a_client_a_person_registered():
+    """Matched on the exact checker name AND on age, so nothing a real client registered
+    is reachable from here — including one that has been around far longer."""
+    r = client.post("/register", json={"client_name": "someone's real integration",
+                                       "redirect_uris": ["https://app.example/cb"]})
+    real = r.json()["client_id"]
+    main.STORE._clients[real].created_at -= main.PROBE_CLIENT_TTL * 100
+
+    client.post("/register", json={"client_name": main.PROBE_CLIENT_NAME,
+                                   "redirect_uris": ["http://127.0.0.1:47821/cb"]})
+
+    assert real in main.STORE._clients
+
+
 def test_durability_is_probed_not_assumed(monkeypatch):
     """Reporting "configured" as "working" is the exact failure this service exists to
     avoid, and the first version of this property did it.

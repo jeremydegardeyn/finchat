@@ -180,6 +180,40 @@ class Store:
         except Exception:
             return None
 
+    def prune_probe_clients(self, name: str, older_than: float) -> int:
+        """Delete stale registrations made by an automated checker.
+
+        The live verifier registers a client on every run, and it runs on a schedule, so
+        the collection would grow forever. Each record grants nothing on its own — a
+        client_id is an identifier, and a token still needs a human — so this is
+        housekeeping rather than a control. It is here anyway: unbounded growth driven by
+        a cron is fine until it is not, and bounding it costs ten lines.
+
+        Matched on the exact `client_name` the checker uses AND on age. A real client
+        never carries that name, so nothing a person registered is reachable from here.
+        """
+        cutoff = time.time() - older_than
+        removed = 0
+        for client_id, client in list(self._clients.items()):
+            if client.client_name == name and client.created_at < cutoff:
+                self._clients.pop(client_id, None)
+                removed += 1
+        if not self.durable:
+            return removed
+        try:
+            collection = self._db().collection("mcp_oauth_clients")
+            # Equality on one field only: a compound filter would need a composite index,
+            # and an authorization server that 500s because an index is missing is a
+            # worse outcome than reading fifty documents.
+            for snap in collection.where("client_name", "==", name).limit(50).stream():
+                if float((snap.to_dict() or {}).get("created_at") or 0) < cutoff:
+                    snap.reference.delete()
+                    removed += 1
+        except Exception as exc:
+            print(f"mcp-auth: could not prune probe clients — {type(exc).__name__}: {exc}")
+        return removed
+
+
     # -- authorization codes --
     def put_code(self, code: Code) -> None:
         self._codes[code.code] = code

@@ -60,6 +60,11 @@ ALLOWED_RESOURCES = {r.strip().rstrip("/") for r in
 
 SCOPES = ["mcp:tools", "mcp:resources"]
 
+# The name `scripts/verify_oauth_live.py` registers under. It runs on a schedule, so
+# without this its registrations accumulate forever.
+PROBE_CLIENT_NAME = "finchat-verify"
+PROBE_CLIENT_TTL = 3600.0
+
 KEY = oauth.SigningKey()
 STORE = oauth.Store()
 
@@ -174,6 +179,9 @@ async def register(request: Request):
         redirect_uris=uris,
     )
     STORE.put_client(client)
+    if client.client_name == PROBE_CLIENT_NAME:
+        # Opportunistic, on the only request that can create them.
+        STORE.prune_probe_clients(PROBE_CLIENT_NAME, PROBE_CLIENT_TTL)
     return JSONResponse({
         "client_id": client.client_id,
         "client_id_issued_at": int(client.created_at),

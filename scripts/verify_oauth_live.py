@@ -120,7 +120,8 @@ def checks(issuer: str, resource: str) -> int:
     check("JWKS published", status == 200 and bool((jwks or {}).get("keys")))
 
     status, client = post(f"{issuer}/register", {
-        "client_name": "finchat-verify", "redirect_uris": ["http://127.0.0.1:47821/cb"]})
+        "client_name": "finchat-verify",  # the exact name the proxy prunes
+        "redirect_uris": ["http://127.0.0.1:47821/cb"]})
     check("dynamic client registration (RFC 7591)", status == 201, str(client)[:140])
     if status != 201:
         return failures
