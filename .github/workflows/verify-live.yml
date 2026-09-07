@@ -1,0 +1,103 @@
+name: Verify live
+
+# Two of the five faults found in Increment 31 were found by deploying and looking, not
+# by any test: an image missing a dependency it imports lazily, and a view that never
+# projected the column its API filters on. Both passed CI. Both looked healthy — the
+# process layer degrades per source, so a broken join returns a complete-looking answer
+# with `partial: ["loans"]` and a 200.
+#
+# So this runs the thing tests cannot: the deployed services, calling each other, with
+# real data behind them. It asserts on `partial`, which is the signal those faults
+# actually produced.
+#
+# Cost is the reason it is a cron and not a monitor: it wakes three scale-to-zero
+# services a few times a day, well inside Cloud Run's free tier, and uses no new GCP
+# infrastructure at all.
+on:
+  schedule:
+    # 06:15 and 18:15 UTC. Deliberately not on the hour — a cron everyone else also
+    # picked is a cron that queues.
+    - cron: "15 6,18 * * *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to verify
+        type: choice
+        options: [dev, test, prod, all]
+        default: all
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one broken environment must not hide the state of the others
+      matrix:
+        environment: [dev, test, prod]
+    environment: ${{ matrix.environment }}
+    env:
+      ENV: ${{ matrix.environment }}
+      PROJECT: ${{ vars.GCP_PROJECT }}
+      REGION: ${{ vars.GCP_REGION }}
+    steps:
+      - name: Skip environments not selected
+        id: gate
+        run: |
+          want="${{ github.event.inputs.environment || 'all' }}"
+          if [ "$want" = "all" ] || [ "$want" = "${ENV}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "not selected (${want})"
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.run == 'true'
+
+      - id: auth
+        if: steps.gate.outputs.run == 'true'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        if: steps.gate.outputs.run == 'true'
+
+      # The deep checks answer in booleans, counts and source names — never a balance,
+      # an account id or a transaction id. That matters here specifically: this output
+      # lands in a public-by-default CI log that outlives the run.
+      - name: Deep health — process and mobile
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          TOKEN="$(gcloud auth print-identity-token)"
+          fail=0
+          for svc in process mobile; do
+            url="$(gcloud run services describe "finchat-${ENV}-${svc}" \
+                     --region "${REGION}" --format='value(status.url)')"
+            echo "::group::${svc} — ${url}/healthz/deep"
+            code="$(curl -sS -o /tmp/${svc}.json -w '%{http_code}' \
+                      -H "Authorization: Bearer ${TOKEN}" "${url}/healthz/deep" || echo 000)"
+            cat /tmp/${svc}.json; echo
+            echo "::endgroup::"
+            if [ "$code" != "200" ]; then
+              echo "::error::${ENV}/${svc} deep check returned ${code}"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      # The agent channel. `tools/list` over the real transport, which is the only thing
+      # that exercises streamable HTTP, the OIDC audience and the allowed-hosts setting
+      # — the last of which fails as a bare 421 that mentions none of them.
+      - name: MCP over HTTP — initialize and list tools
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          pip install --quiet "mcp==1.27.2"
+          python scripts/verify_mcp_live.py --env "${ENV}" --region "${REGION}" \
+            --project "${PROJECT}"

@@ -179,3 +179,81 @@ def test_the_rule_lives_outside_the_web_framework():
 
     wrapper = open(os.path.join(os.path.dirname(__file__), "main.py"), encoding="utf-8").read()
     assert "def decide_next_action" not in wrapper,         "the rule belongs in overview.py; main.py is transport"
+
+
+# --- the deep health check ---------------------------------------------------
+# `/healthz` reported "ok" for four weeks while the loan filter 400'd on every call,
+# because this layer degrades per source and a degraded answer still looks complete.
+# These pin the two properties that make the deep check worth having.
+class _Sources:
+    """A stand-in for the system APIs, with one of them optionally broken."""
+
+    # The real exception types, because `main` catches `backends.SourceUnavailable` and
+    # a stub without them turns a 503 assertion into an AttributeError.
+    SourceUnavailable = backends.SourceUnavailable
+    NotFound = backends.NotFound
+
+    def __init__(self, loans_ok=True):
+        self.loans_ok = loans_ok
+
+    def mode(self):
+        return {"transactions": "demo", "loans": "demo"}
+
+    def sample_account(self):
+        return "acct-health-1"
+
+    def balance(self, account_id):
+        return {"balance": 2490.81, "currency": "USD",
+                "last_activity_at": "2026-06-07T19:27:53Z"}
+
+    def recent_transactions(self, account_id, limit):
+        return [{"transaction_id": "txn-secret-42", "txn_type": "DEPOSIT",
+                 "amount": 2633.03, "currency": "USD", "status": "POSTED",
+                 "event_time": "2026-06-07T19:27:53Z"}]
+
+    def loans_for_account(self, account_id):
+        if not self.loans_ok:
+            raise backends.SourceUnavailable("/v1/loans -> 400")
+        return []
+
+
+def _deep(sources):
+    original = main.backends
+    main.backends = sources
+    try:
+        return main.healthz_deep()
+    finally:
+        main.backends = original
+
+
+def test_the_deep_check_fails_when_a_source_is_degraded():
+    """The whole point. A 200 here is what let a broken join pass for four weeks."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as excinfo:
+        _deep(_Sources(loans_ok=False))
+    assert excinfo.value.status_code == 503
+    assert "loans" in excinfo.value.detail["degraded"]
+
+
+def test_the_deep_check_passes_when_every_source_answers():
+    """The other half: it must not be a check that always fails, which is the same as
+    a check nobody reads. Zero loans is legitimate and must stay a pass."""
+    body = _deep(_Sources(loans_ok=True))
+    assert body["status"] == "ok"
+    assert body["degraded"] == []
+    assert body["shape"]["loan_rows"] == 0
+
+
+def test_the_deep_check_emits_no_customer_data():
+    """A monitoring endpoint that returns balances turns every log sink, uptime-check
+    history and CI console into a place customer data now lives. Booleans and counts
+    only — asserted structurally, because the drift here would be one 'useful' field
+    at a time and each one would look defensible on its own.
+    """
+    import json
+
+    body = json.dumps(_deep(_Sources(loans_ok=True)))
+    for leaked in ("2490.81", "2633.03", "acct-health-1", "txn-secret-42",
+                   "2026-06-07"):
+        assert leaked not in body, f"deep check leaked {leaked!r}"

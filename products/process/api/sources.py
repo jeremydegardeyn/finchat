@@ -172,6 +172,24 @@ def recent_transactions(account_id: str, limit: int) -> list[dict]:
     return _txn_repo().get_transactions(account_id, limit) or []
 
 
+def sample_account() -> str | None:
+    """An account id with activity, for the deep health check. None if unavailable.
+
+    Exists so `/healthz/deep` can exercise the real composition path without a caller
+    supplying an account. It reaches for the same system API a channel would, which is
+    the point — a health check that skips the hops it is meant to prove is decoration.
+    """
+    if TXN_API_URL:
+        try:
+            ids = (_get(TXN_API_URL, "/v1/accounts/samples", {"n": 1}) or {}).get(
+                "account_ids") or []
+            return ids[0] if ids else None
+        except (SourceUnavailable, NotFound):
+            return None
+    ids = _txn_repo().get_sample_accounts(1) or []
+    return ids[0] if ids else None
+
+
 def loans_for_account(account_id: str) -> list[dict]:
     """Loans for one account, selected by the loan API rather than filtered here.
 

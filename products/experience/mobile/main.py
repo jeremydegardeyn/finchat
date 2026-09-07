@@ -106,6 +106,37 @@ def healthz():
     return {"status": "ok", "process_api": bool(PROCESS_API_URL)}
 
 
+@app.get("/healthz/deep", tags=["ops"])
+def healthz_deep():
+    """Ask the process API for its own deep check, and report what it said.
+
+    This channel has exactly one backend, so its deep health IS the process API's plus
+    the hop to it — which is the hop that is invisible from either end. Nothing is
+    recomputed here, for the same reason nothing is decided here.
+
+    No customer data crosses this boundary either: the process API answers in booleans
+    and counts, and this passes that through unchanged.
+    """
+    if not PROCESS_API_URL:
+        raise HTTPException(503, "PROCESS_API_URL is not configured")
+    url = f"{PROCESS_API_URL}/healthz/deep"
+    headers = {"Accept": "application/json"}
+    tok = _id_token(PROCESS_API_URL)
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    try:
+        with urllib.request.urlopen(
+                urllib.request.Request(url, headers=headers), timeout=TIMEOUT) as r:
+            return {"status": "ok", "process": json.loads(r.read().decode() or "null")}
+    except urllib.error.HTTPError as e:
+        # A degraded process layer is a degraded mobile channel. Surfacing 200 here
+        # because *this* service is up would be the same quiet success that let a
+        # broken join look like a customer with no loans.
+        raise HTTPException(503, f"process API deep check: {e.code} {e.reason}") from None
+    except Exception:
+        raise HTTPException(503, "process API unreachable") from None
+
+
 @app.get("/v1/home", tags=["mobile"])
 def home(account_id: str = Query(..., description="Account to render the home screen for")):
     """Everything the mobile home screen draws, in one request.

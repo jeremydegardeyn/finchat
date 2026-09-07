@@ -58,6 +58,54 @@ def healthz():
     return {"status": "ok", "sources": backends.mode()}
 
 
+@app.get("/healthz/deep", tags=["ops"])
+def healthz_deep():
+    """Compose a real overview and report which sources answered. No customer data.
+
+    `/healthz` says this process is running. It said so for four weeks while
+    `GET /v1/loans?account_id=` returned 400 on every call, because this layer degrades
+    per source: a dead loan API costs the customer their loan section, named in
+    `partial`, and the response still looks complete. That is the right behaviour for a
+    channel and it makes a broken join indistinguishable from a customer with no loans.
+
+    So the signal worth monitoring is `partial` being non-empty, and this endpoint is
+    the smallest thing that produces it: fetch a sample account, run the real
+    composition, and return booleans and counts. Deliberately no balances, no
+    transaction ids, no account id — a monitoring endpoint that emits customer data
+    turns every log sink and CI console into a place that data now lives.
+
+    503 when a source is degraded, so an uptime check or a scheduled job can treat it as
+    a failure without parsing the body.
+    """
+    account = backends.sample_account()
+    if not account:
+        raise HTTPException(503, "no sample account available from the transactions API")
+
+    try:
+        view = capability.build_overview(account, backends, RECENT_LIMIT)
+    except backends.SourceUnavailable as e:
+        raise HTTPException(503, f"composition failed: {e}") from None
+
+    degraded = list(view.get("partial") or [])
+    body = {
+        "status": "degraded" if degraded else "ok",
+        "sources": backends.mode(),
+        "degraded": degraded,
+        # Shape only. `balance_present` is False for a masked balance too (ADR-0019),
+        # which is a policy outcome rather than a fault — hence it is reported, not
+        # asserted on. `loans` of zero is likewise legitimate; `partial` is the fault.
+        "shape": {
+            "balance_present": view.get("balance") is not None,
+            "activity_rows": len(view.get("recent_activity") or []),
+            "loan_rows": len(view.get("loans") or []),
+            "next_action": (view.get("next_action") or {}).get("kind"),
+        },
+    }
+    if degraded:
+        raise HTTPException(503, body)
+    return body
+
+
 @app.get("/v1/customers/by-account/{account_id}/overview",
          response_model=Overview, tags=["customer"])
 def customer_overview(account_id: str):
