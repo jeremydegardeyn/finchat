@@ -244,6 +244,10 @@ module "mcp_server" {
   service_name    = "${var.name_prefix}-${var.env}-mcp"
   service_account = module.foundation.service_account_emails["mcp"]
   min_instances   = var.run_min_instances
+  # Public only where a hosted client actually needs it, and only alongside the OAuth
+  # env vars the deploy sets — see the variable's description for why the two are
+  # deliberately separate switches.
+  allow_unauthenticated = var.mcp_public
   # Backend URLs + the allowed-hosts allow-list are set by CI/CD alongside the image.
   env_vars = {}
   # Remote MCP clients. Empty by default: a service with no named callers is a service

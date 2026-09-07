@@ -380,3 +380,22 @@ def test_the_two_caller_kinds_are_distinguishable_in_the_claims(service_auth, mo
     _, jwk = keypair
     monkeypatch.setattr(service_auth, "_jwks", (time.time() + 3600, {jwk["kid"]: jwk}))
     assert service_auth.verify(_google_token(service_auth, monkeypatch))["kind"] == "service"
+
+
+def test_the_advertised_metadata_url_is_the_rfc_9728_form(auth):
+    """The well-known segment goes between the origin and the resource path. A client
+    that builds this itself per the RFC — rather than following our hint — gets a 401
+    from the obvious spelling, and the only symptom is a connector that will not connect.
+    """
+    assert auth.metadata_url() == (
+        "https://mcp.example/.well-known/oauth-protected-resource/mcp")
+    assert auth.metadata_url() in auth.challenge()
+
+
+def test_every_spelling_of_the_discovery_path_is_served(auth):
+    for path in ("/.well-known/oauth-protected-resource",
+                 "/.well-known/oauth-protected-resource/mcp",
+                 "/mcp/.well-known/oauth-protected-resource"):
+        assert auth.is_metadata_path(path), path
+    for path in ("/mcp", "/healthz", "/well-known/oauth-protected-resource"):
+        assert not auth.is_metadata_path(path), path

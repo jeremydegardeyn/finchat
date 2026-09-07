@@ -410,7 +410,7 @@ def _serve_http_with_oauth() -> None:
         path = scope.get("path", "")
         # RFC 9728 discovery is necessarily unauthenticated: it is what a client reads
         # *because* it got a 401 and needs to know where to go.
-        if path.rstrip("/").endswith("/.well-known/oauth-protected-resource"):
+        if auth.is_metadata_path(path):
             await _json(send, 200, auth.protected_resource_metadata())
             return
         if path in ("/healthz", "/health"):

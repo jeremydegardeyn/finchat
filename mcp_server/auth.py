@@ -82,9 +82,35 @@ def protected_resource_metadata() -> dict:
             "scopes_supported": ["mcp:tools", "mcp:resources"]}
 
 
+def metadata_url() -> str:
+    """The RFC 9728 well-known URL for this resource.
+
+    The segment goes BETWEEN the origin and the resource path — `https://host/mcp`
+    becomes `https://host/.well-known/oauth-protected-resource/mcp`, not
+    `https://host/mcp/.well-known/...`. The difference matters for a client that builds
+    the URL itself per the RFC instead of following the WWW-Authenticate hint: the
+    obvious spelling 404s or 401s for exactly those clients, which are the spec-compliant
+    ones.
+    """
+    origin = SERVICE_URL
+    path = RESOURCE[len(origin):] if RESOURCE.startswith(origin) else ""
+    return f"{origin}/.well-known/oauth-protected-resource{path}"
+
+
+def is_metadata_path(path: str) -> bool:
+    """Serve the document at any of the spellings in the wild.
+
+    The RFC's form, the path-suffixed form some servers use, and the bare root. It is a
+    public document naming a public authorization server, so answering to all three costs
+    nothing and removes a discovery failure that presents as "the connector will not
+    connect" with no other symptom.
+    """
+    return "/.well-known/oauth-protected-resource" in path
+
+
 def challenge() -> str:
     """The `WWW-Authenticate` header a 401 must carry, naming the metadata document."""
-    return (f'Bearer resource_metadata="{RESOURCE}/.well-known/oauth-protected-resource"'
+    return (f'Bearer resource_metadata="{metadata_url()}"'
             if enabled() else "Bearer")
 
 

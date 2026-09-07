@@ -186,3 +186,18 @@ variable "enable_mcp_oauth" {
   EOT
   default     = false
 }
+
+variable "mcp_public" {
+  type        = bool
+  description = <<-EOT
+    Serve the MCP endpoint to the public internet, so hosted clients that cannot mint a
+    Google OIDC token can reach it (ADR-0020).
+
+    Off by default and NOT derived from the OAuth variables on purpose: opening this door
+    should take two independent changes rather than one edit. It is only survivable when
+    `FINCHAT_MCP_OAUTH_ISSUER` and `FINCHAT_MCP_RESOURCE` are set on the deploy, because
+    turning this on removes Cloud Run IAM — the thing that has been authenticating the
+    in-GCP callers all along — and leaves the server's own validation as the only gate.
+  EOT
+  default     = false
+}
