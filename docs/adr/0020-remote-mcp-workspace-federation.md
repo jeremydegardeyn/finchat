@@ -100,6 +100,40 @@ external clients use the OAuth path — the static secret never leaves the perim
   ([ADR-0008](0008-model-armor-llm-screening.md)), and bind tokens to the resource via
   RFC 8707 so a token for one MCP endpoint can't be replayed against another.
 
+## Built — 2026-09-07
+
+`products/mcp_auth/` (the proxy) and `mcp_server/auth.py` (validation in the resource
+server). Deployed to **dev only**: `enable_mcp_oauth` is false elsewhere, because this is
+the platform's one publicly reachable service and standing it up where no hosted client
+will connect adds public surface for nothing.
+
+**One manual step, and it is not automatable.** Google OAuth clients cannot be configured
+by `gcloud` or Terraform, so the proxy's callback has to be added by hand:
+
+> Cloud Console → APIs & Services → Credentials → the FinChat OAuth client →
+> **Authorized redirect URIs** → add `https://<mcp-auth service URL>/callback`
+
+Until that exists, Google answers `redirect_uri_mismatch` and the flow stops at sign-in.
+Nothing in the error mentions this file.
+
+**What the implementation settled that the decision above left open:**
+
+| Choice | Why |
+|---|---|
+| PKCE `S256` only | `plain` makes the challenge equal the verifier, so offering it as a fallback is the same as not doing PKCE. It is absent from the metadata, not merely rejected. |
+| Codes single-use *by construction* | `take_code` fetches and deletes in one step, rather than checking a `used` flag somebody can forget. Replaying an intercepted redirect is the attack this stops. |
+| Refresh tokens rotate, stored hashed | A stolen refresh token is usable at most once, and the legitimate client's next refresh fails loudly instead of the theft being silent. The store holds hashes so reading it does not yield working credentials. |
+| Redirect URIs match exactly | Prefix matching would let a registered `https://app/cb` also permit `https://app/cb.evil.com`, and the code goes to the attacker. |
+| Invalid redirects are *rendered*, not redirected | Sending an OAuth error to an unvalidated URI turns an authorization server into an open redirect — a phishing primitive on the bank's own domain. |
+| `alg` pinned to RS256 at the resource server | The algorithm a server accepts is a property of the server. Reading it from the token is the `alg: none` and algorithm-confusion family. |
+| Allow-lists fail closed | Unset means nobody, not everybody. Mutation testing found the subtle version of this: with only an email list configured, a plausible reading of the domain check admits *any* Google identity. |
+
+**Deliberately still open.** The token names the person, and the MCP server logs it — but
+the tools do not yet *act* as them. Binding data access to that identity is ADR-0019's
+job at the BigQuery layer and a separate change; until it lands, a hosted client is
+authenticated and audited as a person while reading with the service's entitlements.
+That is a smaller gap than the one this ADR closed, and it is the next one.
+
 ## Alternatives considered
 
 - **Static shared bearer token.** Simplest; disqualified — no identity, no per-user
