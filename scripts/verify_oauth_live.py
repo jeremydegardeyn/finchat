@@ -137,8 +137,24 @@ def checks(issuer: str, resource: str) -> int:
         params.update(over)
         return redirect_of(f"{issuer}/authorize?{urllib.parse.urlencode(params)}")
 
-    check("a valid request is handed to Google",
-          "accounts.google.com" in authorize())
+    handoff = authorize()
+    check("a valid request is handed to Google", "accounts.google.com" in handoff)
+
+    # Follow it to Google and read the answer WITHOUT signing in. Google matches
+    # redirect_uri by exact string, and the registration lives in the Cloud Console,
+    # which no Terraform or gcloud reconciles — so it can be edited away and nothing
+    # here would notice until a person failed to log in. The failure page names it.
+    if "accounts.google.com" in handoff:
+        try:
+            with urllib.request.urlopen(handoff, timeout=30) as r:
+                page = r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            page = e.read().decode("utf-8", "replace")
+        except Exception as e:
+            page = f"{type(e).__name__}: {e}"
+        check("Google accepts the proxy's registered redirect_uri",
+              "redirect_uri_mismatch" not in page,
+              "add {issuer}/callback to the OAuth client's Authorized redirect URIs")
     check("PKCE downgrade is refused",
           "error=invalid_request" in authorize(code_challenge_method="plain"))
     check("an unlisted resource is refused",
