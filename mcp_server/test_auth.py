@@ -304,6 +304,23 @@ def _google_token(auth_module, monkeypatch, **over):
     return jwt.encode(claims, "secret", algorithm="HS256")
 
 
+def test_service_callers_parse_from_either_separator(monkeypatch):
+    """`gcloud run deploy --set-env-vars` uses the comma as its own delimiter, so a
+    comma-separated list of emails is read as separate variables and the deploy dies with
+    "Bad syntax for dict arg" — naming the second email, not the reason. The deploy passes
+    semicolons; both are accepted so a hand-written comma is not a trap.
+    """
+    monkeypatch.setenv("FINCHAT_MCP_OAUTH_ISSUER", ISSUER)
+    monkeypatch.setenv("FINCHAT_MCP_RESOURCE", RESOURCE)
+    for raw in ("a@x.iam.gserviceaccount.com;b@y.iam.gserviceaccount.com",
+                "a@x.iam.gserviceaccount.com,b@y.iam.gserviceaccount.com",
+                " a@x.iam.gserviceaccount.com ; B@Y.iam.gserviceaccount.com "):
+        monkeypatch.setenv("FINCHAT_MCP_SERVICE_CALLERS", raw)
+        module = _load(f"finchat_mcp_auth_sep_{abs(hash(raw))}", "auth.py")
+        assert module.SERVICE_CALLERS == {"a@x.iam.gserviceaccount.com",
+                                          "b@y.iam.gserviceaccount.com"}, raw
+
+
 def test_a_named_service_account_may_call_with_a_google_token(service_auth, monkeypatch):
     token = _google_token(service_auth, monkeypatch)
     claims = service_auth.verify(token)

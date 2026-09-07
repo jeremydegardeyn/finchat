@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.request
 
@@ -33,8 +34,15 @@ ISSUER = os.getenv("FINCHAT_MCP_OAUTH_ISSUER", "").rstrip("/")
 # audienced to this service. Empty means no service may call — the same fail-closed
 # default as everything else here, and it matters more once the service is public,
 # because Cloud Run is no longer checking anything on the way in.
+# Separated by ';' OR ',', and tolerant of both on purpose. `gcloud run deploy
+# --set-env-vars` uses the comma as ITS delimiter, so a comma-separated list of emails
+# is parsed as separate variables and the deploy fails with "Bad syntax for dict arg" —
+# which names the second email and not the reason. The deploy therefore passes ';', and
+# accepting ',' too means the next person to write one by hand is not caught by a rule
+# they had no way to know.
 SERVICE_CALLERS = {e.strip().lower() for e in
-                   os.getenv("FINCHAT_MCP_SERVICE_CALLERS", "").split(",") if e.strip()}
+                   re.split(r"[;,]", os.getenv("FINCHAT_MCP_SERVICE_CALLERS", ""))
+                   if e.strip()}
 RESOURCE = os.getenv("FINCHAT_MCP_RESOURCE", "").rstrip("/")
 # The audience Google mints for a service-to-service call: the service URL, with
 # no path. RESOURCE carries the /mcp path, which is what OAuth clients ask for.
