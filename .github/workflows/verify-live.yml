@@ -91,6 +91,25 @@ jobs:
           done
           exit $fail
 
+      # The OAuth proxy, where it exists. Skipped rather than failed elsewhere: it is
+      # provisioned only where a hosted client will actually connect, so its absence is
+      # a configuration choice and not a fault.
+      #
+      # Worth watching on a schedule specifically because its two worst failures are
+      # silent — a redeploy that loses the signing-key secret, or a Firestore database
+      # the client cannot use, both of which look like a working service that
+      # occasionally logs people out.
+      - name: OAuth proxy — discovery, DCR and the refusals
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          if gcloud run services describe "finchat-${ENV}-mcp-auth" --region "${REGION}" >/dev/null 2>&1; then
+            pip install --quiet "pyjwt[crypto]==2.10.1"
+            python scripts/verify_oauth_live.py --env "${ENV}" --region "${REGION}"               --project "${PROJECT}"
+          else
+            echo "finchat-${ENV}-mcp-auth not provisioned (enable_mcp_oauth is false) — skipping."
+          fi
+
       # The agent channel. `tools/list` over the real transport, which is the only thing
       # that exercises streamable HTTP, the OIDC audience and the allowed-hosts setting
       # — the last of which fails as a bare 421 that mentions none of them.
