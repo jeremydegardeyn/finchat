@@ -117,7 +117,33 @@ class Store:
         self._clients: dict[str, Client] = {}
         self._codes: dict[str, Code] = {}
         self._refresh: dict[str, dict] = {}
-        self.durable = bool(self.project)
+        self._probed: bool | None = None
+
+    @property
+    def durable(self) -> bool:
+        """Whether the shared store actually WORKS — not whether it is configured.
+
+        The first version of this returned `bool(project)`, which is the same optimistic
+        reporting this whole service was built to avoid: the deployment pointed at a
+        Firestore database that is in DATASTORE mode, every write raised, every exception
+        was swallowed into the in-memory fallback, and the metadata endpoint cheerfully
+        said `durable: true`. A health signal that reports intent rather than outcome is
+        worse than none, because it is believed.
+
+        So it writes and reads back once, and caches the answer. Once, because a probe
+        per metadata fetch would bill and stall a discovery endpoint that clients poll.
+        """
+        if self._probed is not None:
+            return self._probed
+        self._probed = False
+        if self.project:
+            try:
+                ref = self._db().collection("mcp_oauth_probe").document("startup")
+                ref.set({"at": time.time()})
+                self._probed = ref.get().exists
+            except Exception as exc:
+                print(f"mcp-auth: store is NOT durable — {type(exc).__name__}: {exc}")
+        return self._probed
 
     def _db(self):
         from google.cloud import firestore

@@ -357,6 +357,44 @@ def test_metadata_reports_deployment_faults_that_would_look_intermittent():
     assert set(body["grant_types_supported"]) == {"authorization_code", "refresh_token"}
 
 
+def test_durability_is_probed_not_assumed(monkeypatch):
+    """Reporting "configured" as "working" is the exact failure this service exists to
+    avoid, and the first version of this property did it.
+
+    The deployment pointed at a Firestore database in DATASTORE mode. Every write raised,
+    every exception was swallowed into the in-memory fallback, and the metadata endpoint
+    said `durable: true` — so the one signal that would have named the fault agreed that
+    nothing was wrong.
+    """
+    store = oauth.Store(project="", database="x")
+    assert store.durable is False, "no project configured cannot be durable"
+
+    broken = oauth.Store(project="p", database="x")
+    monkeypatch.setattr(type(broken), "_db",
+                        lambda self: (_ for _ in ()).throw(RuntimeError("DATASTORE mode")))
+    assert broken.durable is False, "a store whose writes raise is not durable"
+
+    class _Ref:
+        def set(self, _):
+            return None
+
+        def get(self):
+            return type("S", (), {"exists": True})()
+
+    working = oauth.Store(project="p", database="x")
+    monkeypatch.setattr(type(working), "_db", lambda self: type(
+        "DB", (), {"collection": lambda self, _: type(
+            "C", (), {"document": lambda self, _: _Ref()})()})())
+    assert working.durable is True
+
+    # Probed once, then cached: a probe per metadata fetch would bill and stall an
+    # endpoint clients poll.
+    calls = []
+    monkeypatch.setattr(type(working), "_db",
+                        lambda self: calls.append(1) or (_ for _ in ()).throw(RuntimeError))
+    assert working.durable is True and calls == []
+
+
 def test_a_stable_pem_produces_a_stable_key_id():
     """A redeploy with the same key must not invalidate every cached JWKS."""
     first = oauth.SigningKey()
