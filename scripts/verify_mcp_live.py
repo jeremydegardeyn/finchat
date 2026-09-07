@@ -17,6 +17,8 @@ import argparse
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # A deploy that serves an empty or truncated catalogue is a working HTTP endpoint and a
@@ -39,6 +41,22 @@ def _gcloud(*args: str) -> str:
     out = subprocess.run([exe, *args], capture_output=True, text=True,
                          stdin=subprocess.DEVNULL)
     return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def _anonymous(url: str) -> tuple[int, str]:
+    """Status and WWW-Authenticate for a request carrying no credential at all.
+
+    On a public, OAuth-enforcing endpoint this is what EVERY caller is until they
+    authenticate, and Cloud Run is no longer refusing them on our behalf — so it is the
+    contract most worth watching.
+    """
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=30) as r:
+            return r.status, r.headers.get("www-authenticate", "")
+    except urllib.error.HTTPError as e:
+        return e.code, (e.headers or {}).get("www-authenticate", "")
+    except Exception:
+        return 0, ""
 
 
 def _token(audience: str) -> str | None:
@@ -89,6 +107,26 @@ def main() -> int:
                     "resources": len(resources.resources),
                 }
 
+    # When the endpoint is public and enforcing OAuth (ADR-0020), the interesting
+    # assertions are what an ANONYMOUS caller gets — because that is now everyone until
+    # they authenticate, and Cloud Run is no longer refusing them on our behalf.
+    public_checks = []
+    anon_code, challenge_header = _anonymous(f"{url}/mcp")
+    if anon_code == 401:
+        if "resource_metadata=" not in (challenge_header or ""):
+            public_checks.append("401 carries no resource_metadata — a hosted client "
+                                 "cannot discover where to authenticate")
+        # The RFC 9728 form specifically: a client that builds this itself, rather than
+        # following our header, is the spec-compliant one and must not get a 401.
+        meta_code, _ = _anonymous(f"{url}/.well-known/oauth-protected-resource/mcp")
+        if meta_code != 200:
+            public_checks.append(
+                f"RFC 9728 discovery returned {meta_code}; a compliant client that "
+                "constructs the URL itself cannot find the authorization server")
+    elif anon_code not in (403, 0):
+        public_checks.append(f"anonymous request returned {anon_code} — expected 401 "
+                             "(public + enforcing) or 403 (private)")
+
     try:
         got = anyio.run(probe)
     except Exception as exc:
@@ -98,7 +136,7 @@ def main() -> int:
     print(f"{name}: {got['server']} — {len(got['tools'])} tools, "
           f"{got['resources']} resources, {got['instructions']} chars of instructions")
 
-    problems = []
+    problems = list(public_checks)
     missing = sorted(EXPECTED - got["tools"])
     if missing:
         problems.append(f"missing tools: {missing}")
