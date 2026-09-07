@@ -248,6 +248,30 @@ module "mcp_server" {
   labels   = local.labels
 }
 
+# --- The OAuth proxy hosted MCP clients need (ADR-0020) ----------------------
+# PUBLIC on purpose: a client calls /register, /authorize and /token before it has any
+# credential at all, so IAM cannot be the gate here — the code is. That is why this
+# service holds no data access, shares no modules with the platform, and fails closed
+# when `OAUTH_ALLOWED_DOMAINS` and `OAUTH_ALLOWED_RESOURCES` are unset, which is how a
+# provisioned-but-unconfigured environment behaves.
+#
+# It is NOT in the data path. Once a token is issued the client talks to the MCP server
+# directly, so this service cannot add latency to a tool call or take tools down when it
+# restarts.
+module "mcp_auth" {
+  count           = var.enable_mcp_oauth ? 1 : 0
+  source          = "../../modules/cloud_run"
+  project_id      = var.project_id
+  region          = var.region
+  service_name    = "${var.name_prefix}-${var.env}-mcp-auth"
+  service_account = module.foundation.service_account_emails["mcp_auth"]
+  min_instances   = var.run_min_instances
+  env_vars        = {}
+  # The one service in this platform that anonymous callers may reach.
+  allow_unauthenticated = true
+  labels                = local.labels
+}
+
 module "ui" {
   source                = "../../modules/cloud_run"
   project_id            = var.project_id

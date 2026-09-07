@@ -172,3 +172,17 @@ variable "mcp_client_service_accounts" {
   EOT
   default     = []
 }
+
+variable "enable_mcp_oauth" {
+  type        = bool
+  description = <<-EOT
+    Provision the OAuth proxy that hosted MCP clients need (ADR-0020).
+
+    Off by default, and deliberately a separate decision from deploying the MCP server
+    itself: this is the only publicly reachable service in the platform, and standing it
+    up in an environment nobody is going to connect a hosted client to adds public
+    surface for no benefit. Turning it on still leaves it refusing every identity until
+    OAUTH_ALLOWED_DOMAINS and OAUTH_ALLOWED_RESOURCES are configured at deploy time.
+  EOT
+  default     = false
+}

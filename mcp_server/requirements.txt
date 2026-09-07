@@ -11,3 +11,7 @@ google-auth==2.34.0
 # and raises ImportError at the first token mint, which reads as "the backend is down".
 # Nothing else here pulls it in — this image has no google-cloud-* client.
 requests==2.32.3
+# Resource-server token validation for the OAuth path (ADR-0020). Imported only by
+# `auth.py`, which `main()` reaches only over the HTTP transport — stdio still runs on
+# the SDK and the standard library, which is what keeps `claude mcp add` a one-liner.
+pyjwt[crypto]==2.10.1

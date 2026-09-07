@@ -50,6 +50,14 @@ locals {
     # every caller of the MCP endpoint. It reaches data only through the same governed
     # APIs the web channel uses, each granted per-target below.
     mcp = { display = "MCP server — agent channel over HTTP (Cloud Run)", roles = [] }
+    # The OAuth proxy (ADR-0020). It reads the Google client secret and nothing
+    # else: it never touches data, never calls another FinChat service, and is the
+    # only service here reachable from the public internet by design. Firestore is
+    # for its own clients/codes/refresh records.
+    mcp_auth = { display = "MCP OAuth proxy — authorization server (Cloud Run)", roles = [
+      "roles/secretmanager.secretAccessor",
+      "roles/datastore.user",
+    ] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [
       "roles/bigquery.dataEditor",
       "roles/bigquery.jobUser",

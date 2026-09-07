@@ -1,0 +1,69 @@
+%%{init: {"theme": "base", "themeVariables": {
+  "fontFamily": "IBM Plex Sans, Segoe UI, sans-serif",
+  "fontSize": "13px",
+  "primaryColor": "#eef2f7", "primaryTextColor": "#17202b",
+  "primaryBorderColor": "#93a4b8", "lineColor": "#6b7c90",
+  "clusterBkg": "#f7f9fb", "clusterBorder": "#c6d0dc"
+}} }%%
+flowchart TB
+
+  subgraph clients["MCP clients — three, with three different identities"]
+    direction LR
+    LOCAL["Claude Code / Desktop<br/><i>stdio, on a laptop</i>"]
+    GATEWAY["Bank AI Gateway<br/><i>Cloud Run, separate repo</i>"]
+    HOSTED["claude.ai connector<br/><i>hosted, cannot hold a secret</i>"]
+  end
+
+  subgraph authz["Authorization only — never in the data path (ADR-0020)"]
+    direction LR
+    PROXY["finchat-&lt;env&gt;-mcp-auth<br/>OAuth 2.1 · DCR · PKCE<br/><i>public</i>"]
+    GOOGLE["Google / Cloud Identity<br/><i>hd claim is the access policy</i>"]
+  end
+
+  subgraph experience["Experience layer — one per channel"]
+    direction LR
+    MCP["finchat-&lt;env&gt;-mcp<br/><i>agent channel · private</i>"]
+    BFF["ui / server.py<br/><i>web BFF</i>"]
+    MOBILE["finchat-&lt;env&gt;-mobile<br/><i>GET /v1/home</i>"]
+  end
+
+  PROCESS["finchat-&lt;env&gt;-process<br/><b>owns next_action</b> — the rule all three channels render"]
+
+  subgraph system["System layer — each owns its domain"]
+    direction LR
+    TXN["txn-api"]
+    LOAN["loan-api"]
+    AGENT["agent<br/><i>/search</i>"]
+  end
+
+  GOLD[("BigQuery Gold<br/>column-level security")]
+
+  %% --- authorization: once per session, then out of the way ---
+  HOSTED -. "1 · register (DCR) + PKCE" .-> PROXY
+  PROXY -. "2 · federate the human login" .-> GOOGLE
+  GOOGLE -. "3 · id_token · hd verified" .-> PROXY
+  PROXY -. "4 · short-lived token<br/>aud = this MCP resource" .-> HOSTED
+
+  %% --- data: every client reaches the resource server directly ---
+  LOCAL -->|"gcloud id-token<br/><b>identity: the person</b>"| MCP
+  GATEWAY -->|"OIDC · run.invoker<br/><b>identity: the service</b>"| MCP
+  HOSTED -->|"5 · Bearer + validated<br/>against the proxy JWKS<br/><b>identity: the person</b>"| MCP
+
+  MCP --> PROCESS
+  BFF --> PROCESS
+  MOBILE --> PROCESS
+  PROCESS --> TXN
+  PROCESS --> LOAN
+  MCP --> AGENT
+  TXN --> GOLD
+  LOAN --> GOLD
+
+  classDef proxy fill:#e6f0ea,stroke:#6f9a80,color:#17202b
+  classDef rule fill:#e8eef7,stroke:#7b93b5,color:#17202b
+  class PROXY,GOOGLE proxy
+  class PROCESS rule
+
+  style clients fill:#f7f9fb,stroke:#c6d0dc
+  style authz fill:#f4f8f5,stroke:#bcd0c2
+  style experience fill:#f7f9fb,stroke:#c6d0dc
+  style system fill:#f7f9fb,stroke:#c6d0dc

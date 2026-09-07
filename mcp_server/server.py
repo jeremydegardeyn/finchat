@@ -362,6 +362,11 @@ def finchat_analyst(question: str) -> str:
 
 
 def main() -> None:
+    # Imported here, not at module scope: the stdio entry point must keep working
+    # with nothing but the standard library and the SDK, because `claude mcp add`
+    # is a one-liner and PyJWT is only needed by the HTTP resource server.
+    import auth
+
     transport = os.getenv("FINCHAT_MCP_TRANSPORT", "stdio").strip().lower()
     if transport in ("http", "streamable-http", "streamable_http"):
         # DNS-rebinding protection trusts localhost only by default, so a server
@@ -375,9 +380,78 @@ def main() -> None:
                 allowed_hosts=allowed,
                 allowed_origins=[f"https://{h}" for h in allowed],
             )
-        mcp.run(transport="streamable-http")
+        if auth.enabled():
+            _serve_http_with_oauth()
+        else:
+            mcp.run(transport="streamable-http")
     else:
         mcp.run(transport="stdio")
+
+
+def _serve_http_with_oauth() -> None:
+    """Run the streamable-HTTP app behind bearer-token validation (ADR-0020).
+
+    ASGI middleware rather than the SDK's own auth plumbing: this is a handful of lines
+    that behave the same across SDK versions, and the SDK's shape here has moved more
+    than once. What it must not be is a second place that decides *what* a caller may
+    do — `auth.verify` establishes only that a request carries a valid token naming a
+    person, and every scoping decision stays where it already is.
+    """
+    import auth
+    import uvicorn
+
+    inner = mcp.streamable_http_app()
+
+    async def app(scope, receive, send):
+        if scope["type"] != "http":
+            await inner(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        # RFC 9728 discovery is necessarily unauthenticated: it is what a client reads
+        # *because* it got a 401 and needs to know where to go.
+        if path.rstrip("/").endswith("/.well-known/oauth-protected-resource"):
+            await _json(send, 200, auth.protected_resource_metadata())
+            return
+        if path in ("/healthz", "/health"):
+            await _json(send, 200, {"status": "ok", "oauth": True})
+            return
+
+        header = ""
+        for key, value in scope.get("headers") or []:
+            if key.lower() == b"authorization":
+                header = value.decode("latin-1")
+                break
+        token = header[7:].strip() if header[:7].lower() == "bearer " else ""
+        try:
+            claims = auth.verify(token)
+        except auth.Unauthorized as exc:
+            print(f"mcp: 401 {exc.detail}")   # the reason goes to the log, not the caller
+            await _json(send, 401, {"error": "invalid_token"},
+                        extra=[(b"www-authenticate", auth.challenge().encode())])
+            return
+
+        # Who asked, for the audit trail. The tools do not read it yet — binding data
+        # access to this identity is ADR-0019's job and a separate change — but a request
+        # that reached the tools without being attributable is exactly what ADR-0020
+        # exists to prevent, so it is recorded at the boundary that knows.
+        print(f"mcp: authorized {claims.get('email')} "
+              f"(client {claims.get('client_id')}, jti {claims.get('jti')})")
+        await inner(scope, receive, send)
+
+    uvicorn.run(app, host=os.getenv("HOST", "0.0.0.0"),
+                port=int(os.getenv("PORT", "8080")))
+
+
+async def _json(send, status: int, body: dict, extra: list | None = None) -> None:
+    import json as _json_mod
+
+    payload = _json_mod.dumps(body).encode()
+    headers = [(b"content-type", b"application/json"),
+               (b"content-length", str(len(payload)).encode())]
+    await send({"type": "http.response.start", "status": status,
+                "headers": headers + (extra or [])})
+    await send({"type": "http.response.body", "body": payload})
 
 
 if __name__ == "__main__":

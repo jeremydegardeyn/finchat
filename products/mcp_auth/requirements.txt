@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+python-multipart==0.0.20
+# The token endpoint is form-encoded (RFC 6749); FastAPI needs python-multipart to read
+# Form() at all, and without it every /token call fails at import-time validation.
+pyjwt[crypto]==2.10.1
+cryptography==44.0.0
+google-auth==2.34.0
+# google-auth imports its requests transport lazily and does not depend on `requests`.
+# Nothing else here pulls it in, and the failure is an ImportError at the first Google
+# ID-token verification, reported as a credentials problem.
+requests==2.32.3
+google-cloud-firestore==2.19.0
