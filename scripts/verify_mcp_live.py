@@ -17,6 +17,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 # A deploy that serves an empty or truncated catalogue is a working HTTP endpoint and a
 # broken channel. These are the tools every persona sees; the approver-only ones are
@@ -40,18 +41,14 @@ def _gcloud(*args: str) -> str:
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
-def _token() -> str | None:
-    """The JWT gcloud holds — matched by shape, not taken as the whole of stdout.
+def _token(audience: str) -> str | None:
+    """Delegated to `gcp_id_token`, which knows that a human and a federated CI identity
+    mint id-tokens by different routes — a difference that broke the first scheduled run
+    of this check in every environment after passing locally every time."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from gcp_id_token import id_token
 
-    The launcher can print a line of its own first, and the resulting Authorization
-    header is rejected with a message about return characters that says nothing about
-    gcloud.
-    """
-    for line in reversed(_gcloud("auth", "print-identity-token").splitlines()):
-        line = line.strip()
-        if line.count(".") == 2 and " " not in line and len(line) > 100:
-            return line
-    return None
+    return id_token(audience)
 
 
 def main() -> int:
@@ -68,7 +65,7 @@ def main() -> int:
         print(f"{name} is not deployed in {args.project}", file=sys.stderr)
         return 1
 
-    token = _token()
+    token = _token(url)
     if not token:
         print("no identity token — is gcloud authenticated?", file=sys.stderr)
         return 2

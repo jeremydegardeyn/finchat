@@ -8,9 +8,11 @@ dependency, an unset URL, an IAM grant nobody made.
     python scripts/verify_layers_live.py --env dev
     python scripts/verify_layers_live.py --env dev --account acct-001 --json
 
-It authenticates as you, via `gcloud auth print-identity-token`, so it also answers the
-question "can a human with run.invoker reach this" — which is a different question from
-"can the service reach it", and the two have failed independently.
+It authenticates as whoever is running it — a human locally, the federated CI identity on
+a schedule — so it also answers "can a caller with run.invoker reach this", which is a
+different question from "can the service reach it", and the two have failed independently.
+Tokens are minted per audience by `gcp_id_token`; see that module for why the two
+identities need different routes.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 REGION = "us-central1"
 PROJECT = "strongsville-city-schools"
@@ -48,8 +51,12 @@ def service_url(name: str) -> str:
               "--region", REGION, "--project", PROJECT, "--format=value(status.url)")
 
 
-def token() -> str:
-    return sh(shutil.which("gcloud") or "gcloud", "auth", "print-identity-token")
+def token(audience: str = "") -> str:
+    """A human prints one; a federated CI identity has to mint one. See gcp_id_token."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from gcp_id_token import id_token
+
+    return id_token(audience) or ""
 
 
 def get(url: str, tok: str, timeout: float = 90) -> tuple[int, object, float]:
@@ -109,11 +116,6 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    tok = token()
-    if not tok:
-        print("No identity token. Run `gcloud auth login` first.", file=sys.stderr)
-        return 2
-
     report: dict = {"env": args.env, "account": args.account, "hops": []}
     for layer, service, path in LAYERS:
         name = f"finchat-{args.env}-{service}"
@@ -121,6 +123,16 @@ def main() -> int:
         if not url:
             report["hops"].append({"layer": layer, "service": service,
                                    "status": "not deployed"})
+            continue
+        # One token per audience, not one for the walk: a Cloud Run id-token names the
+        # service it is for, and the federated CI identity cannot mint an audience-less
+        # one at all. A human's token happens to work everywhere, which is exactly why
+        # the single-token version passed locally and failed on the first scheduled run.
+        tok = token(url)
+        if not tok:
+            report["hops"].append({"layer": layer, "service": service, "url": url,
+                                   "http": 0, "seconds": 0.0,
+                                   "body": "could not mint an id-token"})
             continue
         status, body, secs = get(url + path.format(account=args.account), tok)
         report["hops"].append({
@@ -132,7 +144,8 @@ def main() -> int:
     mcp_url = service_url(f"finchat-{args.env}-mcp")
     if mcp_url:
         try:
-            report["mcp"] = {"url": mcp_url, **mcp_over_http(mcp_url, tok, args.account)}
+            report["mcp"] = {"url": mcp_url,
+                             **mcp_over_http(mcp_url, token(mcp_url), args.account)}
         except Exception as e:
             report["mcp"] = {"url": mcp_url, "error": f"{type(e).__name__}: {e}"}
     else:

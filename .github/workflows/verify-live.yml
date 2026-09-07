@@ -74,11 +74,16 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
-          TOKEN="$(gcloud auth print-identity-token)"
           fail=0
           for svc in process mobile; do
             url="$(gcloud run services describe "finchat-${ENV}-${svc}" \
                      --region "${REGION}" --format='value(status.url)')"
+            # Per audience, and NOT `gcloud auth print-identity-token`. That prints a
+            # token for a signed-in human and fails outright under Workload Identity
+            # Federation — "No identity token can be obtained from the current
+            # credentials" — which is how this job failed in all three environments on
+            # its first scheduled run, having passed locally every time.
+            TOKEN="$(python scripts/gcp_id_token.py "${url}")"
             echo "::group::${svc} — ${url}/healthz/deep"
             code="$(curl -sS -o /tmp/${svc}.json -w '%{http_code}' \
                       -H "Authorization: Bearer ${TOKEN}" "${url}/healthz/deep" || echo 000)"

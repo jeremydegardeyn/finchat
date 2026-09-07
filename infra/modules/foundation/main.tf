@@ -54,8 +54,11 @@ locals {
     # else: it never touches data, never calls another FinChat service, and is the
     # only service here reachable from the public internet by design. Firestore is
     # for its own clients/codes/refresh records.
+    # Firestore only. `roles/secretmanager.secretAccessor` was here and should not have
+    # been: at project level it reads EVERY secret — the ServiceNow credential, the chat
+    # webhooks, the steward's database URL — for a service that needs exactly two. The
+    # grants are per-secret instead, next to the service that uses them.
     mcp_auth = { display = "MCP OAuth proxy — authorization server (Cloud Run)", roles = [
-      "roles/secretmanager.secretAccessor",
       "roles/datastore.user",
     ] }
     loan_api = { display = "Loan API (Cloud Run)", roles = [
@@ -178,6 +181,23 @@ resource "google_project_iam_member" "sa_roles" {
   project  = var.project_id
   role     = each.value.role
   member   = "serviceAccount:${google_service_account.sa[each.value.sa_key].email}"
+}
+
+# The CI/CD identity minting an OIDC id-token FOR ITSELF, so a scheduled job can call
+# the private services it deploys (ADR-0031 verification).
+#
+# `gcloud auth print-identity-token` works for a signed-in human and NOT under Workload
+# Identity Federation — external-account credentials have no id-token to print, and the
+# error says only "No identity token can be obtained from the current credentials". So
+# CI mints one explicitly through the IAM Credentials API, which needs tokenCreator.
+#
+# Scoped to this ONE service account, not granted at project level: project-level
+# tokenCreator would let the deploy identity impersonate every service account in the
+# platform, including the ones that read customer data. Here it can only be itself.
+resource "google_service_account_iam_member" "cicd_self_token_creator" {
+  service_account_id = google_service_account.sa["cicd"].name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.sa["cicd"].email}"
 }
 
 # --- Artifact Registry (container images) ------------------------------------

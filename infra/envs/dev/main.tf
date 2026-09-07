@@ -248,6 +248,17 @@ module "mcp_server" {
   labels   = local.labels
 }
 
+# The two secrets the OAuth proxy reads, granted one at a time. Project-level
+# secretAccessor for a service that needs two named secrets is the kind of over-grant
+# nobody notices, because everything works either way.
+resource "google_secret_manager_secret_iam_member" "mcp_auth_secrets" {
+  for_each  = var.enable_mcp_oauth ? toset(["finchat-oauth-client-secret", "finchat-mcp-oauth-signing-key"]) : toset([])
+  project   = var.project_id
+  secret_id = each.value
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${module.foundation.service_account_emails["mcp_auth"]}"
+}
+
 # --- The OAuth proxy hosted MCP clients need (ADR-0020) ----------------------
 # PUBLIC on purpose: a client calls /register, /authorize and /token before it has any
 # credential at all, so IAM cannot be the gate here — the code is. That is why this
