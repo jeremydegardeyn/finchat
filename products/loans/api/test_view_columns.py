@@ -14,6 +14,11 @@ The symptom was quiet, which is the other half of why it survived: the process A
 degrades per source, so a customer overview came back complete-looking with `loans: []`
 and `partial: ["loans"]`. Correct behaviour, and it makes a broken join look like a
 customer with no loans.
+
+The deeper cause was that **nothing applied the DDL**. It had been run by hand, once,
+per environment, so the file could change and no database would. That is what
+`scripts/apply_loans_ddl.sh` is for — this test proves the file is right, the script is
+how a database comes to agree with it.
 """
 import ast
 import re
