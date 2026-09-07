@@ -29,7 +29,16 @@ import time
 import urllib.request
 
 ISSUER = os.getenv("FINCHAT_MCP_OAUTH_ISSUER", "").rstrip("/")
+# Service accounts allowed to call as themselves, with a Google-issued OIDC token
+# audienced to this service. Empty means no service may call — the same fail-closed
+# default as everything else here, and it matters more once the service is public,
+# because Cloud Run is no longer checking anything on the way in.
+SERVICE_CALLERS = {e.strip().lower() for e in
+                   os.getenv("FINCHAT_MCP_SERVICE_CALLERS", "").split(",") if e.strip()}
 RESOURCE = os.getenv("FINCHAT_MCP_RESOURCE", "").rstrip("/")
+# The audience Google mints for a service-to-service call: the service URL, with
+# no path. RESOURCE carries the /mcp path, which is what OAuth clients ask for.
+SERVICE_URL = RESOURCE[:-len("/mcp")] if RESOURCE.endswith("/mcp") else RESOURCE
 JWKS_TTL = int(os.getenv("FINCHAT_MCP_JWKS_TTL", "3600"))
 LEEWAY = 60  # clock skew between two Cloud Run services
 
@@ -76,8 +85,15 @@ def _keys(force: bool = False) -> dict:
     if _jwks and not force and _jwks[0] > time.time():
         return _jwks[1]
     url = f"{ISSUER}/.well-known/jwks.json"
-    with urllib.request.urlopen(url, timeout=15) as response:
-        body = json.loads(response.read().decode())
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            body = json.loads(response.read().decode())
+    except Exception as exc:
+        # Unauthorized, not the transport error. The caller catches Unauthorized and
+        # answers 401; anything else escapes as a 500, so an authorization server that
+        # is briefly unreachable would turn every request into a server error instead
+        # of a refusal — and take the service's own health signal down with it.
+        raise Unauthorized(f"jwks unavailable: {type(exc).__name__}") from None
     keys = {k["kid"]: k for k in body.get("keys", []) if k.get("kid")}
     if not keys:
         raise Unauthorized("authorization server published no usable keys")
@@ -85,8 +101,53 @@ def _keys(force: bool = False) -> dict:
     return keys
 
 
+def _verify_google_service(token: str) -> dict:
+    """A Google-issued OIDC token from a named service account, audienced to us.
+
+    This is what Cloud Run IAM validates when the service is private. Once it is public
+    Cloud Run validates nothing, so the same check has to happen here or the in-GCP
+    callers that were never going through the OAuth proxy — the AI gateway, the BFF —
+    stop working the moment the door opens.
+
+    Strictness is the whole thing. Verifying a Google signature and stopping there
+    accepts a token minted for ANY service by ANY Google identity, which is close to no
+    check at all. Three things are load-bearing and each is mutation-verified: the
+    audience must be this exact service, the email must be one we named, and it must be
+    verified.
+    """
+    # An early exit, not the control — mutation testing showed removing it changes
+    # nothing, because the membership check below refuses against an empty set anyway.
+    # It stays to avoid fetching Google's certificates on a request that cannot succeed.
+    if not SERVICE_CALLERS:
+        raise Unauthorized("no service callers are permitted")
+
+    from google.auth.transport import requests as greq
+    from google.oauth2 import id_token as gid
+
+    try:
+        claims = gid.verify_oauth2_token(token, greq.Request(), audience=SERVICE_URL)
+    except Exception as exc:
+        raise Unauthorized(f"google: {type(exc).__name__}") from None
+
+    email = (claims.get("email") or "").lower()
+    if not claims.get("email_verified") or email not in SERVICE_CALLERS:
+        raise Unauthorized("service identity is not permitted")
+    return {**claims, "kind": "service"}
+
+
 def verify(token: str) -> dict:
-    """Return the claims of a valid access token, or raise Unauthorized."""
+    """Return the claims of a valid access token, or raise Unauthorized.
+
+    Two kinds of caller reach this server and they authenticate differently:
+
+      * a **person**, via the OAuth proxy (ADR-0020) — a token this platform minted;
+      * a **service** inside GCP, via a Google OIDC token audienced to this service.
+
+    Both are checked here rather than one of them being left to Cloud Run IAM, because
+    a public service has no Cloud Run IAM. Which one succeeded is recorded, since
+    "a person asked" and "a service asked on nobody's behalf" are different facts about
+    the same request and the audit should not blur them.
+    """
     if not enabled():
         raise Unauthorized("OAuth is not configured on this server")
     if not token:
@@ -96,9 +157,17 @@ def verify(token: str) -> dict:
     from jwt import PyJWK
 
     try:
-        kid = jwt.get_unverified_header(token).get("kid")
+        header = jwt.get_unverified_header(token)
+        unverified = jwt.decode(token, options={"verify_signature": False})
     except Exception:
         raise Unauthorized("malformed token") from None
+
+    # Route on the CLAIMED issuer, then verify properly for that route. Reading an
+    # unverified claim to choose a verifier is safe; using one to make a decision is not.
+    if str(unverified.get("iss", "")).rstrip("/") != ISSUER:
+        return _verify_google_service(token)
+
+    kid = header.get("kid")
     if not kid:
         raise Unauthorized("token has no key id")
 
@@ -128,4 +197,4 @@ def verify(token: str) -> dict:
         # The whole point of ADR-0020 is that a call is bound to a person. A token that
         # validates but names nobody defeats it, and would make the audit useless.
         raise Unauthorized("token carries no identity")
-    return claims
+    return {**claims, "kind": "user"}

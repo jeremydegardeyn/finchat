@@ -261,3 +261,105 @@ def test_the_failure_reason_never_reaches_the_caller(auth, signed):
             reasons.add(exc.detail)
     assert len(reasons) > 1, "details should differ in the log"
     assert json.dumps({"error": "invalid_token"}) == '{"error": "invalid_token"}'
+
+
+# --- the second kind of caller ------------------------------------------------
+# Once the service is public, Cloud Run validates nothing on the way in. Everything it
+# used to do has to happen here, or the in-GCP callers break the moment the door opens
+# and — far worse — anyone with a Google token walks in.
+@pytest.fixture()
+def service_auth(monkeypatch):
+    monkeypatch.setenv("FINCHAT_MCP_OAUTH_ISSUER", ISSUER)
+    monkeypatch.setenv("FINCHAT_MCP_RESOURCE", RESOURCE)
+    monkeypatch.setenv("FINCHAT_MCP_SERVICE_CALLERS",
+                       "ai-gateway-sa@proj.iam.gserviceaccount.com")
+    return _load("finchat_mcp_auth_svc", "auth.py")
+
+
+def _google_token(auth_module, monkeypatch, **over):
+    """A token that is NOT from our issuer, with Google's verifier stubbed."""
+    import jwt
+
+    now = int(time.time())
+    claims = {"iss": "https://accounts.google.com", "aud": auth_module.SERVICE_URL,
+              "sub": "104", "email": "ai-gateway-sa@proj.iam.gserviceaccount.com",
+              "email_verified": True, "iat": now, "exp": now + 900}
+    claims.update({k: v for k, v in over.items() if v is not None})
+    for key, value in over.items():
+        if value is None:
+            claims.pop(key, None)
+
+    import google.oauth2.id_token as gid
+
+    def fake(token, request, audience=None, **kw):
+        # Google's own library checks the signature and the audience. Stubbing it out
+        # means these tests cover OUR checks, not theirs — so the audience check is
+        # re-applied here to keep the stub honest rather than permissive.
+        got = jwt.decode(token, options={"verify_signature": False}, audience=audience)
+        if audience and got.get("aud") != audience:
+            raise ValueError("audience mismatch")
+        return got
+
+    monkeypatch.setattr(gid, "verify_oauth2_token", fake)
+    return jwt.encode(claims, "secret", algorithm="HS256")
+
+
+def test_a_named_service_account_may_call_with_a_google_token(service_auth, monkeypatch):
+    token = _google_token(service_auth, monkeypatch)
+    claims = service_auth.verify(token)
+    assert claims["kind"] == "service"
+    assert claims["email"] == "ai-gateway-sa@proj.iam.gserviceaccount.com"
+
+
+def test_an_unnamed_service_account_is_refused(service_auth, monkeypatch):
+    """Verifying a Google signature and stopping there accepts a token minted for this
+    service by ANY Google identity, which is close to no check at all."""
+    token = _google_token(service_auth, monkeypatch,
+                          email="someone-else@other.iam.gserviceaccount.com")
+    with pytest.raises(service_auth.Unauthorized):
+        service_auth.verify(token)
+
+
+def test_a_google_token_for_another_audience_is_refused(service_auth, monkeypatch):
+    token = _google_token(service_auth, monkeypatch, aud="https://some-other-service")
+    with pytest.raises(service_auth.Unauthorized):
+        service_auth.verify(token)
+
+
+def test_an_unverified_service_email_is_refused(service_auth, monkeypatch):
+    token = _google_token(service_auth, monkeypatch, email_verified=False)
+    with pytest.raises(service_auth.Unauthorized):
+        service_auth.verify(token)
+
+
+def test_with_no_service_callers_named_no_service_may_call(auth, monkeypatch):
+    """Fail closed, and it matters more here than anywhere: this is the check that
+    replaces Cloud Run IAM when the service goes public."""
+    token = _google_token(auth, monkeypatch)
+    assert auth.SERVICE_CALLERS == set()
+    with pytest.raises(auth.Unauthorized):
+        auth.verify(token)
+
+
+def test_a_forged_issuer_cannot_borrow_the_proxy_path(service_auth, signed, monkeypatch):
+    """Routing reads the UNVERIFIED issuer to pick a verifier, which is safe only because
+    each route then verifies properly. A token claiming our issuer but signed by someone
+    else must still fail on the signature, not sneak through the Google branch."""
+    import jwt
+
+    now = int(time.time())
+    forged = jwt.encode({"iss": ISSUER, "sub": "x", "aud": RESOURCE,
+                         "email": "attacker@bank.example", "iat": now, "exp": now + 900},
+                        "not-the-key", algorithm="HS256", headers={"kid": "test-kid"})
+    with pytest.raises(service_auth.Unauthorized):
+        service_auth.verify(forged)
+
+
+def test_the_two_caller_kinds_are_distinguishable_in_the_claims(service_auth, monkeypatch,
+                                                               keypair):
+    """"A person asked" and "a service asked on nobody's behalf" are different facts
+    about the same request, and an audit that blurs them cannot answer the question it
+    exists for."""
+    _, jwk = keypair
+    monkeypatch.setattr(service_auth, "_jwks", (time.time() + 3600, {jwk["kid"]: jwk}))
+    assert service_auth.verify(_google_token(service_auth, monkeypatch))["kind"] == "service"
