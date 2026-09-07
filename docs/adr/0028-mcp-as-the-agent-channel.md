@@ -107,6 +107,12 @@ it: IAM on the private services, CLS in BigQuery, the approver check inside the 
   the data source and says so.
 - **Not decided here:** deploying the HTTP transport, and the OAuth proxy. The image and
   the transport exist; standing them up is a cost decision that has not been taken.
+  *(Superseded: the HTTP transport was deployed to all three environments in
+  [ADR-0031](0031-mcp-over-http-service-identity.md). "A cost decision" was the wrong
+  framing — these scale to zero and idle at roughly nothing; the real blocker was the
+  Terraform and CI wiring, and the identity question that ADR answers. The OAuth proxy
+  ([ADR-0020](0020-oauth-dcr-proxy.md)) is still not built, and remains the reason hosted
+  clients cannot connect.)*
 
 ## Alternatives considered
 

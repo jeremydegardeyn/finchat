@@ -140,9 +140,15 @@ tables by hand and got `hits()` (word-boundary regex, not substring), the weight
 and half of `PLATFORM_WORDS` wrong — each a documented fix for a real misrouting. The 16
 existing router tests were not touched and are the regression proof.
 
-**Neither new service is deployed.** They run, they are tested, and no Terraform or Cloud
-Run configuration exists for them — the same position as `mcp_server/`, for the same
-reason: standing them up is a cost decision that has not been taken.
+**Both services are deployed to dev, test and prod** (2026-09-06/07), alongside the MCP
+server ([ADR-0031](adr/0031-mcp-over-http-service-identity.md)). This section previously
+said the opposite and blamed cost; that was wrong on both counts — these scale to zero and
+idle at roughly nothing, and what was actually missing was the Terraform and CI wiring.
+
+Deploying them is what found the bugs. `scripts/verify_layers_live.py` walks
+system → process → experience → MCP against a deployed environment and reports which hop
+answered, which is how the `account_id` filter was discovered to have been failing since
+the day it was written.
 
 ## Two bugs worth recording
 

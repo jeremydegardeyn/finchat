@@ -86,9 +86,14 @@ because that drift would be gradual and every individual step would look defensi
 
 - A business rule spanning domains now has one home, and a second channel proving it.
   `next_action` is computed once and rendered twice.
-- **Two new services that are not deployed.** They run, they are tested, and no Terraform
-  or Cloud Run configuration exists for them yet — the same position `mcp_server/` is in,
-  and for the same reason: standing them up is a cost decision that has not been taken.
+- **Two new services, deployed to all three environments** (2026-09-06/07). This
+  originally read "not deployed... a cost decision that has not been taken", which was
+  wrong twice over: scale-to-zero Cloud Run is ~$0 idle, so the real blocker was
+  infrastructure wiring, not cost. Standing them up immediately found two faults nothing
+  local could: the images had no `requests` package, which `google-auth` imports lazily
+  and does not depend on, so every service-to-service call went out unauthenticated; and
+  `GET /v1/loans?account_id=` had been returning 400 in every environment because the
+  `loan_status` view never projected the column the filter names.
 - **The analyst router is split by what can move.** The routing decision — tables,
   prompt, precedence, classifier ordering — now lives in the process layer, and doing so
   collapsed two copies of the precedence rules into one. The handlers stay in the BFF
