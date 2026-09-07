@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Analytics, which is the half people forget. Quota stops abuse; this is what answers
+  "which tool is expensive", "which tool is failing", "who actually uses the loan tools" —
+  questions an API program can answer for REST and, without this, cannot answer at all
+  for MCP, because every row says POST /mcp.
+
+  `mcp.resolution` is here so the unclassified traffic is visible as its own population.
+  A rising `unparseable-body` count is a client library upgrade or an attack, and both
+  are worth seeing before the quota rejections start.
+-->
+<StatisticsCollector continueOnError="false" enabled="true" name="CollectMcpStats">
+  <DisplayName>Collect MCP statistics</DisplayName>
+  <Statistics>
+    <Statistic name="mcp_operation" ref="mcp.operation" type="STRING">unknown</Statistic>
+    <Statistic name="mcp_method" ref="mcp.method" type="STRING"></Statistic>
+    <Statistic name="mcp_tool" ref="mcp.tool" type="STRING"></Statistic>
+    <Statistic name="mcp_resolution" ref="mcp.resolution" type="STRING">not-evaluated</Statistic>
+  </Statistics>
+</StatisticsCollector>

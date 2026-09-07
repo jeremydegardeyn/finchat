@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reads the JSON-RPC body and sets `mcp.operation` to `tools/call:<name>`.
+
+  continueOnError="true" on purpose. The callout cannot throw by construction, but a
+  timeLimit breach or a runtime the script did not anticipate still can, and the right
+  behaviour then is to fall through on the defaults above rather than to 500 every
+  caller. A gateway that fails closed on its own analytics enrichment is worse than one
+  that reports `unknown` for a request it could not classify.
+-->
+<Javascript continueOnError="true" enabled="true" timeLimit="200" name="ExtractMcpTool">
+  <DisplayName>Extract MCP tool</DisplayName>
+  <Properties/>
+  <ResourceURL>jsc://extract-mcp-tool.js</ResourceURL>
+</Javascript>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Quota is per consumer AND per tool. Keying on the tool alone would let one noisy client
+  exhaust every other client's allowance for `get_account_balance`; keying on the client
+  alone is what the gateway already did before any of this, and is the problem.
+
+  `client_id` assumes a VerifyAPIKey or OAuthV2 step earlier in the flow. Substitute
+  whatever this proxy actually authenticates with — the shape is what matters.
+-->
+<AssignMessage continueOnError="false" enabled="true" name="ComposeQuotaKey">
+  <DisplayName>Compose MCP quota key</DisplayName>
+  <AssignVariable>
+    <Name>mcp.quota.key</Name>
+    <Template>{client_id}|{mcp.operation}</Template>
+  </AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+  <AssignTo createNew="false" transport="http" type="request"/>
+</AssignMessage>

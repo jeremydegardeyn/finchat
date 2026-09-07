@@ -225,6 +225,15 @@ jobs:
       - name: Build MCP image (no push)
         run: docker build -f mcp_server/Dockerfile -t finchat-mcp-ci-test .
 
+      # The Apigee callout that recovers per-tool identity from a JSON-RPC body. It has
+      # never run inside Apigee, so these tests are the entire basis for trusting it —
+      # which makes leaving them unrun in CI worse than not having written them.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Apigee MCP callout — per-tool quota key (offline)
+        run: node --test apigee/mcp-jsonrpc-quota/
+
 
   docker-build:
     runs-on: ubuntu-latest

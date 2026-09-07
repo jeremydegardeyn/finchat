@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The payoff: one Quota policy, N buckets, because the Identifier is a body-derived
+  variable rather than the request path.
+
+  The counts below are illustrative and deliberately uneven, because that is the argument.
+  A read tool and a write tool arriving on the same URL should never have shared a limit,
+  and until the operation identity was recovered from the body there was no way to give
+  them different ones. Move these into a KVM keyed on `mcp.operation` before this is
+  anything but a demo — a redeploy per limit change is how limits stop being changed.
+-->
+<Quota continueOnError="false" enabled="true" type="calendar" name="QuotaPerTool">
+  <DisplayName>Per-tool quota</DisplayName>
+  <Identifier ref="mcp.quota.key"/>
+  <Allow>
+    <Class ref="mcp.operation">
+      <Allow class="tools/call:get_account_balance" count="600"/>
+      <Allow class="tools/call:get_account_transactions" count="600"/>
+      <Allow class="tools/call:search_knowledge_base" count="300"/>
+      <Allow class="tools/call:submit_loan_application" count="20"/>
+      <Allow class="tools/list" count="120"/>
+      <Allow class="initialize" count="120"/>
+    </Class>
+  </Allow>
+  <!-- Anything unclassified, including `unknown` and every batch. Low on purpose: a
+       caller sending bodies this proxy cannot classify is not a caller to be generous
+       with, and a permissive default is how an unclassified path becomes the path. -->
+  <Interval>1</Interval>
+  <TimeUnit>hour</TimeUnit>
+  <Distributed>true</Distributed>
+  <Synchronous>true</Synchronous>
+  <StartTime>2026-01-01 00:00:00</StartTime>
+</Quota>

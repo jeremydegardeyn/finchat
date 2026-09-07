@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs BEFORE the callout, so every variable the later policies read is guaranteed to
+  exist. Without this, a JavaScript step that fails leaves `mcp.operation` unset, and a
+  Quota whose Identifier resolves to nothing either faults or silently collapses every
+  caller into one bucket — which is the exact failure this whole folder exists to fix,
+  arriving through the fix.
+-->
+<AssignMessage continueOnError="false" enabled="true" name="SetMcpDefaults">
+  <DisplayName>Set MCP defaults</DisplayName>
+  <AssignVariable><Name>mcp.operation</Name><Value>unknown</Value></AssignVariable>
+  <AssignVariable><Name>mcp.method</Name><Value></Value></AssignVariable>
+  <AssignVariable><Name>mcp.tool</Name><Value></Value></AssignVariable>
+  <AssignVariable><Name>mcp.resolution</Name><Value>not-evaluated</Value></AssignVariable>
+  <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+  <AssignTo createNew="false" transport="http" type="request"/>
+</AssignMessage>
