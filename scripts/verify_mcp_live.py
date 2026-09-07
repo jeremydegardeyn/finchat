@@ -130,7 +130,20 @@ def main() -> int:
     try:
         got = anyio.run(probe)
     except Exception as exc:
-        print(f"{name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        # "ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)" is what the
+        # MCP client raises for every transport failure, and it names none of them. The
+        # sub-exception carries the status; a 401 here means this caller is not in
+        # FINCHAT_MCP_SERVICE_CALLERS *on the running service*, which is a different
+        # thing from the variable being set — env vars are baked at deploy time.
+        detail = "; ".join(f"{type(e).__name__}: {e}"
+                           for e in getattr(exc, "exceptions", []) or [exc])
+        print(f"{name}: {type(exc).__name__}: {detail}", file=sys.stderr)
+        anon, _ = _anonymous(f"{url}/mcp")
+        if anon == 401:
+            print(f"{name}: the endpoint enforces OAuth. If this caller should be "
+                  "allowed as a service, it must be in FINCHAT_MCP_SERVICE_CALLERS "
+                  "AND the service redeployed since that variable changed.",
+                  file=sys.stderr)
         return 1
 
     print(f"{name}: {got['server']} — {len(got['tools'])} tools, "
