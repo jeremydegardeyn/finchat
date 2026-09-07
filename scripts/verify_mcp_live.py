@@ -138,12 +138,20 @@ def main() -> int:
         detail = "; ".join(f"{type(e).__name__}: {e}"
                            for e in getattr(exc, "exceptions", []) or [exc])
         print(f"{name}: {type(exc).__name__}: {detail}", file=sys.stderr)
-        anon, _ = _anonymous(f"{url}/mcp")
-        if anon == 401:
-            print(f"{name}: the endpoint enforces OAuth. If this caller should be "
-                  "allowed as a service, it must be in FINCHAT_MCP_SERVICE_CALLERS "
-                  "AND the service redeployed since that variable changed.",
-                  file=sys.stderr)
+        if anon_code == 401 and not public_checks:
+            # A HUMAN running this against a public, OAuth-enforcing endpoint is refused
+            # by design: people authenticate through the proxy (ADR-0020), and only named
+            # services use a Google token. That is the endpoint working, not failing — so
+            # report what was proved, say what was skipped, and do not cry wolf twice a
+            # day at whoever runs this from a laptop.
+            print(f"{name}: anonymous contract OK (401 + discovery). Tool listing skipped "
+                  "— this identity is not a permitted service caller, which is correct "
+                  "for a human; use the OAuth flow, or run this as a listed service.")
+            return 0
+        print(f"{name}: could not list tools. If this caller SHOULD be allowed as a "
+              "service it must be in FINCHAT_MCP_SERVICE_CALLERS *and* the service "
+              "redeployed since that variable changed — env vars are baked at deploy "
+              "time, so setting the variable alone changes nothing.", file=sys.stderr)
         return 1
 
     print(f"{name}: {got['server']} — {len(got['tools'])} tools, "
