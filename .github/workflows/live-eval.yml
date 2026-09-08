@@ -11,7 +11,7 @@ on:
       environment:
         description: Target environment
         type: choice
-        options: [dev, test, prod]
+        options: [dev, prod]
         default: prod
       limit:
         description: Max turns to score this run

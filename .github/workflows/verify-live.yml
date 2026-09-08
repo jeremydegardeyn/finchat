@@ -10,7 +10,7 @@ name: Verify live
 # real data behind them. It asserts on `partial`, which is the signal those faults
 # actually produced.
 #
-# Cost is the reason it is a cron and not a monitor: it wakes three scale-to-zero
+# Cost is the reason it is a cron and not a monitor: it wakes a handful of scale-to-zero
 # services a few times a day, well inside Cloud Run's free tier, and uses no new GCP
 # infrastructure at all.
 on:
@@ -23,7 +23,7 @@ on:
       environment:
         description: Environment to verify
         type: choice
-        options: [dev, test, prod, all]
+        options: [dev, prod, all]
         default: all
 
 permissions:
@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false # one broken environment must not hide the state of the others
       matrix:
-        environment: [dev, test, prod]
+        environment: [dev, prod]
     environment: ${{ matrix.environment }}
     env:
       ENV: ${{ matrix.environment }}
@@ -81,7 +81,7 @@ jobs:
             # Per audience, and NOT `gcloud auth print-identity-token`. That prints a
             # token for a signed-in human and fails outright under Workload Identity
             # Federation — "No identity token can be obtained from the current
-            # credentials" — which is how this job failed in all three environments on
+            # credentials" — which is how this job failed in every environment on
             # its first scheduled run, having passed locally every time.
             TOKEN="$(python scripts/gcp_id_token.py "${url}")"
             echo "::group::${svc} — ${url}/healthz/deep"

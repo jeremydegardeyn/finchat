@@ -21,7 +21,7 @@
 
 ```bash
 cd infra/envs/dev
-cp terraform.tfvars.example terraform.tfvars   # (already populated for dev/test/prod)
+cp terraform.tfvars.example terraform.tfvars   # (already populated for dev/prod)
 terraform init
 terraform plan
 terraform apply

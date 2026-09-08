@@ -8,7 +8,7 @@ on:
       environment:
         description: Target environment
         type: choice
-        options: [dev, test, prod]
+        options: [dev, prod]
         default: dev
       action:
         description: plan or apply

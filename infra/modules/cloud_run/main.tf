@@ -10,6 +10,10 @@ resource "google_cloud_run_v2_service" "this" {
 
   ingress = "INGRESS_TRAFFIC_ALL" # auth enforced via IAM/API Gateway, not network
 
+  # Stated rather than inherited from the provider default, so an environment that
+  # genuinely should be torn down can say so explicitly.
+  deletion_protection = var.deletion_protection
+
   template {
     service_account = var.service_account
     scaling {

@@ -67,3 +67,18 @@ variable "cpu_idle" {
   description = "Allocate CPU only during requests. True keeps idle cost at ~$0; false bills continuously for a service that scales to zero anyway."
   default     = true
 }
+
+variable "deletion_protection" {
+  type        = bool
+  description = <<-EOT
+    Refuse `terraform destroy` on this service. Defaults TRUE, which matches the
+    provider's own default and is what every environment wants — the value of stating it
+    here is that it becomes overridable at all.
+
+    It was not, and a `terraform destroy` of the test environment failed on all eight
+    services with "cannot destroy service without setting deletion_protection=false".
+    Nothing was destroyed, which is the protection working; the gap was having no way to
+    say yes.
+  EOT
+  default     = true
+}

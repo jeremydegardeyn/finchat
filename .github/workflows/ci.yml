@@ -127,7 +127,7 @@ jobs:
         run: python scripts/verify_agent_registry.py --env prod
       - name: Terraform projection is current
         run: |
-          for e in dev test prod; do
+          for e in dev prod; do
             python scripts/agents_catalog.py --env "$e" \
               --emit-tfvars "infra/envs/$e/agents.auto.tfvars.json"
           done
@@ -172,9 +172,9 @@ jobs:
       # REG-1/2/3 and LIFE-1/2 against the committed registry, in every environment.
       # These moved out of verify_agent_registry.py; that script now owns only the
       # checks that have to read the agent source files.
-      - name: Agent registry policy — REG / LIFE (dev, test, prod)
+      - name: Agent registry policy — REG / LIFE (dev, prod)
         run: |
-          for e in dev test prod; do
+          for e in dev prod; do
             echo "::group::$e"
             python scripts/agents_catalog.py --env "$e" --emit-policy-input - \
               | conftest test --policy policy/registry --namespace finchat.registry \
@@ -201,7 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [dev, test, prod]
+        env: [dev, prod]
     steps:
       - uses: actions/checkout@v5
       - uses: hashicorp/setup-terraform@v3

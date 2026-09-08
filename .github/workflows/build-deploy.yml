@@ -13,7 +13,7 @@ on:
       environment:
         description: Target environment
         type: choice
-        options: [dev, test, prod]
+        options: [dev, prod]
         default: dev
 
 # Keyless auth to GCP via Workload Identity Federation (no SA keys).
@@ -24,7 +24,7 @@ permissions:
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
-    # GitHub Environments gate promotion (required reviewers on test/prod) and
+    # GitHub Environments gate promotion (required reviewers on prod) and
     # supply WIF_PROVIDER/DEPLOY_SA/GCP_* as environment variables. (No job-level
     # `if` guard on those vars — env-scoped vars aren't visible to job-level `if`.)
     environment: ${{ github.event.inputs.environment || 'dev' }}

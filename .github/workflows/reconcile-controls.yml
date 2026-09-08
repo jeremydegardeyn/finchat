@@ -20,7 +20,7 @@ on:
       environment:
         description: Target environment
         type: choice
-        options: [dev, test, prod]
+        options: [dev, prod]
         default: dev
       window_hours:
         description: Reconciliation window in hours

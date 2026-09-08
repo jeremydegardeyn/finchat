@@ -16,7 +16,7 @@ on:
       environment:
         description: Target environment
         type: choice
-        options: [dev, test, prod]
+        options: [dev, prod]
         default: prod
       set_baseline:
         description: Adopt this run as the new baseline (do this deliberately)
