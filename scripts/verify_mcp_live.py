@@ -36,11 +36,28 @@ EXPECTED = {
 }
 
 
+class GcloudFailed(RuntimeError):
+    """gcloud could not answer. Distinct from "the thing does not exist".
+
+    Returning "" for both made an expired local session report
+    `finchat-prod-mcp is not deployed`, which is a different and much more alarming
+    claim than the truth, which was "I could not ask".
+    """
+
+
 def _gcloud(*args: str) -> str:
     exe = shutil.which("gcloud") or "gcloud"
     out = subprocess.run([exe, *args], capture_output=True, text=True,
                          stdin=subprocess.DEVNULL)
-    return out.stdout.strip() if out.returncode == 0 else ""
+    if out.returncode != 0:
+        message = (out.stderr or out.stdout).strip()
+        first = message.splitlines()[0] if message else "gcloud failed"
+        if "Cannot find service" in message or "NOT_FOUND" in message:
+            # gcloud answered, and the answer is "it does not exist". That is a fact
+            # about the world, not a failure to reach it.
+            return ""
+        raise GcloudFailed(first)
+    return out.stdout.strip()
 
 
 def _anonymous(url: str) -> tuple[int, str]:
@@ -77,8 +94,15 @@ def main() -> int:
     args = ap.parse_args()
 
     name = f"finchat-{args.env}-mcp"
-    url = _gcloud("run", "services", "describe", name, "--region", args.region,
-                  "--project", args.project, "--format=value(status.url)")
+    try:
+        url = _gcloud("run", "services", "describe", name, "--region", args.region,
+                      "--project", args.project, "--format=value(status.url)")
+    except GcloudFailed as exc:
+        # Exit 2, not 1: "I could not ask" is an operator problem with this runner, and
+        # reporting it as "the service is missing" sends someone to look at production
+        # for a fault that is in their own shell.
+        print(f"could not query {name}: {exc}", file=sys.stderr)
+        return 2
     if not url:
         print(f"{name} is not deployed in {args.project}", file=sys.stderr)
         return 1
@@ -127,8 +151,45 @@ def main() -> int:
         public_checks.append(f"anonymous request returned {anon_code} — expected 401 "
                              "(public + enforcing) or 403 (private)")
 
+    # One retry, on transport only. A scale-to-zero service occasionally refuses a cold
+    # connect, and last night's scheduled run failed on exactly that while the run ten
+    # hours earlier passed on the same commit. A monitor that cries wolf gets ignored,
+    # which costs more than the flake did.
+    #
+    # The retry is REPORTED rather than silent: a service that needs a second attempt
+    # every night is a real signal, and swallowing it would trade a noisy check for a
+    # blind one.
+    got = None
+    retry_note = ""
+    failure: Exception | None = None
     try:
         got = anyio.run(probe)
+    except Exception as first:
+        failure = first
+        # A 401 or 403 is a decision, and it will be the same decision five seconds
+        # later. Only a transport failure can succeed on a second attempt — and one is
+        # worth making, because a scale-to-zero service occasionally refuses a cold
+        # connect: last night's scheduled run failed on exactly that while the run ten
+        # hours earlier passed on the same commit.
+        detail = " ".join(str(e) for e in
+                          (getattr(first, "exceptions", None) or [first]))
+        if not any(code in detail for code in ("401", "403")):
+            import time as _time
+
+            _time.sleep(5)
+            try:
+                got = anyio.run(probe)
+                failure = None
+                # Reported, not silent. A service needing a second attempt every night
+                # is a real signal, and hiding it trades a noisy check for a blind one.
+                retry_note = (f" (first attempt failed: {type(first).__name__}; "
+                              "retry succeeded)")
+            except Exception as second:
+                failure = second
+
+    try:
+        if failure is not None:
+            raise failure
     except Exception as exc:
         # "ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)" is what the
         # MCP client raises for every transport failure, and it names none of them. The
@@ -155,7 +216,8 @@ def main() -> int:
         return 1
 
     print(f"{name}: {got['server']} — {len(got['tools'])} tools, "
-          f"{got['resources']} resources, {got['instructions']} chars of instructions")
+          f"{got['resources']} resources, {got['instructions']} chars of instructions"
+          f"{retry_note}")
 
     problems = list(public_checks)
     missing = sorted(EXPECTED - got["tools"])
