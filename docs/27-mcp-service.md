@@ -223,7 +223,7 @@ front of someone else's MCP server needs them.
 | **Screen tool results** | They come from a service you do not own, enter the model's context, and leave on someone's screen. Screening only the final reply misses what the trace shows. |
 | **Budget the whole loop** | A tool-calling answer is N model calls, and each one re-sends every result accumulated so far. Charging the first turn understates it by more than half. |
 | **Audit the tool names** | "Which model answered" is half the record. "What did it read" is the half that gets asked about. |
-| **Refuse when the server is down** | A model asked for a balance will produce a plausible one. The safe behaviour is to not call the model at all — same rule as `GatewayRefused` in [ADR-0024](adr/0024-ai-gateway-chokepoint.md), reached independently. |
+| **Refuse when the server is down** | A model asked for a balance will produce a plausible one. The safe behaviour is to not call the model at all — same rule as `GatewayRefused` in [ADR-0024](adr/0024-enterprise-ai-gateway.md), reached independently. |
 
 And one the protocol hands you for free and clients routinely drop: **the server's
 `instructions`**. It is the only place MCP lets a server constrain a client's model, and
@@ -231,6 +231,34 @@ for FinChat it carries the refusal policy. A client that discards it produces an
 this platform cannot stand behind.
 
 ### 2.6 Reaching it from a hosted assistant
+
+**Built and running in dev** ([ADR-0020](adr/0020-remote-mcp-workspace-federation.md)).
+`products/mcp_auth/` is an OAuth 2.1 authorization server — RFC 8414 discovery, RFC 7591
+dynamic client registration, PKCE `S256`, RFC 8707 resource indicators, rotating refresh
+tokens — that federates the human login to Google. The endpoint a connector points at is
+`https://finchat-dev-mcp-fdkbl4wtua-uc.a.run.app/mcp`.
+
+![MCP access paths](diagrams/mcp-access-paths.svg)
+
+Three things about it are worth carrying to any other MCP server you make public:
+
+1. **Going public removes the thing that was authenticating your existing callers.** Cloud
+   Run IAM was checking the AI gateway's Google token; nothing else was. The resource
+   server has to do that check itself, or those callers break the moment the door opens.
+2. **The discovery URL is not the obvious one.** RFC 9728 puts the well-known segment
+   *between* origin and path, so `https://host/mcp` is discovered at
+   `https://host/.well-known/oauth-protected-resource/mcp`. Serving only the suffixed
+   spelling works for a client that follows your `WWW-Authenticate` and fails for one
+   that builds the URL per the spec — which is the compliant one.
+3. **One manual step exists and cannot be automated.** Google OAuth clients are not
+   manageable by `gcloud` or Terraform, so each proxy's `/callback` is added by hand in
+   the Cloud Console. Until it is, Google answers `redirect_uri_mismatch`, and nothing in
+   the error says where to look.
+
+`scripts/verify_oauth_live.py` proves the unattended half on a schedule and, with
+`--login`, the whole flow including the Google step.
+
+### 2.7 The older answer, for reference
 
 Claude's connector flow, and the MCP authorization spec generally, does **OAuth 2.1 with
 Dynamic Client Registration**. There is no field for a static token, and Google does not

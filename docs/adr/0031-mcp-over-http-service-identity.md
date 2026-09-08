@@ -61,7 +61,7 @@ request is. Two things make that acceptable rather than merely tolerated:
    and screens their prompt, all before a tool is reached. Per-user authorisation still
    happens; it happens one hop earlier.
 
-What would close the gap is [ADR-0020](0020-oauth-dcr-proxy.md) — OAuth with dynamic
+What would close the gap is [ADR-0020](0020-remote-mcp-workspace-federation.md) — OAuth with dynamic
 client registration, which is MCP's own answer and is still not built. Until it is,
 "which human asked" is a claim the caller makes, not one this service verifies.
 
@@ -77,7 +77,7 @@ that had no equivalent on its prompt-only surface, and they generalise:
   read" is the half a regulator asks about.
 - **An unreachable tool server refuses.** It must not fall back to the model's own
   knowledge — a plausible balance for an account nobody looked at is worse than an error.
-  This is the same rule as `GatewayRefused` in [ADR-0024](0024-ai-gateway-chokepoint.md),
+  This is the same rule as `GatewayRefused` in [ADR-0024](0024-enterprise-ai-gateway.md),
   arrived at independently, which is some evidence it is the right one.
 
 ### What this does *not* enable
@@ -86,6 +86,45 @@ Hosted clients — claude.ai connectors and anything else that cannot mint a Goo
 token — still cannot connect. They need ADR-0020. This ADR serves service-to-service
 callers inside GCP and local developers; it does not open the endpoint to the internet,
 and the allow-listed-hosts setting is not a substitute for that work.
+
+## Amended 2026-09-07 — the endpoint is public in dev, and validates two caller kinds
+
+This ADR chose Cloud Run IAM as the authentication, because MCP's own answer did not
+exist yet. [ADR-0020](0020-remote-mcp-workspace-federation.md) has since been built, so
+dev now serves `/mcp` publicly and validates tokens itself. The identity trade in the
+table above is therefore no longer the whole story: a **person** using a hosted client
+gets per-user identity back.
+
+**Going public removes Cloud Run IAM, which was the only thing authenticating the in-GCP
+callers.** The AI gateway and the BFF never went near the OAuth proxy — they present a
+Google OIDC token and Cloud Run checked it. So the resource server now performs that same
+check itself, and the two caller kinds are distinguished in the claims because "a person
+asked" and "a service asked on nobody's behalf" are different facts about one request:
+
+| Caller | Credential | Checked how |
+|---|---|---|
+| Person, hosted client | proxy-minted token | signature against the proxy JWKS, `alg` pinned, `aud` = this resource, `iss` = the proxy |
+| Service, in GCP | Google OIDC token | Google's verifier with `aud` = the service URL, **plus** the email in `FINCHAT_MCP_SERVICE_CALLERS` |
+
+The second row's last clause is the whole control. Verifying a Google signature and
+stopping there accepts a token minted for this service by *any* Google identity.
+
+**Two switches, and neither derives from the other.** `enable_mcp_oauth` provisions the
+proxy; `mcp_public` removes Cloud Run IAM. Opening the door takes two deliberate changes
+rather than one edit, and they were rolled out in that order on purpose — enforcement
+proven while IAM was still in front, so a mistake in the new validation could not expose
+anything. That staging paid for itself immediately: the deploy that enabled enforcement
+**failed**, on a delimiter bug. Combined into one change it would have failed after the
+public flag was set and before the server could validate anything.
+
+**Signing keys are per environment.** One key across all three is a cross-environment
+compromise path: audience and issuer checks stop a dev token being *replayed* at prod,
+but not a dev key being used to *mint* one, because prod's JWKS would publish the same
+public key.
+
+**Only dev is public.** test and prod have the proxy provisioned and `mcp_public = false`,
+so their proxies can issue tokens for an endpoint still behind IAM. Those tokens are inert
+until the second switch is thrown, which is the design rather than an oversight.
 
 ## Consequences
 

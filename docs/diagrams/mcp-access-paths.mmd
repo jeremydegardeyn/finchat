@@ -16,13 +16,13 @@ flowchart TB
 
   subgraph authz["Authorization only — never in the data path (ADR-0020)"]
     direction LR
-    PROXY["finchat-&lt;env&gt;-mcp-auth<br/>OAuth 2.1 · DCR · PKCE<br/><i>public</i>"]
+    PROXY["finchat-&lt;env&gt;-mcp-auth<br/>OAuth 2.1 · DCR · PKCE<br/><i>public · own signing key per env</i>"]
     GOOGLE["Google / Cloud Identity<br/><i>hd claim is the access policy</i>"]
   end
 
   subgraph experience["Experience layer — one per channel"]
     direction LR
-    MCP["finchat-&lt;env&gt;-mcp<br/><i>agent channel · private</i>"]
+    MCP["finchat-&lt;env&gt;-mcp<br/><i>agent channel</i><br/><b>validates BOTH caller kinds</b>"]
     BFF["ui / server.py<br/><i>web BFF</i>"]
     MOBILE["finchat-&lt;env&gt;-mobile<br/><i>GET /v1/home</i>"]
   end
@@ -46,8 +46,8 @@ flowchart TB
 
   %% --- data: every client reaches the resource server directly ---
   LOCAL -->|"gcloud id-token<br/><b>identity: the person</b>"| MCP
-  GATEWAY -->|"OIDC · run.invoker<br/><b>identity: the service</b>"| MCP
-  HOSTED -->|"5 · Bearer + validated<br/>against the proxy JWKS<br/><b>identity: the person</b>"| MCP
+  GATEWAY -->|"Google OIDC, aud = service<br/>email in SERVICE_CALLERS<br/><b>identity: the service</b>"| MCP
+  HOSTED -->|"5 · Bearer, verified against<br/>the proxy JWKS · aud = /mcp<br/><b>identity: the person</b>"| MCP
 
   MCP --> PROCESS
   BFF --> PROCESS
@@ -58,6 +58,10 @@ flowchart TB
   TXN --> GOLD
   LOAN --> GOLD
 
+  SWITCHES["<b>Two independent switches</b><br/>enable_mcp_oauth → the proxy exists<br/>mcp_public → Cloud Run IAM comes off<br/><i>neither derives from the other: opening<br/>the door takes two deliberate changes</i>"]
+
+  classDef note fill:#fdf6e6,stroke:#c8ab6b,color:#17202b
+  class SWITCHES note
   classDef proxy fill:#e6f0ea,stroke:#6f9a80,color:#17202b
   classDef rule fill:#e8eef7,stroke:#7b93b5,color:#17202b
   class PROXY,GOOGLE proxy
