@@ -258,11 +258,17 @@ module "mcp_server" {
   labels   = local.labels
 }
 
-# The two secrets the OAuth proxy reads, granted one at a time. Project-level
+# The two secrets the OAuth proxy reads, granted one at a time. The signing key is
+# PER ENVIRONMENT: one key shared across all three would mean that reading it in dev
+# lets you MINT a prod token — sign with prod's issuer and audience and prod's JWKS,
+# publishing the same public key, accepts it. The audience and issuer checks stop a
+# dev token being replayed at prod; they do not stop a dev key forging one.
+# The Google client secret is genuinely shared: it is one OAuth client. Project-level
 # secretAccessor for a service that needs two named secrets is the kind of over-grant
 # nobody notices, because everything works either way.
 resource "google_secret_manager_secret_iam_member" "mcp_auth_secrets" {
-  for_each  = var.enable_mcp_oauth ? toset(["finchat-oauth-client-secret", "finchat-mcp-oauth-signing-key"]) : toset([])
+  for_each = var.enable_mcp_oauth ? toset(["finchat-oauth-client-secret",
+  "${var.name_prefix}-${var.env}-mcp-oauth-signing-key"]) : toset([])
   project   = var.project_id
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"

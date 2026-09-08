@@ -164,7 +164,7 @@ jobs:
           if gcloud run services describe "finchat-${ENV}-mcp-auth" --region "${REGION}" >/dev/null 2>&1; then
             AUTH_URL="$(gcloud run services describe finchat-${ENV}-mcp-auth --region ${REGION} --format='value(status.url)')"
             MCP_RESOURCE="$(gcloud run services describe finchat-${ENV}-mcp --region ${REGION} --format='value(status.url)')/mcp"
-            deploy mcp-auth mcp-auth mcp-auth               "--set-secrets=GOOGLE_OAUTH_CLIENT_SECRET=finchat-oauth-client-secret:latest,OAUTH_SIGNING_KEY_PEM=finchat-mcp-oauth-signing-key:latest --set-env-vars=OAUTH_ISSUER=${AUTH_URL},GCP_PROJECT=${PROJECT},FIRESTORE_DATABASE=${{ vars.FINCHAT_OAUTH_FIRESTORE_DB || '(default)' }},GOOGLE_OAUTH_CLIENT_ID=${{ vars.FINCHAT_OAUTH_CLIENT_ID }},OAUTH_ALLOWED_DOMAINS=${{ vars.FINCHAT_OAUTH_ALLOWED_DOMAINS }},OAUTH_ALLOWED_EMAILS=${{ vars.FINCHAT_OAUTH_ALLOWED_EMAILS }},OAUTH_ALLOWED_RESOURCES=${MCP_RESOURCE} --allow-unauthenticated"
+            deploy mcp-auth mcp-auth mcp-auth               "--set-secrets=GOOGLE_OAUTH_CLIENT_SECRET=finchat-oauth-client-secret:latest,OAUTH_SIGNING_KEY_PEM=finchat-${ENV}-mcp-oauth-signing-key:latest --set-env-vars=OAUTH_ISSUER=${AUTH_URL},GCP_PROJECT=${PROJECT},FIRESTORE_DATABASE=${{ vars.FINCHAT_OAUTH_FIRESTORE_DB || '(default)' }},GOOGLE_OAUTH_CLIENT_ID=${{ vars.FINCHAT_OAUTH_CLIENT_ID }},OAUTH_ALLOWED_DOMAINS=${{ vars.FINCHAT_OAUTH_ALLOWED_DOMAINS }},OAUTH_ALLOWED_EMAILS=${{ vars.FINCHAT_OAUTH_ALLOWED_EMAILS }},OAUTH_ALLOWED_RESOURCES=${MCP_RESOURCE} --allow-unauthenticated"
           else
             echo "finchat-${ENV}-mcp-auth not provisioned (enable_mcp_oauth is false) — skipping."
           fi
