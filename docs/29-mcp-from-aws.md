@@ -189,8 +189,13 @@ federates is the **execution role** and no credential is stored anywhere.
 `aws/mcp-harness/` holds the whole thing: a handler, an image, and a deploy script.
 
 ```bash
-AWS_ACCOUNT_ID=<your account> ENV=dev ./aws/mcp-harness/deploy.sh
+ENV=dev ./aws/mcp-harness/deploy.sh
 ```
+
+The account comes from `aws sts get-caller-identity` — pass one as an argument to
+override it, and the script refuses if it disagrees with the credentials in use.
+It does not read an unexported `AWS_ACCOUNT_ID`, because a bare assignment on its
+own line never reaches a child process, and that fails in a confusing way.
 
 It creates the execution role (with **no AWS permissions** beyond writing its own logs —
 the role is an identity to prove, not a set of entitlements), generates the credential

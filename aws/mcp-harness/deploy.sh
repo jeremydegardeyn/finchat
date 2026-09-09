@@ -2,13 +2,44 @@
 # Deploy the MCP harness Lambda. Run from the repo root, with an AWS profile that can
 # create IAM roles, ECR repositories and Lambda functions.
 #
-#   AWS_ACCOUNT_ID=123456789012 ENV=dev ./aws/mcp-harness/deploy.sh
+#   ./aws/mcp-harness/deploy.sh              # account read from your AWS credentials
+#   ./aws/mcp-harness/deploy.sh 123456789012 # or name it
 #
 # Idempotent: re-running updates the function rather than failing on a name collision.
 # Everything it creates sits inside the free tier except the ECR image (~$0.03/month).
 set -euo pipefail
 
-: "${AWS_ACCOUNT_ID:?set AWS_ACCOUNT_ID (12 digits)}"
+# Git Bash rewrites any argument that looks like a Unix path — `/dev/stdout` becomes
+# `C:/Program Files/Git/dev/stdout` on the way into the AWS CLI, and the error blames the
+# CLI. Off for the whole script; it is a Windows-only variable and inert elsewhere.
+export MSYS_NO_PATHCONV=1
+
+for tool in aws docker gcloud; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "need $tool on PATH" >&2; exit 1; }
+done
+
+# The account comes from the credentials in use, not from something you have to remember
+# to export. `AWS_ACCOUNT_ID=x ./deploy.sh` works; a bare `AWS_ACCOUNT_ID=x` on its own
+# line does NOT reach a child process, which is a confusing way to fail.
+DISCOVERED="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
+AWS_ACCOUNT_ID="${1:-${AWS_ACCOUNT_ID:-${DISCOVERED}}}"
+if [ -z "${AWS_ACCOUNT_ID}" ]; then
+  echo "No AWS account. Pass it as an argument, or configure AWS credentials." >&2
+  exit 1
+fi
+case "${AWS_ACCOUNT_ID}" in
+  [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+  *) echo "AWS_ACCOUNT_ID must be 12 digits, got '${AWS_ACCOUNT_ID}'" >&2; exit 1 ;;
+esac
+# Deploying into an account other than the one you are authenticated to would create the
+# role somewhere else and fail later, at the token exchange, with a message about the
+# attribute condition — a long way from the cause.
+if [ -n "${DISCOVERED}" ] && [ "${DISCOVERED}" != "${AWS_ACCOUNT_ID}" ]; then
+  echo "Refusing: your credentials are for ${DISCOVERED}, not ${AWS_ACCOUNT_ID}." >&2
+  exit 1
+fi
+echo "AWS account ${AWS_ACCOUNT_ID}"
+
 ENV="${ENV:-dev}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 GCP_PROJECT="${GCP_PROJECT:-strongsville-city-schools}"
@@ -92,6 +123,9 @@ echo "==> Invoking"
 # No function URL. This is a harness, and a public HTTPS endpoint is a new attack surface
 # for something only you invoke. `aws lambda create-function-url-config --auth-type AWS_IAM`
 # adds one later if a demo needs to be clicked rather than run.
+OUT="$(mktemp)"
 aws lambda invoke --function-name "${FUNCTION}" --region "${AWS_REGION}" \
   --cli-binary-format raw-in-base64-out \
-  --payload '{"tool": "finchat_status"}' /dev/stdout
+  --payload '{"tool": "finchat_status"}' "${OUT}" >/dev/null
+cat "${OUT}"; echo
+rm -f "${OUT}"
