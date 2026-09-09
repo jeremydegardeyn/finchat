@@ -9,11 +9,12 @@
 # Everything it creates sits inside the free tier except the ECR image (~$0.03/month).
 set -euo pipefail
 
-# Git Bash rewrites any argument that looks like a Unix path — `/dev/stdout` becomes
-# `C:/Program Files/Git/dev/stdout` on the way into the AWS CLI, and the error blames the
-# CLI. Off for the whole script; it is a Windows-only variable and inert elsewhere.
-export MSYS_NO_PATHCONV=1
-
+# NOTE: do not `export MSYS_NO_PATHCONV=1` here. It looks like the right defence against
+# Git Bash rewriting Unix-looking arguments, and it breaks gcloud, whose Windows wrapper
+# DEPENDS on that conversion — it builds a doubled prefix like `C:\c\Users\...` and fails
+# on a path that does not exist. Nothing in this script needs it: the one argument that
+# did (`/dev/stdout`) is gone, and MSYS converting a mktemp path on the way into aws.exe
+# is correct, since aws.exe is a native binary that wants a Windows path.
 missing=""
 command -v aws >/dev/null 2>&1 || missing="${missing}
   aws     — AWS CLI v2. Windows:  msiexec /i https://awscli.amazonaws.com/AWSCLIV2.msi
