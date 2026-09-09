@@ -1,6 +1,6 @@
 # 26 — Technical Controls Alerting (GCP → ServiceNow)
 
-**Status:** COMPLETE and verified live in dev/test/prod. A real prod jailbreak travels
+**Status:** COMPLETE and verified live. Verified across dev/test/prod on 2026-09-03; the **test environment was removed on 2026-09-08**, so the platform is dev + prod now. Findings below that say "all three" — F18 and F19 in particular — are kept as written: they record what was observed when three environments shared one project, and the fan-out they describe is a property of the topology rather than of the number three. A real prod jailbreak travels
 Model Armor block -> redacted control event -> Pub/Sub -> Eventarc -> Cloud Workflows ->
 ServiceNow `em_event` -> `em_alert` -> **incident**, and in parallel to a Google Chat space.
 Prod computes severity 2, nonprod 4, from identical code. Model Armor floor settings ON (prod owns

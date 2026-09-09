@@ -122,9 +122,27 @@ compromise path: audience and issuer checks stop a dev token being *replayed* at
 but not a dev key being used to *mint* one, because prod's JWKS would publish the same
 public key.
 
-**Only dev is public.** test and prod have the proxy provisioned and `mcp_public = false`,
-so their proxies can issue tokens for an endpoint still behind IAM. Those tokens are inert
-until the second switch is thrown, which is the design rather than an oversight.
+**Both environments are public** (dev 2026-09-07, prod 2026-09-08), each rolled out in
+the same order. There is no `test` any more — it was removed rather than given a third
+OAuth callback, which would have exceeded the redirect-URI limit on an unverified Google
+client.
+
+Prod's `FINCHAT_MCP_SERVICE_CALLERS` names only its CI identity. dev carries three because
+the AI gateway and the web BFF are wired there; nothing else calls prod's MCP, and copying
+dev's list would have granted reach nobody uses.
+
+**Signing keys and client stores are per environment.** One signing key across both is a
+cross-environment compromise path: audience and issuer checks stop a dev token being
+*replayed* at prod, but not a dev key being used to *mint* one, because prod's JWKS would
+publish the same public key.
+
+**The configuration that makes this safe is not in the repository.** `mcp_public` lives in
+a gitignored `terraform.tfvars`, and CI materialises tfvars from a per-environment
+`TFVARS` secret. Setting the variable locally and applying leaves that secret stale, and
+the next CI apply silently reverts the environment — surfacing only as hosted clients
+getting 403 with nothing tying it to a Terraform run. After editing any env tfvars,
+re-sync that environment's `TFVARS` secret. The repo cannot tell you what prod's
+configuration is.
 
 ## Consequences
 

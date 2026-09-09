@@ -59,6 +59,41 @@ A request to read a balance crosses: UI persona → API Gateway (key/JWT/quota) 
 A **chat** request additionally crosses **Model Armor** (prompt screened in, response screened out)
 before/after the agent. No single control is the only line of defense.
 
+## Workload identities, and the one that was wrong
+
+Every FinChat service runs as its own least-privilege service account, and the ones added
+for the agent channel hold **no project roles at all** — `mcp` and `mcp_auth` reach what
+they need through per-target grants (`run.invoker` on a named service, `secretAccessor` on
+two named secrets) rather than project-wide roles. That is the intended shape, and it is
+worth stating because the project contained a live counter-example for months.
+
+**`roles/owner` on the default compute service account** (removed 2026-09-08). Several
+workloads outside FinChat ran as it, including an internet-facing UI, and the grant was
+invisible precisely because nothing ever used the extra reach: the account already held
+`roles/editor` plus around twenty specific roles, so everything worked identically without
+owner. What owner added was the power to rewrite the project's IAM policy — the one
+capability a workload should never have, since it converts any code execution into
+permanent, self-granted privilege.
+
+Two things made the removal safe to reason about rather than a leap:
+
+- **Audit logs, not intuition.** Ninety days showed no `SetIamPolicy`, no billing calls,
+  and no resource-manager writes by that principal. The capability being withdrawn had
+  never been exercised.
+- **The remaining 24 roles were enumerated first.** `cloudbuild.builds.builder`,
+  `run.admin`, `storage.admin` and `artifactregistry.writer` are what `gcloud run deploy
+  --source` actually needs; all were retained.
+
+The related fix is in the AI gateway ([ADR-0020](adr/0020-remote-mcp-workspace-federation.md)
+consumes it): its public UI and its private API now have separate identities, so a
+compromise of the internet-facing container does not inherit the backend's reach. Both ran
+as that same default account until the same day.
+
+**The general rule this leaves behind:** a default service account is a shared identity,
+and any grant on it is a grant to every workload that has ever defaulted to it. Name the
+identity per workload, and the blast radius becomes something you can read off the IAM
+policy instead of having to reconstruct.
+
 ## Supporting future regulatory requirements
 
 - **Data residency:** single-region (`us-central1`) resources; region is a variable → multi-region or

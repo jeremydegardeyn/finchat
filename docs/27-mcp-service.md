@@ -232,11 +232,12 @@ this platform cannot stand behind.
 
 ### 2.6 Reaching it from a hosted assistant
 
-**Built and running in dev** ([ADR-0020](adr/0020-remote-mcp-workspace-federation.md)).
+**Built and running in dev and prod** ([ADR-0020](adr/0020-remote-mcp-workspace-federation.md)).
 `products/mcp_auth/` is an OAuth 2.1 authorization server — RFC 8414 discovery, RFC 7591
 dynamic client registration, PKCE `S256`, RFC 8707 resource indicators, rotating refresh
-tokens — that federates the human login to Google. The endpoint a connector points at is
-`https://finchat-dev-mcp-fdkbl4wtua-uc.a.run.app/mcp`.
+tokens — that federates the human login to Google. Each environment has its own proxy,
+its own signing key and its own client store, and the endpoint a connector points at is
+that environment's `finchat-<env>-mcp` URL with `/mcp`.
 
 ![MCP access paths](diagrams/mcp-access-paths.svg)
 
@@ -255,10 +256,39 @@ Three things about it are worth carrying to any other MCP server you make public
    the Cloud Console. Until it is, Google answers `redirect_uri_mismatch`, and nothing in
    the error says where to look.
 
+### 2.7 Verifying it, on a schedule
+
+Two of the faults in this increment were found by deploying and looking, not by any test:
+an image missing a dependency it imports lazily, and a view that never projected the
+column its API filters on. Both passed CI. Both looked healthy, because the process layer
+degrades per source and returns a complete-looking answer with `partial: ["loans"]`.
+
+`.github/workflows/verify-live.yml` runs twice a day against every environment and asserts
+the things a unit test structurally cannot:
+
+| Check | What it catches |
+|---|---|
+| `GET /healthz/deep` on process and mobile | a source degrading behind a 200 — it asserts on `partial`, which is the signal those faults produced. Booleans and counts only; no balances reach a CI log. |
+| `verify_mcp_live.py` | the agent channel's transport: streamable HTTP, the OIDC audience, the allow-listed host that otherwise fails as a bare `421`, and — once public — that an anonymous caller gets 401 with a resolvable RFC 9728 discovery URL |
+| `verify_oauth_live.py` | discovery, JWKS, DCR, every refusal, and that **Google still accepts the proxy's callback** — a Console entry no Terraform reconciles, which can be edited away with no symptom until someone fails to sign in |
+
+Three details are load-bearing rather than tidy:
+
+- **A human running these against a public endpoint is refused, and that is reported as
+  success.** People authenticate through the proxy; only named services present a Google
+  token. A check that fails while the system behaves correctly is one people stop reading.
+- **"I could not ask" is not "it is not deployed."** An expired local gcloud session once
+  made the script report a missing production service, which sends someone to look at the
+  wrong thing entirely.
+- **A retry is reported, not swallowed.** A scale-to-zero service occasionally refuses a
+  cold connect, so one transport retry is allowed — and named in the output, because a
+  service that needs a second attempt every night is a signal, and hiding it trades a
+  noisy check for a blind one.
+
 `scripts/verify_oauth_live.py` proves the unattended half on a schedule and, with
 `--login`, the whole flow including the Google step.
 
-### 2.7 The older answer, for reference
+### 2.8 The older answer, for reference
 
 Claude's connector flow, and the MCP authorization spec generally, does **OAuth 2.1 with
 Dynamic Client Registration**. There is no field for a static token, and Google does not
