@@ -104,7 +104,7 @@ jobs:
         # updated, so CI failed on ModuleNotFoundError while every local run passed.
         # Third time in this repo: when adding a test, check the JOB that runs it.
         run: |
-          pip install mcp==1.27.2 "pyjwt[crypto]==2.10.1" google-auth==2.34.0 \n            requests==2.32.3 cryptography
+          pip install mcp==1.27.2 "pyjwt[crypto]==2.10.1" google-auth==2.34.0 requests==2.32.3 cryptography
           pytest mcp_server -q
       - name: Canary wiring smoke (no live endpoint)
         run: python scripts/canary_eval.py dev --offline
