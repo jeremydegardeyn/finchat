@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # The server itself.
 COPY mcp_server/server.py mcp_server/backends.py mcp_server/knowledge.py \
-     mcp_server/loader.py mcp_server/auth.py ./mcp_server/
+     mcp_server/loader.py mcp_server/auth.py mcp_server/caller.py ./mcp_server/
 
 # Modules reused from the services that own them. Every one of these is asserted
 # by test_mcp_image.py — a missing COPY here fails at first tool call, not at
