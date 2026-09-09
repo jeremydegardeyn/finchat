@@ -165,6 +165,23 @@ credentials for a file that is present and correct. It handles `service_account`
 `impersonated_service_account` files and the metadata server; an `external_account` file
 is none of those.
 
+## What is wired, and in which environment
+
+Both environments are federated to AWS account `161824122497`, each with **its own role
+name** — one AWS account, but a prod grant must not be reachable by whatever assumed the
+dev role:
+
+| | dev | prod |
+|---|---|---|
+| Pool | `finchat-dev-aws-pool` | `finchat-prod-aws-pool` |
+| AWS role that may federate | `finchat-dev-mcp-client` | `finchat-prod-mcp-client` |
+| Service account | `finchat-dev-aws-mcp` | `finchat-prod-aws-mcp` |
+| In `FINCHAT_MCP_SERVICE_CALLERS` | yes | yes |
+
+`ENV` selects which one the deploy script targets, and it **defaults to dev**. A prod
+harness reads prod banking data with a service identity, attributed in the audit to the
+service account rather than to a person — deliberate, and worth being deliberate about.
+
 ## The runtime: Lambda, not App Runner
 
 App Runner is the obvious Cloud Run analogue and it fails the near-zero-cost test — no
