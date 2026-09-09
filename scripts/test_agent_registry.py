@@ -133,10 +133,22 @@ def test_service_account_ids_are_valid_for_iam():
 
 
 def test_every_agent_maps_to_a_model_inventory_row():
-    """The agent registry and the model inventory must not drift apart."""
+    """The agent registry and the model inventory must not drift apart.
+
+    An entry with `model_ref: None` is exempt, and that is the ADR-0023 distinction
+    rather than a loophole: the model inventory registers what *reasons*, this registry
+    registers what *acts*. An external client calls tools and runs no model, so it has
+    nothing to inventory, and inventing a row would put a model in docs/19 that does not
+    exist. The paired assertion stops that becoming a way to smuggle an unpinned model
+    past the inventory.
+    """
     doc = (Path(__file__).resolve().parent.parent / "docs" / "19-model-inventory.md").read_text(
         encoding="utf-8")
     for a in agents_catalog.agents("dev"):
+        if a["model_ref"] is None:
+            assert a["model_alias"] is None, \
+                f"{a['id']} claims no model inventory row but declares a model alias"
+            continue
         assert f"| {a['model_ref']} |" in doc, \
             f"{a['id']} references {a['model_ref']}, absent from docs/19"
 

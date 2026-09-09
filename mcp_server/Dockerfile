@@ -28,6 +28,10 @@ COPY products/loans/api/store.py products/loans/api/risk.py ./products/loans/api
 # The process layer's capability, reused rather than reimplemented when no process
 # service is deployed. Framework-free on purpose so this image needs no FastAPI.
 COPY products/process/api/overview.py ./products/process/api/
+# The agent registry (ADR-0023). caller.py resolves a registered service's tool
+# allow-list from it, so the image carries the SOURCE rather than a compiled copy
+# — a copy would be a second place the allow-list could be true. Stdlib only.
+COPY scripts/agents_catalog.py ./scripts/
 COPY knowledge/ontology.yaml ./knowledge/
 COPY contracts/ ./contracts/
 

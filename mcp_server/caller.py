@@ -137,6 +137,54 @@ def _request():
         return None
 
 
+def registered_tools(email: str) -> set[str]:
+    """The tool allow-list this service account is registered for (ADR-0023), or empty.
+
+    A service never gets a persona — see `Caller.persona`, and the reason is that CLS
+    under ADR-0019 evaluates against a *person*, so handing a machine a human role would
+    invent a human in the audit trail. But "no persona" is not the same as "no
+    entitlement". The agent registry is where a non-human principal is granted scope:
+    a named accountable owner, a tool allow-list CI checks against the code, and a
+    recertification date the build enforces. That is governance rather than impersonation,
+    and it is the honest answer to "may a machine reach this surface".
+
+    Empty for anything not registered, which keeps this **purely additive**: every caller
+    that works today keeps working, and a registered one may be granted more.
+    """
+    if not email:
+        return set()
+    local = email.split("@")[0]
+    # The env is read off the account id (`finchat-<env>-<sa_key>`) rather than from a
+    # variable. A variable would have to be set correctly on every surface that imports
+    # this, and being wrong would silently grant a dev identity a prod allow-list.
+    parts = local.split("-")
+    if len(parts) < 3 or parts[0] != "finchat":
+        return set()
+    env = parts[1]
+
+    try:
+        from pathlib import Path
+
+        import loader
+
+        catalog = loader.load(
+            "agents_catalog",
+            Path(__file__).resolve().parent.parent / "scripts" / "agents_catalog.py")
+    except Exception:
+        # The registry is not in the image, or failed to load. Granting nothing is the
+        # safe direction: every caller falls back to exactly the scope it had before.
+        return set()
+
+    for agent in catalog.agents(env):
+        if agent.get("status") != "active":
+            continue
+        # Compare the derived account id, so truncation to IAM's 30-char limit is applied
+        # the same way on both sides.
+        if catalog.service_account_id(agent, env) == local:
+            return set(agent.get("tools") or ())
+    return set()
+
+
 class NotPermitted(Exception):
     """A tool refused a caller. The message is shown to the model, so it says what to do."""
 
@@ -164,8 +212,14 @@ def require_staff(tool: str) -> Caller | None:
         raise NotPermitted(
             f"{tool} needs an authenticated caller. Connect through the OAuth flow so "
             "the request carries an identity.")
-    if not who.is_staff:
-        raise NotPermitted(
-            f"{tool} is a staff surface and this identity is not provisioned for it. "
-            "The grounded account and knowledge-base tools are available instead.")
-    return who
+    if who.is_staff:
+        return who
+    # A registered service (ADR-0023) is permitted the tools its registry entry names.
+    # This is the only route by which a machine reaches a gated tool, and it is not a
+    # persona: the entry carries an accountable human owner and a recertification date,
+    # and the audit still records the service account rather than a person.
+    if who.kind == "service" and tool in registered_tools(who.email):
+        return who
+    raise NotPermitted(
+        f"{tool} is a staff surface and this identity is not provisioned for it. "
+        "The grounded account and knowledge-base tools are available instead.")

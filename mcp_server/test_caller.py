@@ -210,3 +210,91 @@ def test_empty_staff_lists_admit_nobody(mod, monkeypatch):
     monkeypatch.setattr(caller, "ADMIN_EMAILS", set())
     _arrange(mod, monkeypatch, "t", _claims(jti="jz"))
     assert caller.current().is_staff is False
+
+
+# --- registered service entitlements (ADR-0023) -------------------------------
+# The question these answer: a machine gets no persona, so is a staff surface simply
+# closed to it forever? No — the agent registry grants scope to a non-human principal
+# with a named owner and a recertification date. That is governance, not impersonation,
+# and the tests below care most that it stayed ADDITIVE.
+
+@pytest.fixture()
+def registry(mod, monkeypatch):
+    """Make `import loader` resolve the way it does in the image (cwd is mcp_server/)."""
+    monkeypatch.syspath_prepend(str(HERE))
+    caller, _ = mod
+    return caller
+
+
+def _service(mod, monkeypatch, email, tool_env="dev"):
+    return _arrange(mod, monkeypatch,
+                    "t", _claims(email=email, kind="service", jti=email))
+
+
+def test_a_registered_service_is_admitted_to_a_tool_it_is_registered_for(
+        registry, mod, monkeypatch):
+    caller = _service(mod, monkeypatch,
+                      "finchat-dev-aws-mcp@strongsville-city-schools.iam.gserviceaccount.com")
+    assert caller.require_staff("get_account_balance").kind == "service"
+
+
+def test_a_registered_service_is_refused_a_tool_outside_its_allow_list(
+        registry, mod, monkeypatch):
+    """The allow-list is the control. A registry entry is not a blanket pass — the
+    approver-only tools are absent from it on purpose."""
+    caller = _service(mod, monkeypatch,
+                      "finchat-dev-aws-mcp@strongsville-city-schools.iam.gserviceaccount.com")
+    with pytest.raises(caller.NotPermitted):
+        caller.require_staff("get_loan_audit")
+
+
+def test_an_unregistered_service_is_still_refused(registry, mod, monkeypatch):
+    """The regression that matters. The AI gateway, the BFF and CI all call as services
+    and none of them is in the registry; if registration became a REQUIREMENT rather than
+    an additional grant, this change would have taken them all down."""
+    caller = _service(mod, monkeypatch,
+                      "ai-gateway-sa@strongsville-city-schools.iam.gserviceaccount.com")
+    with pytest.raises(caller.NotPermitted):
+        caller.require_staff("get_account_balance")
+
+
+def test_a_registered_service_still_has_no_persona(registry, mod, monkeypatch):
+    """An entitlement is not a persona. If this ever flips, the audit starts naming a
+    human role for something no human did."""
+    caller = _service(mod, monkeypatch,
+                      "finchat-dev-aws-mcp@strongsville-city-schools.iam.gserviceaccount.com")
+    who = caller.current()
+    assert who.persona is None and who.is_staff is False
+
+
+def test_the_environment_comes_from_the_account_id(registry, mod):
+    """A dev identity must not resolve a prod allow-list. The env is read off the account
+    id rather than a variable, because a variable set wrongly fails silently and in the
+    permissive direction."""
+    caller, _ = mod
+    dev = caller.registered_tools(
+        "finchat-dev-aws-mcp@strongsville-city-schools.iam.gserviceaccount.com")
+    prod = caller.registered_tools(
+        "finchat-prod-aws-mcp@strongsville-city-schools.iam.gserviceaccount.com")
+    assert dev and prod, "both environments register the harness"
+    # An unrecognised env segment still resolves, because the catalog's allow-lists do not
+    # vary by environment — only the account id does. That is safe rather than sloppy: an
+    # account like `finchat-nosuchenv-aws-mcp` does not exist, so it cannot authenticate,
+    # and FINCHAT_MCP_SERVICE_CALLERS is what decides which accounts get that far. This
+    # asserts the property rather than pretending the parser validates envs.
+    assert caller.registered_tools(
+        "finchat-nosuchenv-aws-mcp@x.iam.gserviceaccount.com") == dev
+
+
+def test_an_unrecognisable_identity_grants_nothing(registry, mod):
+    caller, _ = mod
+    for email in ("", "someone@example.com", "not-finchat-shaped@x.iam.gserviceaccount.com",
+                  "finchat-dev@x.iam.gserviceaccount.com"):
+        assert caller.registered_tools(email) == set(), email
+
+
+def test_the_registry_is_shipped_in_the_image():
+    """caller.py reads the registry at runtime. A missing COPY makes every registered
+    service silently lose its entitlement — a failure that looks like a permissions bug."""
+    dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+    assert "scripts/agents_catalog.py" in dockerfile

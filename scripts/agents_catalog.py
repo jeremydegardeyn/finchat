@@ -51,6 +51,11 @@ RECERT_DAYS = {"HIGH": 90, "MEDIUM": 180, "LOW": 365}
 # build failure — the alias is a legitimate posture as long as it is a declared one).
 DEFAULT_MODEL_ALIAS = "gemini-2.5-flash"
 
+# Kinds whose service account is created elsewhere in Terraform. They belong in the
+# registry — that is where accountability and the tool allow-list live — but emitting
+# them to the agent_registry module would create a SECOND account with the same name.
+EXTERNAL_IDENTITY = {"external_client"}
+
 
 def agents(env: str) -> list[dict]:
     """Return the canonical agent list for an environment.
@@ -302,6 +307,61 @@ def agents(env: str) -> list[dict]:
             "last_recertified": "2026-08-04",
             "status": "active",
         },
+        # --- External clients -----------------------------------------------------
+        # Not an agent that reasons — a workload that ACTS through the agent channel.
+        # ADR-0023 draws exactly this line: the model inventory registers what reasons,
+        # this registers what acts, so an actor with no model belongs here and has no
+        # row in docs/19.
+        #
+        # It is registered because that is the honest answer to "may a machine reach a
+        # staff surface". A persona is a human role and CLS (ADR-0019) evaluates against
+        # a person, so handing one to a service would invent a human in the audit trail.
+        # A registry entry instead gives it a NAMED OWNER who recertifies it, a scoped
+        # allow-list CI can check, and attribution to its own identity — governance
+        # rather than impersonation.
+        {
+            "id": "aws_mcp_harness",
+            "display": "AWS MCP harness (Lambda)",
+            "product": "platform",
+            "kind": "external_client",
+            "runtime": f"aws-lambda:finchat-{env}-mcp-harness",
+            "source": "aws/mcp-harness/handler.py",
+            "code_name": "lambda_handler",
+            "owner": PLATFORM_OWNER,
+            "business_area": "Platform Engineering",
+            # MEDIUM, not HIGH: read-only, no customer-facing surface, and no consequential
+            # action. It reaches real account data, which is why it is not LOW.
+            "risk_tier": "MEDIUM",
+            # The identity Terraform already creates in infra/envs/*/main.tf as
+            # `aws_mcp_client`. Named here so the registry records the real principal
+            # rather than a second one — see EXTERNAL_IDENTITY below for why it is not
+            # emitted to the agent_registry module.
+            "sa_key": "aws-mcp",
+            # No model. It calls tools; it does not reason, so there is nothing to pin
+            # and nothing to route through the AI gateway.
+            "model_alias": None,
+            "model_ref": None,
+            "tools": [
+                "finchat_status",
+                "describe_data_model",
+                "lookup_glossary_term",
+                "search_knowledge_base",
+                "get_account_balance",
+                "get_account_transactions",
+                "get_account_summary",
+                "get_customer_overview",
+                "get_recent_activity",
+                "get_loan_status",
+            ],
+            "data_scope": "Whatever the governed APIs return to the MCP service account. "
+                          "No write tools, and no approver-only tool (list_loans, "
+                          "get_loan_audit, submit_loan_application are absent by design).",
+            "consequential": False,  # read-only
+            "hitl": False,
+            "registered": "2026-09-09",
+            "last_recertified": "2026-09-09",
+            "status": "active",
+        },
     ]
 
 
@@ -333,7 +393,8 @@ def emit_tfvars(env: str) -> dict:
                 "product": a["product"],
                 "recert_due": recert_due(a).isoformat(),
             }
-            for a in agents(env) if a["status"] == "active"
+            for a in agents(env)
+            if a["status"] == "active" and a["kind"] not in EXTERNAL_IDENTITY
         }
     }
 
