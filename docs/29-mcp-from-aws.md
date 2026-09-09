@@ -165,6 +165,58 @@ credentials for a file that is present and correct. It handles `service_account`
 `impersonated_service_account` files and the metadata server; an `external_account` file
 is none of those.
 
+## The runtime: Lambda, not App Runner
+
+App Runner is the obvious Cloud Run analogue and it fails the near-zero-cost test — no
+scale-to-zero, and it bills provisioned memory while idle, roughly $5/month for something
+that is asleep most of the time. Fargate has no scale-to-zero at all.
+
+**Lambda's free tier is perpetual** — 1M requests and 400k GB-seconds a month, not a
+12-month trial — so a harness that runs on demand costs nothing. The only standing charge
+is the ECR image, about $0.03/month; a zip package would be exactly $0 if that matters.
+
+The reason this works at all is worth writing down, because most WIF documentation
+assumes a metadata service and **Lambda has none**. google-auth checks
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` before it tries IMDS,
+and reads `AWS_REGION` the same way. Its own source says so:
+
+> The AWS metadata server is not available in some AWS environments such as AWS lambda.
+> Instead, it is available via environment variable.
+
+Lambda sets all four for the execution role on every invocation, so the identity that
+federates is the **execution role** and no credential is stored anywhere.
+
+`aws/mcp-harness/` holds the whole thing: a handler, an image, and a deploy script.
+
+```bash
+AWS_ACCOUNT_ID=<your account> ENV=dev ./aws/mcp-harness/deploy.sh
+```
+
+It creates the execution role (with **no AWS permissions** beyond writing its own logs —
+the role is an identity to prove, not a set of entitlements), generates the credential
+configuration, builds and pushes the image, creates or updates the function, and invokes
+it once. Re-running updates rather than failing.
+
+Then, for any tool:
+
+```bash
+aws lambda invoke --function-name finchat-dev-mcp-harness \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"tool": "get_account_balance", "arguments": {"account_id": "ACC001"}}' \
+  /dev/stdout
+```
+
+Two deliberate omissions. There is **no function URL**: a public HTTPS endpoint is a new
+attack surface for something only you invoke, and
+`aws lambda create-function-url-config --auth-type AWS_IAM` adds one later if a demo needs
+to be clicked rather than run. And the default tool is `finchat_status`, which reads no
+customer data — CloudWatch logs outlive the invocation, and account data should not
+accumulate there.
+
+Build for **x86_64** (`--platform linux/amd64`, which the script passes). An arm64 laptop
+otherwise builds an image the function cannot start, and the symptom is a runtime exit
+rather than a deploy failure.
+
 ## When it does not work
 
 | Symptom | Cause |

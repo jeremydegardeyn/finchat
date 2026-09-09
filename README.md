@@ -135,7 +135,7 @@ finchat/
 | — | **End-to-End Flow** (one diagram, whole platform) | [`docs/25`](docs/25-end-to-end-flow.md) |
 | — | **MCP as a service surface** (agent channel · experience APIs) | [`docs/27`](docs/27-mcp-service.md) |
 | — | **API-led layering** (system · process · experience) | [`docs/28`](docs/28-api-led-layering.md) · [diagram](docs/diagrams/api-layers.svg) |
-| — | **Calling MCP from AWS** (workload identity federation) | [`docs/29`](docs/29-mcp-from-aws.md) |
+| — | **Calling MCP from AWS** (WIF · zero-cost Lambda harness) | [`docs/29`](docs/29-mcp-from-aws.md) · [`aws/mcp-harness/`](aws/mcp-harness/) |
 | — | Architecture Decision Records | [`docs/adr/`](docs/adr/) |
 
 ---

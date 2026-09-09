@@ -1,0 +1,8 @@
+# Pinned to match mcp_server/requirements.txt, so the client and the server it talks to
+# move together. No uvicorn here: this is a client, and Lambda supplies the runtime.
+mcp==1.27.2
+google-auth==2.34.0
+# google.auth.transport.requests imports this lazily. Without it, google-auth imports
+# fine and fails at the first token mint with a message about missing credentials —
+# which reads as a permissions problem and is not one. Same trap as the MCP image.
+requests==2.32.3
