@@ -147,7 +147,17 @@ def main() -> int:
             report["mcp"] = {"url": mcp_url,
                              **mcp_over_http(mcp_url, token(mcp_url), args.account)}
         except Exception as e:
-            report["mcp"] = {"url": mcp_url, "error": f"{type(e).__name__}: {e}"}
+            # The MCP client wraps every transport failure in an ExceptionGroup whose
+            # own message names nothing. Unwrap it, because a 401 here is a decision and
+            # not an outage: on a public, OAuth-enforcing endpoint (ADR-0020) a human is
+            # refused by design, and reporting that as FAIL trains people to stop reading
+            # this script.
+            detail = " ".join(str(x) for x in (getattr(e, "exceptions", None) or [e]))
+            if "401" in detail:
+                report["mcp"] = {"url": mcp_url, "refused": True}
+            else:
+                report["mcp"] = {"url": mcp_url,
+                                 "error": f"{type(e).__name__}: {detail[:200]}"}
     else:
         report["mcp"] = {"error": "finchat-%s-mcp is not deployed" % args.env}
 
@@ -164,6 +174,14 @@ def main() -> int:
 
     mcp = report["mcp"]
     print("\n  MCP over HTTP")
+    if mcp.get("refused"):
+        # Correct, not broken. Where the endpoint is public and enforcing OAuth
+        # (ADR-0020) a HUMAN is refused by design: people authenticate through the
+        # proxy, and only named services present a Google token. Reporting that as FAIL
+        # trains people to ignore this script.
+        print("  [ok ] endpoint enforces OAuth and refused this caller (401) — expected "
+              "for a human; reach the tools via the OAuth flow or as a named service")
+        return 0 if all(h.get("http") == 200 for h in report["hops"]) else 1
     if "error" in mcp:
         print(f"  [FAIL] {mcp['error']}")
         return 1

@@ -97,7 +97,15 @@ jobs:
         run: pytest scripts/test_canary_eval.py -q
 
       - name: MCP surface — tool scoping, omissions, knowledge plane (ADR-0028)
-        run: pip install mcp==1.27.2 && pytest mcp_server -q
+        # Each of these is imported by a test in mcp_server/, and the step declares its
+        # own extras — the job installs only pytest and pyflakes. `pyjwt[crypto]` and
+        # `google-auth` arrived with ADR-0020 token validation (test_auth.py verifies
+        # both a proxy-minted token and a Google service token) and this step was not
+        # updated, so CI failed on ModuleNotFoundError while every local run passed.
+        # Third time in this repo: when adding a test, check the JOB that runs it.
+        run: |
+          pip install mcp==1.27.2 "pyjwt[crypto]==2.10.1" google-auth==2.34.0 \n            requests==2.32.3 cryptography
+          pytest mcp_server -q
       - name: Canary wiring smoke (no live endpoint)
         run: python scripts/canary_eval.py dev --offline
       - name: Generator invariant check (<=4 per customer)
