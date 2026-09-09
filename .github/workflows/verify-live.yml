@@ -110,7 +110,7 @@ jobs:
           set -euo pipefail
           if gcloud run services describe "finchat-${ENV}-mcp-auth" --region "${REGION}" >/dev/null 2>&1; then
             pip install --quiet "pyjwt[crypto]==2.10.1"
-            python scripts/verify_oauth_live.py --env "${ENV}" --region "${REGION}"               --project "${PROJECT}"
+            python scripts/verify_oauth_live.py --env "${ENV}" --region "${REGION}" --project "${PROJECT}"
           else
             echo "finchat-${ENV}-mcp-auth not provisioned (enable_mcp_oauth is false) — skipping."
           fi

@@ -1,18 +1,31 @@
-"""Guard: no workflow ships a mangled shell line-continuation.
+r"""Guard: no workflow ships a mangled shell line-continuation.
 
-A backslash at end of line continues a shell command. If that backslash is lost and the
-`n` of the newline survives, the result is a valid-looking line with a stray `n` argument
-— and YAML still parses, so nothing catches it until the job runs:
+A backslash at end of line continues a shell command. It gets damaged two ways, and both
+have shipped from this repository.
+
+**Shape one — the backslash is lost and the `n` of the newline survives**, leaving a
+valid-looking line with a stray `n` argument. YAML still parses, so nothing catches it
+until the job runs:
 
     pip install mcp==1.27.2 google-auth==2.34.0 \n            requests==2.32.3
     ERROR: Could not find a version that satisfies the requirement n
 
-That shipped. It has happened repeatedly in this repository because the tooling that
-generates these files eats one level of backslash escaping, and every safeguard that
-depends on remembering has failed. A test does not have to remember.
+**Shape two — the backslash AND the newline are lost**, and the interpreter joins the
+lines. The old indentation survives as a long run of spaces inside the command:
+
+    python -m pyflakes ui/*.py scripts/*.py             2>/dev/null | grep ...
+
+This one *runs*, which is why six of them sat in `build-deploy.yml`, `ci.yml` and
+`verify-live.yml` unnoticed until a doc rewrite produced the same shape twice in one
+sitting. It is not always harmless: if the joined tokens land badly the command means
+something other than what it reads as, and nothing about it looks broken.
+
+Both come from the same cause — tooling that eats one level of backslash escaping — and
+every safeguard that depends on remembering has failed. A test does not have to remember.
 
 `yaml.safe_load` passing is not evidence of anything here: the damage is inside a scalar
-block, which YAML is happy to carry.
+block, which YAML is happy to carry. `scripts/test_doc_shell.py` applies the second rule
+to documented commands.
 """
 import re
 from pathlib import Path
@@ -23,6 +36,9 @@ BACKSLASH = chr(92)
 
 # A lone `n` where a continuation should be: `\` was consumed, `n` survived.
 MANGLED = re.compile(re.escape(BACKSLASH) + r"n(?=\s|$)")
+# A gap of 3+ spaces mid-command: `\` and the newline were consumed, the indent survived.
+# Aligned trailing comments make the same shape on purpose, so they are excluded.
+COLLAPSED = re.compile(r"\S {3,}(?!#)\S")
 
 
 def _command_lines(path: Path):
@@ -53,11 +69,30 @@ def test_no_workflow_has_a_broken_line_continuation():
         "argument, and YAML still parses):\n  " + "\n  ".join(broken))
 
 
-def test_the_scanner_finds_the_shape_it_is_looking_for():
-    """A guard that cannot recognise the bug passes forever. Feed it the real thing."""
+def test_no_workflow_has_a_collapsed_line_continuation():
+    """The shape that runs anyway, and therefore hides."""
+    broken = []
+    for workflow in sorted(WORKFLOWS.glob("*.yml")):
+        for number, line in _command_lines(workflow):
+            if COLLAPSED.search(line):
+                broken.append(f"{workflow.name}:{number}: {line.strip()[:100]}")
+    assert not broken, (
+        "shell continuations look collapsed — a lost `" + BACKSLASH + "` joined the "
+        "lines and left the indentation as an interior run of spaces:\n  "
+        + "\n  ".join(broken))
+
+
+def test_the_scanner_finds_the_shapes_it_is_looking_for():
+    """A guard that cannot recognise the bug passes forever. Feed it the real things."""
     sample = "          pip install mcp==1.27.2 google-auth==2.34.0 " + BACKSLASH + "n   requests==2.32.3"
     assert MANGLED.search(sample), "the scanner no longer detects the shape that shipped"
     assert not MANGLED.search("          pip install mcp==1.27.2 " + BACKSLASH)
+
+    joined = "          deploy mcp mcp mcp             \"--set-env-vars=A=1\""
+    assert COLLAPSED.search(joined), "the scanner no longer detects the joined shape"
+    assert not COLLAPSED.search("          deploy mcp mcp mcp " + BACKSLASH)
+    assert not COLLAPSED.search("          terraform apply        # enable_catalog"), (
+        "an aligned trailing comment is not this bug and must not be reported")
 
 
 def test_the_scanner_reads_a_real_corpus():

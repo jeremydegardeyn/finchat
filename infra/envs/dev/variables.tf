@@ -201,3 +201,38 @@ variable "mcp_public" {
   EOT
   default     = false
 }
+
+variable "enable_aws_mcp_client" {
+  type        = bool
+  description = <<-EOT
+    Federate an AWS IAM role so a container there can call the MCP endpoint without a
+    human completing the OAuth flow. Off by default: it creates a trust relationship with
+    an external cloud account, which should never appear because a default said so.
+
+    Turning it on also requires `aws_account_id` and `aws_mcp_client_role`, and the
+    resulting service account must be added to FINCHAT_MCP_SERVICE_CALLERS *and the MCP
+    service redeployed* — env vars bake at deploy time.
+  EOT
+  default     = false
+}
+
+variable "aws_account_id" {
+  type        = string
+  description = "The 12-digit AWS account allowed to federate. Only meaningful with enable_aws_mcp_client."
+  default     = ""
+  validation {
+    condition     = var.aws_account_id == "" || can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "aws_account_id must be 12 digits."
+  }
+}
+
+variable "aws_mcp_client_role" {
+  type        = string
+  description = <<-EOT
+    The AWS IAM ROLE NAME (not ARN) permitted to federate — e.g. "finchat-mcp-client".
+    Named explicitly because an AWS account is an authentication boundary, not an
+    authorization one: without this, every principal in the account could impersonate the
+    service account.
+  EOT
+  default     = ""
+}

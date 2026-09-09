@@ -26,7 +26,9 @@ jobs:
       # a style linter here would be noise nobody reads.
       - name: Static check — undefined names
         run: |
-          python -m pyflakes ui/*.py scripts/*.py mcp_server/*.py products/*/*/*.py products/*/*/*/*.py             2>/dev/null | grep -E "undefined name" && {
+          python -m pyflakes ui/*.py scripts/*.py mcp_server/*.py \
+              products/*/*/*.py products/*/*/*/*.py \
+              2>/dev/null | grep -E "undefined name" && {
               echo "::error::undefined name(s) found — see above"; exit 1; } || true
       - name: Pipeline transform tests (Beam-free)
         working-directory: products/transactions/pipeline
@@ -106,6 +108,12 @@ jobs:
         run: |
           pip install mcp==1.27.2 "pyjwt[crypto]==2.10.1" google-auth==2.34.0 requests==2.32.3 cryptography
           pytest mcp_server -q
+      - name: Repo hygiene guards (doc links, shell continuations)
+        # These three tests existed and nothing ran them, which is the same fault they
+        # exist to prevent: a guard that never executes is a comment. They need only
+        # pytest, already installed by this job.
+        run: pytest scripts/test_doc_links.py scripts/test_workflow_shell.py scripts/test_doc_shell.py -q
+
       - name: Canary wiring smoke (no live endpoint)
         run: python scripts/canary_eval.py dev --offline
       - name: Generator invariant check (<=4 per customer)

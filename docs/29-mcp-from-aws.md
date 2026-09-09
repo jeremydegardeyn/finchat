@@ -1,0 +1,176 @@
+# Calling the MCP endpoint from AWS
+
+A container in AWS can reach FinChat's MCP endpoint without a Google key and without a
+human. This is the runbook, and the reasoning behind the shape.
+
+## Why not OAuth
+
+[ADR-0020](adr/0020-remote-mcp-workspace-federation.md)'s flow is authorization-code with
+PKCE: it needs a person at the Google step. You *can* run it once by hand and keep the
+refresh token, and it will work — until the container restarts. Refresh tokens here
+**rotate**, so each use invalidates the previous one; a workload that does not persist the
+newest token locks itself out, and the symptom is an integration that worked in testing
+and dies overnight.
+
+OAuth is right for a person. For a workload, the right answer is the one that needs no
+secret at all.
+
+## The shape
+
+```
+AWS IAM role  --(WIF: signed sts:GetCallerIdentity)-->  GCP
+      |                                                  |
+      |                        impersonates finchat-<env>-aws-mcp (no project roles)
+      |                                                  |
+      +--> Google id-token, aud = the MCP service URL ---+
+                                   |
+                                   v
+                    finchat-<env>-mcp validates it as a SERVICE caller
+                    (FINCHAT_MCP_SERVICE_CALLERS)
+```
+
+No long-lived credential exists anywhere in this picture. The AWS role proves itself with
+a signed request GCP verifies against AWS; GCP returns a short-lived token.
+
+**This is the same code path the AI gateway already uses** — the resource server's
+service-caller branch. Nothing new was written to support AWS.
+
+## What an AWS caller can and cannot do
+
+It is a **service**, and `mcp_server/caller.py` will not give a service a persona. That is
+deliberate rather than a limitation to work around:
+
+| | |
+|---|---|
+| Every tool the MCP server offers today | **yes** — the grounded, governed set |
+| Any surface behind `caller.require_staff` | **no** — a service has no persona, so the gate refuses it |
+| Audit attribution | the service account, not a person |
+
+The middle row is a property of the design rather than of a tool that exists yet: nothing
+currently calls `require_staff`, and the free-form analytics tool it was written for is
+still unbuilt. It is here because it decides what an AWS harness is for — exercising the
+grounded tools, not standing in for an analyst.
+
+If an AWS workload later needs a staff surface, the honest fix is a person's token
+(OAuth), not widening what a service may be.
+
+## Setup
+
+### 1. GCP side (Terraform)
+
+In `infra/envs/<env>/terraform.tfvars`:
+
+```hcl
+enable_aws_mcp_client = true
+aws_account_id        = "123456789012"
+aws_mcp_client_role   = "finchat-mcp-client"   # the ROLE NAME, not an ARN
+```
+
+Then `terraform apply`. This creates a pool **separate from `finchat-gh-pool`** — that one
+is CI's lifeline, and an AWS provider has different attribute mapping and a different
+blast radius; sharing it would put a new external trust relationship inside the pool that
+deploys the platform.
+
+Note the `attribute_condition`: only the named role may federate. An AWS account is an
+*authentication* boundary, not an authorization one, and without that condition every
+principal in the account could impersonate the service account.
+
+**Then re-sync the tfvars secret** (`gh secret set TFVARS --env <env> < infra/envs/<env>/terraform.tfvars`)
+or the next CI apply reverts it. Gitignored tfvars do not tell the repo what is deployed.
+
+### 2. Add the service account as a permitted caller
+
+The MCP service reads `FINCHAT_MCP_SERVICE_CALLERS`, and the deploy workflow sets it from
+a **GitHub environment variable of the same name** — editing the Cloud Run revision by
+hand works until the next deploy overwrites it. Append the new account to the existing
+list:
+
+```bash
+gh variable set FINCHAT_MCP_SERVICE_CALLERS --env dev \
+  --body "$(gh variable get FINCHAT_MCP_SERVICE_CALLERS --env dev);finchat-dev-aws-mcp@strongsville-city-schools.iam.gserviceaccount.com"
+```
+
+Semicolons, not commas — a comma is `gcloud run deploy --set-env-vars`' own delimiter, and
+a list of emails separated by commas is parsed as separate variables, failing with
+`Bad syntax for dict arg` naming the second email rather than the reason. `auth.py`
+accepts either separator so a hand-written comma is not a trap, but the deploy must use
+`;`.
+
+**Then redeploy the MCP service.** Environment variables bake at deploy time; setting the
+variable alone changes nothing, and the failure looks like a permissions problem rather
+than a stale revision. A commit touching only `scripts/` or `docs/` will not trigger the
+deploy — the workflow has a path filter — so run it manually:
+
+```bash
+gh workflow run build-deploy.yml -f environment=dev
+```
+
+### 3. AWS side
+
+An IAM role your container assumes — a task role on ECS, an IRSA role on EKS, an instance
+profile on EC2. It needs **no AWS permissions at all**; it is only an identity to prove.
+Its name must match `aws_mcp_client_role`.
+
+Download the credential configuration and hand it to the container:
+
+```bash
+gcloud iam workload-identity-pools create-cred-config \
+  projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/finchat-<env>-aws-pool/providers/finchat-<env>-aws-provider \
+  --aws \
+  --output-file=/etc/gcp/aws-credentials.json
+```
+
+Note the **absence of `--service-account`**. Adding it makes ADC *be* the service account,
+and the container then has to impersonate itself to mint an id-token, which needs
+`roles/iam.serviceAccountTokenCreator` on itself — a grant, and one more thing to get
+wrong. Without it, ADC is the federated principal, which already holds
+`roles/iam.workloadIdentityUser` on the service account, and that role includes
+`iam.serviceAccounts.getOpenIdToken`. The client names the service account instead.
+
+Then in the container:
+
+```
+GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/aws-credentials.json
+```
+
+That file holds **no secret** — it describes how to exchange the AWS identity, not a
+credential. It is safe to bake into an image; the AWS role is what must be protected.
+
+### 4. Verify
+
+```bash
+python scripts/mcp_client_example.py \
+  --url https://finchat-<env>-mcp-....run.app/mcp \
+  --service-account finchat-<env>-aws-mcp@<PROJECT>.iam.gserviceaccount.com
+```
+
+It mints an id-token audienced to the service, connects over streamable HTTP, lists the
+tools this identity is offered and calls `finchat_status` — which reads no customer data,
+so it is safe in a CI log.
+
+The same script runs on a laptop with `gcloud` and no `--service-account`, and inside GCP
+off the metadata server — but be clear about what a laptop run proves. Your own Google
+identity is not in `FINCHAT_MCP_SERVICE_CALLERS`, so against an OAuth-enforcing endpoint
+it gets a **401 with a `WWW-Authenticate: Bearer resource_metadata=...` header**, which is
+the resource server working correctly. That is still a useful baseline: it proves DNS,
+TLS, Cloud Run's public ingress and the RFC 9728 discovery pointer, and it separates
+"cannot reach the endpoint" from "the endpoint will not have me". The script prints the
+status and that header rather than the SDK's `unhandled errors in a TaskGroup`, which
+names nothing.
+
+One thing it does **not** do is call `google.oauth2.id_token.fetch_id_token`, which is the
+obvious spelling and fails here: given a WIF credential configuration it raises "Neither
+metadata server or valid service account credentials are found", a message about missing
+credentials for a file that is present and correct. It handles `service_account` and
+`impersonated_service_account` files and the metadata server; an `external_account` file
+is none of those.
+
+## When it does not work
+
+| Symptom | Cause |
+|---|---|
+| `401 invalid_token` | The service account is not in `FINCHAT_MCP_SERVICE_CALLERS`, **or it is and the service was not redeployed** |
+| `403` from Cloud Run | The endpoint is private in that environment (`mcp_public = false`) — WIF cannot help; Cloud Run refuses before the server runs |
+| `Unable to acquire impersonated credentials` | The `attribute_condition` does not match the assumed role's ARN. Check the role NAME, and that the container really assumed it |
+| `403 ... getOpenIdToken denied` while minting | The caller is not bound to the service account. From AWS that means the attribute condition did not match; from a laptop it means you personally lack `roles/iam.serviceAccountTokenCreator` on it, which is the correct posture |
+| Tools list, a staff-gated tool refuses | Working as designed — see the table above |

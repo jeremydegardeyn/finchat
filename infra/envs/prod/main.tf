@@ -275,6 +275,70 @@ resource "google_secret_manager_secret_iam_member" "mcp_auth_secrets" {
   member    = "serviceAccount:${module.foundation.service_account_emails["mcp_auth"]}"
 }
 
+# --- An AWS workload calling the MCP endpoint (ADR-0020/0031) ----------------
+# The OAuth flow needs a human at the Google step, which an unattended container in AWS
+# does not have. Workload Identity Federation is the right shape instead: an AWS IAM role
+# proves itself to GCP, impersonates the service account below, and mints a Google
+# id-token audienced to the MCP service — which is exactly the `FINCHAT_MCP_SERVICE_CALLERS`
+# path the AI gateway already uses. No new code, and no long-lived key anywhere.
+#
+# The identity trade is deliberate and worth naming: this is a SERVICE, so the audit says
+# the service and `caller.require_staff` will refuse it from staff-only surfaces. That is
+# correct — a machine is not staff — and it means an AWS harness exercises the account and
+# knowledge-base tools, not free-form analytics.
+#
+# A SEPARATE pool from `finchat-gh-pool`: that one is CI's lifeline, its provider trusts
+# GitHub's issuer, and an AWS provider has different attribute mapping and different
+# blast radius. Sharing a pool to save a resource would put a new trust relationship
+# inside the one that deploys this platform.
+resource "google_iam_workload_identity_pool" "aws" {
+  count                     = var.enable_aws_mcp_client ? 1 : 0
+  project                   = var.project_id
+  workload_identity_pool_id = "${var.name_prefix}-${var.env}-aws-pool"
+  display_name              = "AWS workloads (${var.env})"
+  description               = "Federates an AWS IAM role to call the MCP endpoint."
+}
+
+resource "google_iam_workload_identity_pool_provider" "aws" {
+  count                              = var.enable_aws_mcp_client ? 1 : 0
+  project                            = var.project_id
+  workload_identity_pool_id          = google_iam_workload_identity_pool.aws[0].workload_identity_pool_id
+  workload_identity_pool_provider_id = "${var.name_prefix}-${var.env}-aws-provider"
+  display_name                       = "AWS account ${var.aws_account_id}"
+
+  aws {
+    account_id = var.aws_account_id
+  }
+
+  # Only the named role may federate. Without this condition ANY principal in the AWS
+  # account could impersonate the service account — the account is the authentication
+  # boundary, not the authorization one, and they are easy to conflate.
+  attribute_condition = "attribute.aws_role == \"arn:aws:sts::${var.aws_account_id}:assumed-role/${var.aws_mcp_client_role}\""
+
+  attribute_mapping = {
+    "google.subject"        = "assertion.arn"
+    "attribute.aws_role"    = "assertion.arn.extract(\"assumed-role/{role}/\") != \"\" ? \"arn:aws:sts::${var.aws_account_id}:assumed-role/\" + assertion.arn.extract(\"assumed-role/{role}/\") : assertion.arn"
+    "attribute.aws_account" = "assertion.account"
+  }
+}
+
+# Zero project roles, exactly like the `mcp` and `mcp_auth` identities. Everything this
+# account may do is granted per-target: it appears in FINCHAT_MCP_SERVICE_CALLERS, and
+# nothing else.
+resource "google_service_account" "aws_mcp_client" {
+  count        = var.enable_aws_mcp_client ? 1 : 0
+  project      = var.project_id
+  account_id   = "${var.name_prefix}-${var.env}-aws-mcp"
+  display_name = "AWS workload calling the MCP endpoint (${var.env})"
+}
+
+resource "google_service_account_iam_member" "aws_mcp_client_federation" {
+  count              = var.enable_aws_mcp_client ? 1 : 0
+  service_account_id = google_service_account.aws_mcp_client[0].name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.aws[0].name}/attribute.aws_role/arn:aws:sts::${var.aws_account_id}:assumed-role/${var.aws_mcp_client_role}"
+}
+
 # --- The OAuth proxy hosted MCP clients need (ADR-0020) ----------------------
 # PUBLIC on purpose: a client calls /register, /authorize and /token before it has any
 # credential at all, so IAM cannot be the gate here — the code is. That is why this

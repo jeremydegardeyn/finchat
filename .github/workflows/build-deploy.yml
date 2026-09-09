@@ -77,7 +77,7 @@ jobs:
           for name in "${!SVC[@]}"; do
             img="${REPO}/${name}:${SHA}"
             echo "::group::build ${name}"
-            docker build -f "${DOCKERFILE[$name]:-${SVC[$name]}/Dockerfile}"               -t "$img" -t "${REPO}/${name}:latest" "${SVC[$name]}"
+            docker build -f "${DOCKERFILE[$name]:-${SVC[$name]}/Dockerfile}" -t "$img" -t "${REPO}/${name}:latest" "${SVC[$name]}"
             docker push "$img"; docker push "${REPO}/${name}:latest"
             echo "::endgroup::"
           done
@@ -135,10 +135,10 @@ jobs:
             "--set-env-vars=GCP_PROJECT=${PROJECT},LOANS_DATASET=finchat_loans_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           # Process layer (ADR-0030). Composes the two system APIs above, so it is deployed
           # after them and resolves their URLs the same way the loan API resolves txn-api.
-          deploy process process process             "--set-env-vars=TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+          deploy process process process "--set-env-vars=TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           # Mobile experience API. PROCESS_API_URL is its ONLY backend — LAYER-1 as
           # configuration, matching the IAM: this SA holds no invoker grant on any system API.
-          deploy mobile mobile mobile             "--set-env-vars=PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+          deploy mobile mobile mobile "--set-env-vars=PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           # ADK agent on Cloud Run (scale-to-zero). Gemini via Vertex (agent SA has aiplatform.user).
           deploy agent agent agent \
             "--set-env-vars=GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,KB_DATASET=finchat_kb_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),AI_GATEWAY_URL=${AI_GATEWAY_URL},AI_GATEWAY_REQUIRED=${{ vars.AI_GATEWAY_REQUIRED || '0' }}${AGENT_PINS} --memory=1Gi --no-allow-unauthenticated"
@@ -164,7 +164,7 @@ jobs:
           if gcloud run services describe "finchat-${ENV}-mcp-auth" --region "${REGION}" >/dev/null 2>&1; then
             AUTH_URL="$(gcloud run services describe finchat-${ENV}-mcp-auth --region ${REGION} --format='value(status.url)')"
             MCP_RESOURCE="$(gcloud run services describe finchat-${ENV}-mcp --region ${REGION} --format='value(status.url)')/mcp"
-            deploy mcp-auth mcp-auth mcp-auth               "--set-secrets=GOOGLE_OAUTH_CLIENT_SECRET=finchat-oauth-client-secret:latest,OAUTH_SIGNING_KEY_PEM=finchat-${ENV}-mcp-oauth-signing-key:latest --set-env-vars=OAUTH_ISSUER=${AUTH_URL},GCP_PROJECT=${PROJECT},FIRESTORE_DATABASE=${{ vars.FINCHAT_OAUTH_FIRESTORE_DB || '(default)' }},GOOGLE_OAUTH_CLIENT_ID=${{ vars.FINCHAT_OAUTH_CLIENT_ID }},OAUTH_ALLOWED_DOMAINS=${{ vars.FINCHAT_OAUTH_ALLOWED_DOMAINS }},OAUTH_ALLOWED_EMAILS=${{ vars.FINCHAT_OAUTH_ALLOWED_EMAILS }},OAUTH_ALLOWED_RESOURCES=${MCP_RESOURCE} --allow-unauthenticated"
+            deploy mcp-auth mcp-auth mcp-auth "--set-secrets=GOOGLE_OAUTH_CLIENT_SECRET=finchat-oauth-client-secret:latest,OAUTH_SIGNING_KEY_PEM=finchat-${ENV}-mcp-oauth-signing-key:latest --set-env-vars=OAUTH_ISSUER=${AUTH_URL},GCP_PROJECT=${PROJECT},FIRESTORE_DATABASE=${{ vars.FINCHAT_OAUTH_FIRESTORE_DB || '(default)' }},GOOGLE_OAUTH_CLIENT_ID=${{ vars.FINCHAT_OAUTH_CLIENT_ID }},OAUTH_ALLOWED_DOMAINS=${{ vars.FINCHAT_OAUTH_ALLOWED_DOMAINS }},OAUTH_ALLOWED_EMAILS=${{ vars.FINCHAT_OAUTH_ALLOWED_EMAILS }},OAUTH_ALLOWED_RESOURCES=${MCP_RESOURCE} --allow-unauthenticated"
           else
             echo "finchat-${ENV}-mcp-auth not provisioned (enable_mcp_oauth is false) — skipping."
           fi
@@ -186,7 +186,7 @@ jobs:
           # env without it must still get its UI. Same posture as the steward guard below.
           if gcloud run services describe "finchat-${ENV}-mcp" --region "${REGION}" >/dev/null 2>&1; then
             MCP_URL="$(gcloud run services describe finchat-${ENV}-mcp --region ${REGION} --format='value(status.url)')"
-            deploy mcp mcp mcp             "--set-env-vars=FINCHAT_MCP_TRANSPORT=http,FINCHAT_MCP_ALLOWED_HOSTS=${MCP_URL#https://},FINCHAT_MCP_PERSONA=customer,FINCHAT_MCP_OAUTH_ISSUER=${{ vars.FINCHAT_MCP_OAUTH_ISSUER }},FINCHAT_MCP_RESOURCE=${{ vars.FINCHAT_MCP_RESOURCE }},FINCHAT_MCP_SERVICE_CALLERS=${{ vars.FINCHAT_MCP_SERVICE_CALLERS }},FINCHAT_TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),FINCHAT_LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),FINCHAT_PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)'),FINCHAT_AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+            deploy mcp mcp mcp "--set-env-vars=FINCHAT_MCP_TRANSPORT=http,FINCHAT_MCP_ALLOWED_HOSTS=${MCP_URL#https://},FINCHAT_MCP_PERSONA=customer,FINCHAT_MCP_OAUTH_ISSUER=${{ vars.FINCHAT_MCP_OAUTH_ISSUER }},FINCHAT_MCP_RESOURCE=${{ vars.FINCHAT_MCP_RESOURCE }},FINCHAT_MCP_SERVICE_CALLERS=${{ vars.FINCHAT_MCP_SERVICE_CALLERS }},FINCHAT_TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),FINCHAT_LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),FINCHAT_PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)'),FINCHAT_AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           else
             echo "finchat-${ENV}-mcp not provisioned (terraform apply pending) — skipping."
           fi
