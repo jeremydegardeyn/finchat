@@ -15,6 +15,12 @@ variable "reader_members" {
   default     = []
 }
 
+variable "writer_members" {
+  type        = list(string)
+  description = "Members that BUILD the KB (the CI deployer): granted dataEditor + connectionUser."
+  default     = []
+}
+
 variable "labels" {
   type    = map(string)
   default = {}

@@ -414,6 +414,11 @@ module "rag" {
     # permission to use the embedding model.
     "serviceAccount:${module.foundation.service_account_emails["txn_api"]}",
   ]
+  # The deploy refreshes the platform-docs corpus (ADR-0024), which means writing this
+  # dataset. Dataset-scoped, matching how the module beside it grants its writers.
+  writer_members = [
+    "serviceAccount:${module.foundation.service_account_emails["cicd"]}",
+  ]
   labels = local.labels
 }
 
