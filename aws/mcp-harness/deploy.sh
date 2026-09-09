@@ -14,9 +14,35 @@ set -euo pipefail
 # CLI. Off for the whole script; it is a Windows-only variable and inert elsewhere.
 export MSYS_NO_PATHCONV=1
 
-for tool in aws docker gcloud; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "need $tool on PATH" >&2; exit 1; }
-done
+missing=""
+command -v aws >/dev/null 2>&1 || missing="${missing}
+  aws     — AWS CLI v2. Windows:  msiexec /i https://awscli.amazonaws.com/AWSCLIV2.msi
+            macOS:  brew install awscli     Linux: see docs.aws.amazon.com/cli
+            Then open a NEW shell, or: export PATH=\"\$PATH:/c/Program Files/Amazon/AWSCLIV2\""
+command -v docker >/dev/null 2>&1 || missing="${missing}
+  docker  — Docker Desktop, for building the Lambda image."
+command -v gcloud >/dev/null 2>&1 || missing="${missing}
+  gcloud  — Google Cloud SDK, to read the pool and mint the credential configuration."
+if [ -n "${missing}" ]; then
+  echo "Missing tools:${missing}" >&2
+  exit 1
+fi
+
+# The binary existing is not the daemon running, and `docker build` fails several steps
+# later with a message about a pipe that does not name Docker Desktop.
+docker info >/dev/null 2>&1 || {
+  echo "Docker is installed but not running — start Docker Desktop and retry." >&2
+  exit 1
+}
+
+# Credentials must exist before anything else, because `aws sts get-caller-identity` is
+# how the account is discovered two lines below. Configure them yourself — with SSO
+# (`aws configure sso`, short-lived) or an IAM access key (`aws configure`).
+aws sts get-caller-identity >/dev/null 2>&1 || {
+  echo "AWS credentials are not configured. Run 'aws configure sso' (preferred) or" >&2
+  echo "'aws configure' with an IAM access key, then retry." >&2
+  exit 1
+}
 
 # The account comes from the credentials in use, not from something you have to remember
 # to export. `AWS_ACCOUNT_ID=x ./deploy.sh` works; a bare `AWS_ACCOUNT_ID=x` on its own
