@@ -99,3 +99,33 @@ def test_the_scanner_reads_a_real_corpus():
     """It must be looking at command lines, not an empty set."""
     total = sum(1 for w in WORKFLOWS.glob("*.yml") for _ in _command_lines(w))
     assert total > 50, f"only {total} command lines found — has the layout changed?"
+
+
+# --- Dockerfiles -------------------------------------------------------------
+# Added after the tenth occurrence, which landed in mcp_server/Dockerfile. A COPY with a
+# mangled continuation is worse than a broken workflow: shape one (`\n` surviving as
+# text) breaks the build loudly, but shape two — the lines simply joined — is still a
+# VALID Dockerfile, because `COPY a b dest` is legal. It ships the wrong file set and
+# fails at the first call, which is the worst place to find out.
+
+def _dockerfiles():
+    return sorted(p for p in REPO.rglob("Dockerfile*")
+                  if ".git" not in p.parts and "node_modules" not in p.parts)
+
+
+def test_no_dockerfile_has_a_broken_line_continuation():
+    broken = []
+    for path in _dockerfiles():
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("#"):
+                continue
+            if MANGLED.search(line):
+                broken.append(f"{path.relative_to(REPO)}:{number}: {line.strip()[:100]}")
+    assert not broken, (
+        "Dockerfile continuations look mangled (a lost backslash left a stray `n`):\n  "
+        + "\n".join(broken))
+
+
+def test_the_dockerfile_scanner_reads_a_real_corpus():
+    found = _dockerfiles()
+    assert len(found) >= 3, f"only {len(found)} Dockerfiles found — has the layout changed?"

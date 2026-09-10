@@ -7,7 +7,6 @@ below care more about *where* the identity comes from than about the happy path.
 """
 import importlib.util
 import sys
-import time
 from pathlib import Path
 
 import pytest

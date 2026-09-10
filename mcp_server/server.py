@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -75,6 +76,42 @@ backends = Backends()
 _READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
 _WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False,
                          openWorldHint=False)
+
+
+# Named REPO_ROOT to match backends.py and knowledge.py — not cosmetic. The image
+# guard in test_mcp_image.py derives what must be COPYed by scanning for
+# `REPO_ROOT / ...` expressions, so a path spelled any other way ships nothing and
+# fails at the first call rather than at build.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _caller():
+    """The caller-identity module, or None when it is not available.
+
+    Optional on purpose. Over stdio there is no request and no token, and a local
+    developer running `claude mcp add` should not need the OAuth machinery present for
+    the server to start. `require_staff` itself defers when OAuth is unconfigured.
+    """
+    try:
+        import caller
+
+        return caller
+    except Exception:
+        return None
+
+
+def _maybe_json(text: str):
+    """Parse a tool's output back to JSON when it is JSON, else keep the string.
+
+    The knowledge tools return either a JSON document or a plain sentence explaining
+    that nothing matched. Nesting the raw string inside another JSON document would
+    hand the model an escaped blob to unpick, which is exactly the shape that produces
+    confident answers about the wrong thing.
+    """
+    try:
+        return json.loads(text)
+    except Exception:
+        return text
 
 
 def _err(exc: Exception) -> str:
@@ -290,6 +327,90 @@ def lookup_glossary_term(term: str) -> str:
         known = ", ".join(e.get("term", "") for e in knowledge.glossary())
         return f"{term!r} is not a certified term. Certified terms: {known}"
     return json.dumps(entry, indent=2, default=str)
+
+
+@mcp.tool(annotations=_READ)
+def ask_analytics(question: str) -> str:
+    """Answer an analyst's question by routing it to the capability that owns the answer.
+
+    A STAFF surface. It routes rather than answers: the same four-way decision the web
+    analyst assistant makes — data values, policy documents, data-model meaning, or how
+    the platform itself works — using the process layer's routing rules, so the two
+    channels cannot disagree about which tool should answer.
+
+    Ask it the way an analyst would: "what does overdraft mean here", "what is the fee
+    for a returned item", "how many accounts went negative last month", "why did we
+    choose BigQuery". It says which capability answered, so a wrong route is visible
+    rather than silent.
+
+    Questions about **data values** are refused here, with the reason. That is not a gap
+    in this tool — see the refusal text, which names exactly what would change it.
+    """
+    caller_mod = _caller()
+    if caller_mod is not None:
+        try:
+            caller_mod.require_staff("ask_analytics")
+        except caller_mod.NotPermitted as exc:
+            # Returned, never raised. A raised exception reaches the model as a transport
+            # error with no explanation, and the refusal text is the only thing telling
+            # the caller what IS available instead.
+            return json.dumps({"refused": str(exc), "tool": "ask_analytics"}, indent=2)
+        except Exception as exc:
+            return _err(exc)
+
+    question = (question or "").strip()
+    if not question:
+        return json.dumps({"error": "ask a question"}, indent=2)
+
+    try:
+        import loader
+        routing = loader.load(
+            "analyst_routing",
+            REPO_ROOT / "products" / "process" / "api" / "analyst_routing.py")
+        # The heuristic, not the model classifier. The BFF injects a model because it
+        # has a gateway client and a user identity to bill; this channel has neither,
+        # and `analyst_routing` was built transport-free so the rules are usable either
+        # way. The heuristic is the same one that carries the BFF whenever the model
+        # path is down, so it is not a lesser copy — it is the tested fallback.
+        mode = routing.heuristic_intent(question)
+    except Exception as exc:
+        return _err(exc)
+
+    if mode == "analytics":
+        # The honest refusal. Answering a question about DATA VALUES means querying as
+        # the person who asked, so their column-level security and masking apply
+        # (ADR-0019). This channel authenticates the caller but carries no Google
+        # credential for them — ADR-0020's proxy deliberately mints its OWN token rather
+        # than holding the user's. Until a token exchange closes that (still an open
+        # decision), computing a number here would either use the service's entitlements
+        # and quietly over-report, or invent a scope nobody granted.
+        return json.dumps({
+            "mode": "analytics",
+            "refused": "Questions about data values are answered on the analyst web "
+                       "surface, where the query runs as the person asking and their "
+                       "masking and column-level security apply. This channel carries "
+                       "an identity but not that person's data credentials, so a number "
+                       "computed here would reflect the service's access, not yours.",
+            "instead": "Ask what a metric MEANS (describe_data_model, "
+                       "lookup_glossary_term), or what the policy says "
+                       "(search_knowledge_base). Those are grounded and complete here.",
+            "unblocked_by": "end-user token exchange for the agent channel (ADR-0019)",
+        }, indent=2)
+
+    if mode == "kb":
+        found = search_knowledge_base(question)
+        return json.dumps({"mode": "kb", "question": question,
+                           "passages": _maybe_json(found)}, indent=2, default=str)
+
+    if mode == "semantics":
+        return json.dumps({"mode": "semantics", "question": question,
+                           "data_model": describe_data_model(question)}, indent=2)
+
+    # platform — how FinChat itself is built. The KB tool reaches the docs corpus when
+    # the agent service is configured, and says so when it is answering offline.
+    return json.dumps({"mode": "platform", "question": question,
+                       "passages": _maybe_json(search_knowledge_base(question))},
+                      indent=2, default=str)
 
 
 # --- resources ---------------------------------------------------------------

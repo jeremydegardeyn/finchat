@@ -167,9 +167,11 @@ def registered_tools(email: str) -> set[str]:
 
         import loader
 
+        # Spelled REPO_ROOT / ... because test_mcp_image.py derives the required COPY set
+        # from exactly that expression. A path written any other way is invisible to it.
+        REPO_ROOT = Path(__file__).resolve().parent.parent
         catalog = loader.load(
-            "agents_catalog",
-            Path(__file__).resolve().parent.parent / "scripts" / "agents_catalog.py")
+            "agents_catalog", REPO_ROOT / "scripts" / "agents_catalog.py")
     except Exception:
         # The registry is not in the image, or failed to load. Granting nothing is the
         # safe direction: every caller falls back to exactly the scope it had before.
