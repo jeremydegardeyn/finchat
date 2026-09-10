@@ -108,6 +108,10 @@ jobs:
         run: |
           pip install mcp==1.27.2 "pyjwt[crypto]==2.10.1" google-auth==2.34.0 requests==2.32.3 cryptography
           pytest mcp_server -q
+          # A real client session over stdio. Unit tests cannot reach the faults
+          # this catches: a subprocess inheriting stdin (which over stdio IS the
+          # JSON-RPC stream) hung every call forever and passed the whole suite.
+          python scripts/verify_mcp_stdio.py
       - name: Repo hygiene guards (doc links, shell continuations)
         # These three tests existed and nothing ran them, which is the same fault they
         # exist to prevent: a guard that never executes is a comment. They need only
