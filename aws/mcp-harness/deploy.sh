@@ -156,3 +156,16 @@ aws lambda invoke --function-name "${FUNCTION}" --region "${AWS_REGION}" \
   --payload '{"tool": "finchat_status"}' "${OUT}" >/dev/null
 cat "${OUT}"; echo
 rm -f "${OUT}"
+
+# The region is the thing people get wrong next: the function is wherever THIS script put
+# it, which is not necessarily the CLI's default. Hand back a command that cannot miss.
+cat <<EOF
+
+Deployed ${FUNCTION} in ${AWS_REGION}. Invoke it with the region spelled out:
+
+  aws lambda invoke --region ${AWS_REGION} --function-name ${FUNCTION} \\
+    --cli-binary-format raw-in-base64-out \\
+    --payload '{"tool":"list_sample_accounts","arguments":{"n":3}}' out.json && cat out.json
+
+Or in the Console: Lambda -> ${FUNCTION} (${AWS_REGION}) -> Test tab.
+EOF
