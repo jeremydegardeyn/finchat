@@ -156,7 +156,15 @@ def test_every_declared_operation_is_annotated_and_vice_versa():
     annotated = {}
     for o in onto.bian_capabilities(MODEL):
         annotated.setdefault(o["api"], set()).add(o["operation"])
-    assert declared == annotated
+    # Name the operation, not the set: a set diff hides the one route that matters
+    # behind an ellipsis, and the whole point of this guard is to say which one.
+    for api in sorted(set(declared) | set(annotated)):
+        missing = sorted(declared.get(api, set()) - annotated.get(api, set()))
+        phantom = sorted(annotated.get(api, set()) - declared.get(api, set()))
+        assert not missing, (f"{api}: declared in the code but has no BIAN annotation in "
+                             f"ontology.yaml capabilities: {missing}")
+        assert not phantom, (f"{api}: annotated in ontology.yaml but no such operation "
+                             f"in the code: {phantom}")
 
 
 def test_every_annotation_names_a_real_service_domain_and_action_term():
