@@ -128,6 +128,14 @@ def build() -> dict:
         "refusals": refusals,
         "refusal_bullets": _refusal_bullets(refusals),
         "stewardship": compile_ontology.stewardship(model),
+        # ADR-0033: the BIAN alignment as data, for the MCP resource. The prose form
+        # already reaches ANALYST_KNOWLEDGE via the reference/ sweep.
+        "bian": {
+            "standard": {k: v for k, v in compile_ontology.bian_standard(model).items()
+                         if k in ("landscape", "url", "match_relations")},
+            "classes": compile_ontology.bian_classes(model),
+            "operations": compile_ontology.bian_capabilities(model),
+        },
     }
 
 
@@ -142,7 +150,8 @@ def render(data: dict) -> str:
         "DO NOT EDIT BY HAND — run `python scripts/compile_okf.py` to regenerate.\n"
         "SSOT: knowledge/ontology.yaml (perimeter/joins/stewardship), the concept docs\n"
         "(ANALYST_KNOWLEDGE), knowledge/glossary/ (ANALYST_GLOSSARY) and\n"
-        "knowledge/playbooks/refusal-escalation.md (ANALYST_REFUSALS).\n"
+        "knowledge/playbooks/refusal-escalation.md (ANALYST_REFUSALS), and the BIAN\n"
+        "alignment (BIAN_ALIGNMENT, ADR-0033).\n"
         '"""\n'
         "from __future__ import annotations\n\n"
         f"ANALYST_PERIMETER = {_py(data['perimeter'])}\n\n"
@@ -151,7 +160,8 @@ def render(data: dict) -> str:
         f"ANALYST_GLOSSARY = {_py(data['glossary'])}\n\n"
         f"ANALYST_REFUSALS = {_py(data['refusals'])}\n\n"
         f"ANALYST_REFUSAL_BULLETS = {data['refusal_bullets']!r}\n\n"
-        f"CONCEPT_STEWARDSHIP = {_py(data['stewardship'])}\n"
+        f"CONCEPT_STEWARDSHIP = {_py(data['stewardship'])}\n\n"
+        f"BIAN_ALIGNMENT = {_py(data['bian'])}\n"
     )
 
 

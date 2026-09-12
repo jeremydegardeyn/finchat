@@ -55,6 +55,8 @@ loan applications (submission, status, decision audit trail).
 Read `finchat://knowledge/data-model` before composing anything analytical. The
 sign convention, the POSTED-only rule and the account bridge between a transaction
 and a customer are all counter-intuitive if guessed at, and all documented there.
+Concepts and operations are aligned to BIAN service domains and action terms;
+`finchat://knowledge/bian` holds the mapping and how close each match is.
 
 Behavioural rules this platform enforces on every agent surface, including this one:
 
@@ -448,6 +450,12 @@ def r_refusals() -> str:
               description="Owner and steward per concept, for escalation.")
 def r_stewardship() -> str:
     return json.dumps(knowledge.stewardship(), indent=2, default=str)
+
+
+@mcp.resource("finchat://knowledge/bian", mime_type="application/json",
+              description="BIAN alignment: service domain and action term per concept and operation.")
+def r_bian() -> str:
+    return json.dumps(knowledge.bian(), indent=2, default=str)
 
 
 @mcp.resource("finchat://ontology", mime_type="text/yaml",

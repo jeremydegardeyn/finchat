@@ -14,7 +14,31 @@
 # is deliberately out of scope for FinChat — see docs/20-ontology.md.
 # =============================================================================
 namespace: https://finchat.datadinosaur.com/ontology#
-version: 0.1
+version: 0.2
+
+# --- STANDARDS: the industry vocabulary this model is ALIGNED to (ADR-0033) ---------
+# Alignment, not adoption: FinChat keeps its own names; each class and each /v1 operation
+# says what BIAN calls the thing, and how strong the match is (SKOS mapping relations).
+# Alignment is to the PUBLIC Service Landscape (service domains, action terms). BIAN's
+# full Business Object Model is member-gated, so it is referenced by concept name only —
+# never reproduced. `service_domains` is the subset this model touches, not the ~300.
+standards:
+  bian:
+    landscape: BIAN Service Landscape 13
+    url: https://bian.org/servicelandscape-13-0-0/
+    match_relations: [exactMatch, closeMatch, relatedMatch]      # skos:
+    action_terms: [Initiate, Create, Activate, Configure, Feedback, Register, Evaluate,
+                   Provide, Update, Control, Exchange, Capture, Execute, Request, Grant,
+                   Retrieve, Notify]
+    service_domains:
+      Party Reference Data Directory: {pattern: Directory,  control_record: Party Reference Data Directory Entry}
+      Current Account:                {pattern: Fulfill,    control_record: Current Account Facility}
+      Savings Account:                {pattern: Fulfill,    control_record: Savings Account Facility}
+      Position Keeping:               {pattern: Maintain,   control_record: Financial Position Log}
+      Customer Behavior Insights:     {pattern: Analyze,    control_record: Customer Behavior Insights Analysis}
+      Customer Offer:                 {pattern: Process,    control_record: Customer Offer Procedure}
+      Consumer Loan:                  {pattern: Fulfill,    control_record: Consumer Loan Facility,
+                                       note: "referenced only — a FULFILLED loan is not modelled here"}
 
 # --- CLASSES: the domain entities, each bound to its curated analyst view ------
 # `view` = the de-identified semantic view name (never the physical silver table);
@@ -33,6 +57,8 @@ classes:
     owner: customer-product@datadinosaur.com
     steward: data-steward@datadinosaur.com
     tier: certified
+    bian: {service_domain: Party Reference Data Directory, match: closeMatch,
+           note: "collapses BIAN Party (the person) + Customer Agreement (the relationship); segment is a relationship property"}
     properties:
       - {name: customer_id, type: string, role: identifier}
       - {name: full_name,   type: string, classification: PII_DIRECT}
@@ -46,6 +72,8 @@ classes:
     owner: deposits-product@datadinosaur.com
     steward: data-steward@datadinosaur.com
     tier: certified
+    bian: {service_domain: [Current Account, Savings Account], selector: account_type, match: closeMatch,
+           note: "one class, two BIAN domains — checking -> Current Account, savings -> Savings Account"}
     properties:
       - {name: account_id,     type: string, role: identifier}
       - {name: customer_id,    type: string, role: foreign_key, references: Customer}
@@ -60,6 +88,8 @@ classes:
     owner: deposits-product@datadinosaur.com
     steward: data-steward@datadinosaur.com
     tier: certified
+    bian: {service_domain: Position Keeping, match: closeMatch,
+           note: "the financial position log, POSTED-only here; BIAN also keeps pending items"}
     note: "Carries only account_id — no customer_id. This is the join problem the graph solves."
     properties:
       - {name: transaction_id, type: string, role: identifier}
@@ -78,6 +108,8 @@ classes:
     owner: deposits-product@datadinosaur.com
     steward: data-steward@datadinosaur.com
     tier: certified
+    bian: {service_domain: Customer Behavior Insights, match: relatedMatch,
+           note: "a derived behavioural analytic over Position Keeping, not a facility property"}
     properties:
       - {name: account_id,       type: string, role: foreign_key, references: Account}
       - {name: overdraft_events, type: int}
@@ -90,6 +122,8 @@ classes:
     owner: lending-product@datadinosaur.com
     steward: data-steward@datadinosaur.com
     tier: curated
+    bian: {service_domain: Customer Offer, match: closeMatch,
+           note: "an ORIGINATION record (requested -> approved/denied); a fulfilled loan would be Consumer Loan, not modelled"}
     properties:
       - {name: loan_id,    type: string, role: identifier}
       - {name: account_id, type: string, role: foreign_key, references: Account}
@@ -114,6 +148,44 @@ relationships:
 metrics:
   overdraft_ratio:        {of: OverdraftProfile, grain: Account, definition: "overdraft_events / active_days"}
   net_transaction_amount: {of: Transaction,      grain: Account, definition: "SUM(amount * sign(txn_type))  -- DEPOSIT +, WITHDRAWAL/FEE -"}
+
+# --- CAPABILITIES: every /v1 operation, and what BIAN calls it (ADR-0033) ------------
+# Keyed by the API's own contract: operationId for the OpenAPI-defined txn-api, and
+# `METHOD /path` for the FastAPI-defined services. scripts/test_ontology.py reads the
+# contract and the route decorators and fails CI if an operation is missing here — an
+# endpoint may be added, but not without saying which service domain it belongs to, or
+# declaring `outside_landscape` with a reason. A `scenario` spans domains by design:
+# BIAN says composition lives outside every service domain; ADR-0030 put it in the
+# process layer for the same reason.
+capabilities:
+  txn-api:
+    layer: system
+    contract: products/transactions/api/openapi.gateway.yaml
+    operations:
+      getBalance:            {service_domain: Position Keeping, action_term: Retrieve, note: "signed sum of POSTED items in the position log"}
+      getTransactionHistory: {service_domain: Position Keeping, action_term: Retrieve}
+      getRecentActivity:     {service_domain: Position Keeping, action_term: Retrieve}
+      getAccountSummary:     {service_domain: Current Account,  action_term: Retrieve, note: "the facility view; composes over Position Keeping inside the domain"}
+  loan-api:
+    layer: system
+    routes: products/loans/api/main.py
+    operations:
+      "POST /v1/loans":                    {service_domain: Customer Offer, action_term: Initiate}
+      "GET /v1/loans/{loan_id}":           {service_domain: Customer Offer, action_term: Retrieve}
+      "GET /v1/loans":                     {service_domain: Customer Offer, action_term: Retrieve, note: "the officer queue; account_id filter added by ADR-0030"}
+      "GET /v1/loans/{loan_id}/audit":     {service_domain: Customer Offer, action_term: Retrieve, note: "the decision audit trail (ADR-0013)"}
+      "POST /v1/loans/{loan_id}/notify":   {service_domain: Customer Offer, action_term: Notify}
+      "POST /v1/loans/{loan_id}/decision": {service_domain: Customer Offer, action_term: Evaluate, note: "the human approver's determination, recorded against the offer"}
+  process-api:
+    layer: process
+    routes: products/process/api/main.py
+    operations:
+      "GET /v1/customers/by-account/{account_id}/overview":
+        {scenario: Customer Overview, action_term: Retrieve,
+         spans: [Current Account, Position Keeping, Customer Offer, Customer Behavior Insights],
+         note: "a BIAN business scenario, not a service domain — composition + next_action live here by ADR-0030"}
+      "POST /v1/analyst/route":
+        {outside_landscape: "platform machinery — routes an analyst question to a capability; no banking counterpart"}
 
 # --- AXIOMS: constraints a validator (or, at enterprise, a reasoner) can enforce -
 axioms:

@@ -134,3 +134,48 @@ def test_graph_view_and_join_bullets_share_the_same_join_model():
     for r in rows:
         assert f"'{r['from_view']}'" in sql and f"'{r['to_view']}'" in sql
     assert len(rows) == onto.join_bullets(MODEL).count("\n")
+
+
+# --- BIAN alignment (ADR-0033) ------------------------------------------------
+def test_every_class_is_aligned_to_a_declared_bian_service_domain():
+    """The ontology may REFERENCE the standard but not invent it: every class names a
+    service domain from the declared landscape subset and a SKOS match relation."""
+    std = onto.bian_standard(MODEL)
+    for c in onto.bian_classes(MODEL):
+        assert c["service_domains"], f"{c['class']} has no BIAN alignment"
+        for sd in c["service_domains"]:
+            assert sd in std["service_domains"], f"{c['class']}: unknown service domain {sd!r}"
+        assert c["match"] in std["match_relations"], f"{c['class']}: match {c['match']!r}"
+
+
+def test_every_declared_operation_is_annotated_and_vice_versa():
+    """Every /v1 operation the CODE declares (OpenAPI operationIds, FastAPI route
+    decorators) appears in `capabilities:`, and nothing is annotated that does not
+    exist. An endpoint may be added, but not without saying what BIAN calls it."""
+    declared = onto.declared_operations(MODEL)
+    annotated = {}
+    for o in onto.bian_capabilities(MODEL):
+        annotated.setdefault(o["api"], set()).add(o["operation"])
+    assert declared == annotated
+
+
+def test_every_annotation_names_a_real_service_domain_and_action_term():
+    std = onto.bian_standard(MODEL)
+    for o in onto.bian_capabilities(MODEL):
+        if o["outside_landscape"]:
+            assert not o["service_domain"] and not o["scenario"]
+            continue
+        assert o["action_term"] in std["action_terms"], o
+        domains = o["spans"] if o["scenario"] else [o["service_domain"]]
+        assert domains, o
+        for sd in domains:
+            assert sd in std["service_domains"], f"{o['operation']}: unknown domain {sd!r}"
+
+
+def test_bian_alignment_doc_is_in_sync():
+    """knowledge/reference/bian-alignment.md is a projection — regenerating must be a
+    no-op, so the agents and a remote MCP client read the same mapping the ontology
+    declares."""
+    text = onto.BIAN_MD.read_text(encoding="utf-8")
+    b, e = onto._region(text, onto._MD_BEGIN, onto._MD_END)
+    assert text[b:e] == onto.render_bian_md(MODEL)

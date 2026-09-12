@@ -36,6 +36,7 @@ Lightweight ADRs capturing significant, hard-to-reverse decisions and their rati
 | [0030](0030-api-led-layering.md) | Name the API layers, and enforce the two rules that keep them apart | Accepted |
 | [0031](0031-mcp-over-http-service-identity.md) | MCP over HTTP: service identity, and what a remote caller is entitled to | Accepted |
 | [0032](0032-aws-workload-federation-for-the-agent-channel.md) | AWS workload federation for the agent channel | Accepted |
+| [0033](0033-bian-alignment.md) | Align the ontology and the system APIs to BIAN, as annotations | Accepted |
 
 _Future ADRs (planned): row/column-level security model, idempotency & exactly-once strategy,
 environment promotion gating._

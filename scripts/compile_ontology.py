@@ -8,6 +8,8 @@ turns it into the derived forms that other systems consume:
   - join_bullets(model)  -> the join model rendered for the CA system instruction
                             (consumed by scripts/compile_okf.py -> ui/_okf_context.py)
   - kg_select_sql(model) -> the kg_relationships view body in products/graph/schemas/graph.sql
+  - render_bian_md(model) -> the BIAN alignment table in knowledge/reference/bian-alignment.md
+                            (ADR-0033; joins the OKF corpus via the reference/ sweep)
 
 Before Inc 20 those three were hand-kept copies that drifted (the OKF join bullets
 had 3 relationships; the kg_relationships view had 4). Now they all derive from this
@@ -32,6 +34,8 @@ GRAPH_SQL = ROOT / "products" / "graph" / "schemas" / "graph.sql"
 TAXONOMY_TF = ROOT / "infra" / "modules" / "bigquery" / "main.tf"
 # Inc 22: the reference code sets are a projection of the ontology's enums.
 CODE_SETS_MD = ROOT / "knowledge" / "reference" / "code-sets.md"
+# ADR-0033: the BIAN alignment is a projection of the `bian:` blocks + `capabilities:`.
+BIAN_MD = ROOT / "knowledge" / "reference" / "bian-alignment.md"
 
 # Markers delimiting the generated kg_relationships body inside graph.sql.
 _BEGIN = "-- >>> generated from knowledge/ontology.yaml (scripts/compile_ontology.py) — do not edit by hand"
@@ -184,6 +188,110 @@ def sync_code_sets_md(model: dict | None = None) -> bool:
     return False
 
 
+# --- BIAN alignment (ADR-0033) ------------------------------------------------
+def bian_standard(model: dict) -> dict:
+    return model["standards"]["bian"]
+
+
+def bian_classes(model: dict) -> list[dict]:
+    """class -> its BIAN alignment, service_domain always a list (Account maps to two)."""
+    out = []
+    for name, c in model["classes"].items():
+        b = c.get("bian") or {}
+        sd = b.get("service_domain")
+        out.append({
+            "class": name,
+            "view": c["view"],
+            "service_domains": list(sd) if isinstance(sd, list) else ([sd] if sd else []),
+            "selector": b.get("selector"),
+            "match": b.get("match"),
+            "note": b.get("note", ""),
+        })
+    return out
+
+
+def bian_capabilities(model: dict) -> list[dict]:
+    """(api, layer, operation, ...) for every annotated /v1 operation."""
+    out = []
+    for api, spec in model.get("capabilities", {}).items():
+        for op, a in spec["operations"].items():
+            out.append({
+                "api": api,
+                "layer": spec["layer"],
+                "operation": op,
+                "service_domain": a.get("service_domain"),
+                "scenario": a.get("scenario"),
+                "spans": list(a.get("spans") or []),
+                "action_term": a.get("action_term"),
+                "outside_landscape": a.get("outside_landscape"),
+                "note": a.get("note", ""),
+            })
+    return out
+
+
+def declared_operations(model: dict) -> dict[str, set]:
+    """api -> the /v1 operations its CODE actually declares — the other side of the
+    capabilities guard. OpenAPI operationIds for a contract-first API; `METHOD /path`
+    from the FastAPI route decorators otherwise. Reads the artifacts, so an endpoint
+    added to the code without a BIAN annotation is a CI failure, not a review comment."""
+    out: dict[str, set] = {}
+    for api, spec in model.get("capabilities", {}).items():
+        if "contract" in spec:
+            doc = yaml.safe_load((ROOT / spec["contract"]).read_text(encoding="utf-8"))
+            out[api] = {op["operationId"] for path in doc["paths"].values()
+                        for op in path.values() if isinstance(op, dict) and "operationId" in op}
+        else:
+            src = (ROOT / spec["routes"]).read_text(encoding="utf-8")
+            out[api] = {f"{m.upper()} {path}" for m, path in
+                        re.findall(r'@app\.(get|post|put|patch|delete)\(\s*"(/v1[^"]*)"', src)}
+    return out
+
+
+def render_bian_md(model: dict) -> str:
+    std = bian_standard(model)
+    lines = [_MD_BEGIN,
+             f"Aligned to **{std['landscape']}** ({std['url']}). Match strength uses the SKOS "
+             f"mapping relations: {' / '.join(f'`{m}`' for m in std['match_relations'])}.",
+             "",
+             "### Concepts → service domains", "",
+             "| FinChat concept | Analyst view | BIAN service domain | Match | Note |",
+             "|---|---|---|---|---|"]
+    for c in bian_classes(model):
+        sd = " · ".join(c["service_domains"]) + (f" (by `{c['selector']}`)" if c["selector"] else "")
+        lines.append(f"| {c['class']} | `{c['view']}` | {sd} | `{c['match']}` | {c['note']} |")
+    lines += ["", "### Service domains referenced", "",
+              "| Service domain | Functional pattern | Control record |", "|---|---|---|"]
+    for name, d in std["service_domains"].items():
+        note = f" — {d['note']}" if d.get("note") else ""
+        lines.append(f"| {name} | {d['pattern']} | {d['control_record']}{note} |")
+    lines += ["", "### Operations → service domain · action term", "",
+              "| API | Layer | Operation | BIAN service domain | Action term | Note |",
+              "|---|---|---|---|---|---|"]
+    for o in bian_capabilities(model):
+        if o["outside_landscape"]:
+            sd, at, note = "*(outside the landscape)*", "—", o["outside_landscape"]
+        elif o["scenario"]:
+            sd = f"**scenario: {o['scenario']}** spanning " + ", ".join(o["spans"])
+            at, note = o["action_term"], o["note"]
+        else:
+            sd, at, note = o["service_domain"], o["action_term"], o["note"]
+        lines.append(f"| {o['api']} | {o['layer']} | `{o['operation']}` | {sd} | {at} | {note} |")
+    lines.append(_MD_END)
+    return "\n".join(lines)
+
+
+def sync_bian_md(model: dict | None = None) -> bool:
+    """Rewrite the generated region in knowledge/reference/bian-alignment.md."""
+    model = model or load()
+    text = BIAN_MD.read_text(encoding="utf-8")
+    b, e = _region(text, _MD_BEGIN, _MD_END)
+    new = text[:b] + render_bian_md(model) + text[e:]
+    if new != text:
+        BIAN_MD.write_text(new, encoding="utf-8")
+        return True
+    return False
+
+
 def stewardship(model: dict) -> dict:
     """class -> {owner, steward, tier} — the accountability layer, per concept."""
     return {
@@ -222,6 +330,8 @@ def main() -> None:
     print(f"graph.sql kg_relationships: {'updated' if changed else 'already in sync'}")
     changed = sync_code_sets_md(model)
     print(f"reference/code-sets.md:     {'updated' if changed else 'already in sync'}")
+    changed = sync_bian_md(model)
+    print(f"reference/bian-alignment.md: {'updated' if changed else 'already in sync'}")
 
 
 if __name__ == "__main__":

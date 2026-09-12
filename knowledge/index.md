@@ -4,8 +4,8 @@ title: FinChat Knowledge Bundle
 description: The curated, governed context FinChat's AI agents need but a foundation model cannot know — semantics, accountability, trust, control and agent-safety layers.
 resource: https://github.com/jeremydegardeyn/finchat
 tags: [finchat, banking, data-ai, okf, ontology, governance]
-version: 0.3.0
-reviewed: 2026-07-27
+version: 0.4.0
+reviewed: 2026-09-12
 review_by: 2027-01-27
 owner: ai-governance@datadinosaur.com
 ---
@@ -41,6 +41,7 @@ actually ground the agents — see [`docs/20-ontology.md`](../docs/20-ontology.m
 - [`glossary/`](glossary/active-customer.md) — business terms + synonyms, with owners and review dates.
 - [`datasets/`](datasets/transactions.md) · [`tables/`](tables/transaction.md) · [`views/`](views/customer-360.md) · [`metrics/`](metrics/net-transaction-amount.md) · [`graph/`](graph/banking-graph.md)
 - [`reference/code-sets.md`](reference/code-sets.md) — permitted values, **generated** from the ontology.
+- [`reference/bian-alignment.md`](reference/bian-alignment.md) — what BIAN calls each concept and operation, **generated** from the ontology ([ADR-0033](../docs/adr/0033-bian-alignment.md)).
 
 **Accountability — who answers for it**
 - [`stewardship.md`](stewardship.md) — roles, certification tiers, escalation.

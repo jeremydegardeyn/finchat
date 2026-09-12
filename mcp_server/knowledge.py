@@ -54,6 +54,12 @@ def stewardship() -> dict:
     return dict(okf().CONCEPT_STEWARDSHIP)
 
 
+def bian() -> dict:
+    """The BIAN alignment (ADR-0033): what the industry calls each concept and
+    operation, with the strength of the match. Same projection the agents read."""
+    return dict(okf().BIAN_ALIGNMENT)
+
+
 # --- the concept corpus ------------------------------------------------------
 @lru_cache(maxsize=1)
 def _sections() -> list[tuple[str, str]]:

@@ -105,11 +105,29 @@ def test_resources_and_prompt_are_published():
     assert {p.name for p in asyncio.run(srv.mcp.list_prompts())} == {"finchat_analyst"}
 
 
+def test_bian_resource_is_the_compiled_alignment_not_a_copy():
+    """ADR-0033: a remote client and the analyst agent read one BIAN mapping. The
+    resource serves the compiled projection; every operation on it is a real one."""
+    srv = _load()
+    import json
+    import knowledge
+
+    body = json.loads(srv.r_bian())
+    assert body == knowledge.okf().BIAN_ALIGNMENT
+    assert {c["class"] for c in body["classes"]} == {
+        "Customer", "Account", "Transaction", "OverdraftProfile", "Loan"}
+    ops = {o["operation"]: o for o in body["operations"]}
+    assert ops["getBalance"]["service_domain"] == "Position Keeping"
+    assert ops["POST /v1/loans"]["action_term"] == "Initiate"
+    assert "finchat://knowledge/bian" in srv._INSTRUCTIONS
+
+
 @pytest.mark.parametrize("query,expect", [
     ("what does revenue mean", "net-revenue"),
     ("do pending transactions count", "posted-transaction"),
     ("how is overdraft calculated", "overdraft"),
     ("can I get a household rollup", "household"),
+    ("which BIAN service domain is the balance", "position keeping"),
 ])
 def test_describe_data_model_finds_the_governing_section(query, expect):
     srv = _load()

@@ -63,7 +63,10 @@ AN_WORDS = ("how many", "count", "number of", "total", "sum", "average", "avg", 
 SEM_WORDS = ("what does", "what is a ", "definition", "defined", "define", "mean", "how is ",
               "calculated", "computed", "what columns", "what fields", "schema", "join",
               "related to", "what's in", "what is in", "contain", "which view", "which table",
-              "data model", "column mean")
+              "data model", "column mean",
+              # ADR-0033: the industry standard's vocabulary is a data-model question
+              # (which service domain owns a concept), not a platform one.
+              "bian", "service domain", "action term", "industry standard")
 
 
 def hits(ql: str, words) -> int:
@@ -115,7 +118,7 @@ MODES = ("analytics", "kb", "semantics", "platform")
 ROUTING_PROMPT = """You route a bank analyst's question to one of four tools. Reply with ONE word.
 ANALYTICS = a quantitative question about the bank's DATA VALUES (counts, sums, averages, lists, per-segment/per-customer metrics over transactions, accounts, customers, loans, overdrafts).
 KB = a question answerable from the bank's POLICY/PRODUCT DOCUMENTS (fees, policies, branch hours, terms, eligibility, rates offered, how-to).
-SEMANTICS = a question about the DATA MODEL ITSELF — what a metric means, how it is defined/calculated, what a table or view contains, or how tables join. (Not a data value; not a policy.)
+SEMANTICS = a question about the DATA MODEL ITSELF — what a metric means, how it is defined/calculated, what a table or view contains, how tables join, or how a concept or operation maps to an industry standard (BIAN service domain, action term). (Not a data value; not a policy.)
 PLATFORM = a question about how the FinChat PLATFORM ITSELF is built or operated — architecture, an ADR or design decision, a service, module, pipeline, the gateway, the agent registry, CI/CD, Terraform, runbooks, or what the platform supports. (About the SYSTEM, not the bank's data or the bank's policies.)
 Question: {question}
 Answer (ANALYTICS, KB, SEMANTICS, or PLATFORM):"""

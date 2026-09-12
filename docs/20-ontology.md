@@ -79,3 +79,28 @@ Three design decisions worth recording:
 New drift guards in `scripts/test_ontology.py`: the code-sets doc must match a fresh projection; every class needs an owner, steward and valid tier; golden queries must have valid routes, in-perimeter tables and real refusal ids; glossary terms must map to assets that exist; refusal rules must carry both a prohibition and a user-facing line.
 
 **Still only stated, not enforced:** the regulatory map and quality SLOs are hand-maintained, and agents do not yet read live quality-scan status at query time. Both are named as gaps in their own files rather than left implicit.
+
+## Industry alignment — BIAN (ADR-0033)
+
+The ontology now also says what the **industry** calls each concept and operation. A
+`standards.bian` block declares the [BIAN Service Landscape](https://bian.org) subset
+this model touches, the SKOS mapping relations it uses (`closeMatch` / `relatedMatch` —
+nothing here claims `exactMatch`), and BIAN's action-term set. Every class carries a
+`bian:` alignment, and a `capabilities:` section names the service domain and action
+term of every `/v1` operation on the system and process APIs.
+
+It is an alignment, not an adoption: FinChat keeps its own names, the APIs are untouched,
+and BIAN's member-gated Business Object Model is referenced by name only. The reason it
+is in the *ontology* rather than a capability-map document is the same reason everything
+else is: `compile_ontology.py` projects it into
+[`knowledge/reference/bian-alignment.md`](../knowledge/reference/bian-alignment.md), which
+the OKF sweep folds into `ANALYST_KNOWLEDGE`, so the semantics route and the MCP server's
+`describe_data_model` answer "which BIAN service domain is the balance?" from the declared
+mapping — and `compile_okf.py` emits it as `BIAN_ALIGNMENT` for the
+`finchat://knowledge/bian` resource.
+
+Three more drift guards in `scripts/test_ontology.py`: every class aligns to a declared
+service domain with a valid relation; every `/v1` operation the **code** declares (read
+from the OpenAPI contract and the FastAPI route decorators) is annotated, and nothing is
+annotated that does not exist; the reference doc regenerates as a no-op. An endpoint can
+be added, but not without saying what BIAN calls it.

@@ -8,6 +8,31 @@ Bundle version is declared in [`index.md`](index.md).
 
 ---
 
+## 0.4.0 — 2026-09-12 (ADR-0033: BIAN alignment)
+
+**Added — the industry's names for FinChat's concepts and operations.**
+
+- `ontology.yaml` — `standards.bian` (landscape, SKOS match relations, action terms,
+  the service-domain subset referenced); a `bian:` block on every class; a
+  `capabilities:` section naming the BIAN service domain + action term of every `/v1`
+  operation on `txn-api`, `loan-api` and the process API.
+- `reference/bian-alignment.md` — **generated** from the above; joins the grounding
+  corpus, so the semantics route and `describe_data_model` answer "which service
+  domain is X?" from the declared mapping. Also served as JSON at
+  `finchat://knowledge/bian` on the MCP server.
+- Routing vocabulary: `bian`, `service domain`, `action term`, `industry standard`
+  route to **semantics**, not platform.
+
+**Behaviour change:** an agent asked about BIAN now answers from the alignment
+(including the *strength* of each match) instead of from the foundation model's recall.
+`Household` remains unmapped on purpose.
+
+**Guards:** every class must align to a declared service domain with a SKOS relation;
+every `/v1` operation the code declares must be annotated (and nothing annotated that
+does not exist); the reference doc must be a no-op regeneration.
+
+---
+
 ## 0.3.0 — 2026-07-27 (Inc 22: enterprise layers)
 
 **Added — accountability, trust, control and agent-safety layers.**
