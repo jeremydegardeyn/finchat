@@ -16,6 +16,13 @@ anywhere a test could reach.
 
     python scripts/verify_oauth_live.py --env dev
     python scripts/verify_oauth_live.py --env dev --login
+    python scripts/verify_oauth_live.py --env dev --login --read finchat://knowledge/bian
+
+`--read` takes the token the login just minted and opens a real MCP session with it,
+in this process, and prints the resource. Until this existed the login path proved a
+token could be ISSUED and never that the resource server would ACCEPT it — two
+different failures, and only the second one is what a user sees. The token is never
+printed; it is used and dropped.
 """
 from __future__ import annotations
 
@@ -170,7 +177,32 @@ def checks(issuer: str, resource: str) -> int:
     return failures
 
 
-def login(issuer: str, resource: str) -> int:
+def read_with(token: str, resource: str, uri: str) -> int:
+    """Use the freshly issued token against the resource server: initialize, list
+    resources, read one. This is the assertion the OAuth checks cannot make."""
+    import anyio
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    async def go() -> int:
+        headers = {"Authorization": f"Bearer {token}"}
+        async with streamablehttp_client(resource, headers=headers, timeout=120) as (r, w, _):
+            async with ClientSession(r, w) as s:
+                init = await s.initialize()
+                uris = [str(x.uri) for x in (await s.list_resources()).resources]
+                print(f"{OK} session with {init.serverInfo.name} — {len(uris)} resources")
+                if uri not in uris:
+                    print(f"{BAD} {uri} is not published; got {uris}")
+                    return 1
+                body = (await s.read_resource(uri)).contents[0].text
+                print(f"{OK} read {uri} ({len(body)} bytes)\n")
+                print(body)
+                return 0
+
+    return anyio.run(go)
+
+
+def login(issuer: str, resource: str, read: str | None = None) -> int:
     """The full flow, with a real human at the Google step."""
     port = 47821
     redirect = f"http://127.0.0.1:{port}/cb"
@@ -244,7 +276,10 @@ def login(issuer: str, resource: str) -> int:
         "client_id": client_id, "redirect_uri": redirect,
         "code_verifier": verifier}, form=True)
     print(f"{OK if status == 400 else BAD} the code cannot be replayed")
-    return 0 if status == 400 else 1
+    failed = 0 if status == 400 else 1
+    if read:
+        failed += read_with(token["access_token"], resource, read)
+    return failed
 
 
 def main() -> int:
@@ -254,7 +289,12 @@ def main() -> int:
     ap.add_argument("--project", default="strongsville-city-schools")
     ap.add_argument("--login", action="store_true",
                     help="complete the real flow, opening a browser for Google sign-in")
+    ap.add_argument("--read", metavar="URI",
+                    help="after --login, open an MCP session with the token and read this resource")
     args = ap.parse_args()
+    if args.read and not args.login:
+        print("--read needs --login: the token comes from the flow", file=sys.stderr)
+        return 2
 
     def url(service: str) -> str:
         return gcloud("run", "services", "describe", f"finchat-{args.env}-{service}",
@@ -270,7 +310,7 @@ def main() -> int:
 
     failed = checks(issuer, resource)
     if args.login:
-        failed += login(issuer, resource)
+        failed += login(issuer, resource, read=args.read)
     print()
     return 1 if failed else 0
 
