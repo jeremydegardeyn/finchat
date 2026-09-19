@@ -215,6 +215,13 @@ def test_empty_answer_is_an_outage_not_a_refusal():
     assert not t.agent_refused and t.signals[ss.BREACH_SIGNAL] == 0.0
 
 
+def test_parse_failure_is_named_without_quoting_the_text():
+    t, why, model = ss.classify("q", "a", lambda p, n: ('{"signals":{"self_harm":0.2,"iden', "m"))
+    assert t.classifier_error and why.startswith("parse:truncated:len=") and model == "m"
+    t, why, _ = ss.classify("q", "a", lambda p, n: ("   ", "m"))
+    assert why == "parse:empty:len=3"
+
+
 def test_transport_exception_is_named_on_the_row():
     t, why, _ = ss.classify("q", "a", lambda p, n: (_ for _ in ()).throw(TimeoutError("slow")))
     assert t.classifier_error and why.startswith("transport:TimeoutError")

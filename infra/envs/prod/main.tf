@@ -561,4 +561,5 @@ module "controls_alerting" {
   servicenow_user         = var.servicenow_user
   evidence_dataset        = var.controls_evidence_dataset
   chat_provider           = var.controls_chat_provider
+  alert_email             = var.controls_alert_email
 }

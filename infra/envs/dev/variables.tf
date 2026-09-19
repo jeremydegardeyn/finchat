@@ -236,3 +236,9 @@ variable "aws_mcp_client_role" {
   EOT
   default     = ""
 }
+
+variable "controls_alert_email" {
+  type        = string
+  default     = ""
+  description = "Fallback email for control events ServiceNow could not take (ADR-0026 notification plane). Empty disables it."
+}
