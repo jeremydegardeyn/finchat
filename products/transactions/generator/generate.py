@@ -19,6 +19,9 @@ Examples:
   # Publish to Pub/Sub
   python generate.py --count 5000 --project strongsville-city-schools \\
       --topic finchat-dev-transactions-ingest
+
+  # Seed the named demo accounts (the ids docs, the SPA fallback and DEMO_MODE use)
+  python generate.py --account-ids acct-001,acct-002,acct-003 --seed 1 --project ... --topic ...
 """
 from __future__ import annotations
 
@@ -54,14 +57,20 @@ class Account:
     currency: str
 
 
-def build_customers(n_customers: int, rng: random.Random) -> list[Account]:
-    """One primary account per synthetic customer (sufficient for demo volume)."""
+def build_customers(n_customers: int, rng: random.Random,
+                    account_ids: list[str] | None = None) -> list[Account]:
+    """One primary account per synthetic customer (sufficient for demo volume).
+
+    `account_ids` pins the ids instead of minting UUIDs. That is how the named demo
+    accounts (acct-001..003, which docs, the SPA fallback and DEMO_MODE all assume)
+    get into a real environment through the same ingest path as everything else.
+    """
     accounts: list[Account] = []
-    for _ in range(n_customers):
+    for i in range(n_customers):
         customer_id = str(uuid.uuid4())
         accounts.append(
             Account(
-                account_id=str(uuid.uuid4()),
+                account_id=account_ids[i] if account_ids else str(uuid.uuid4()),
                 account_number=f"{rng.randint(10**9, 10**10 - 1)}",
                 customer_id=customer_id,
                 account_type=rng.choice(ACCOUNT_TYPES),
@@ -124,12 +133,19 @@ def make_transaction(
     }
 
 
-def generate(count: int, max_per_customer: int, overdraft_rate: float, seed: int | None):
+def generate(count: int, max_per_customer: int, overdraft_rate: float, seed: int | None,
+             account_ids: list[str] | None = None):
     rng = random.Random(seed)
     count = min(count, MAX_TXNS)
-    # Need enough customers so we never exceed max_per_customer.
-    n_customers = max(1, -(-count // max_per_customer))  # ceil
-    accounts = build_customers(n_customers, rng)
+    if account_ids:
+        # Pinned accounts bound the run: the <= max_per_customer invariant holds per
+        # execution, so a richer history for a demo account is several runs, not one.
+        n_customers = len(account_ids)
+        count = min(count, n_customers * max_per_customer)
+    else:
+        # Need enough customers so we never exceed max_per_customer.
+        n_customers = max(1, -(-count // max_per_customer))  # ceil
+    accounts = build_customers(n_customers, rng, account_ids)
     base_time = datetime.now(timezone.utc)
 
     # Round-robin assignment guarantees the <= max_per_customer invariant.
@@ -171,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-per-customer", type=int, default=4, help="max transactions per customer per run")
     p.add_argument("--overdraft-rate", type=float, default=0.05, help="fraction of txns that force an overdraft")
     p.add_argument("--seed", type=int, default=None, help="RNG seed for reproducibility")
+    p.add_argument("--account-ids", help="comma-separated account ids to use instead of "
+                   "random UUIDs (count is capped at len(ids) * max-per-customer)")
     p.add_argument("--project", help="GCP project (required to publish)")
     p.add_argument("--topic", help="Pub/Sub topic id (required to publish)")
     p.add_argument("--out", help="write JSON lines to this file instead of publishing")
@@ -182,7 +200,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_per_customer < 1 or args.max_per_customer > 4:
         p.error("--max-per-customer must be between 1 and 4")
 
-    messages = generate(args.count, args.max_per_customer, args.overdraft_rate, args.seed)
+    account_ids = [a.strip() for a in args.account_ids.split(",") if a.strip()] if args.account_ids else None
+    if args.account_ids and not account_ids:
+        p.error("--account-ids given but empty")
+    if account_ids and len(set(account_ids)) != len(account_ids):
+        p.error("--account-ids must not repeat an id")
+
+    messages = generate(args.count, args.max_per_customer, args.overdraft_rate, args.seed, account_ids)
 
     if args.out:
         n = 0
@@ -199,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.dry_run and not (args.project and args.topic):
             print(f"\n(no --project/--topic given; printed {n} txns. Use --dry-run to silence this note.)", file=sys.stderr)
     else:
-        print(f"publishing {min(args.count, MAX_TXNS)} transactions to {args.topic}...", file=sys.stderr)
+        print(f"publishing to {args.topic}...", file=sys.stderr)
         sent = publish_to_pubsub(args.project, args.topic, messages)
         print(f"published {sent} transactions to projects/{args.project}/topics/{args.topic}")
     return 0

@@ -139,6 +139,9 @@ jobs:
           assert max(per.values())<=4, "invariant violated"
           print(f"OK {len(rows)} txns, max/customer={max(per.values())}")
           PY
+      - name: Generator — pinned demo account ids keep the invariants
+        working-directory: products/transactions/generator
+        run: pytest test_generate.py -q
 
   # The registry gate is its own job so a drift failure is legible in the checks list
   # rather than buried in a test summary. This is the control that stops an agent
