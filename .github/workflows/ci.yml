@@ -68,6 +68,9 @@ jobs:
       - name: Conversation safety — trajectory engine, sticky quarantine, no-text guard (ADR-0034)
         working-directory: ui
         run: pytest test_safety_signals.py -q
+      - name: Conversation safety — one message at a time per session; a burst is counted and locks (ADR-0034)
+        working-directory: ui
+        run: pip install fastapi==0.115.0 httpx==0.27.2 && pytest test_safety_concurrency.py -q
       - name: Conversation safety — population anomaly comparison (ADR-0034)
         run: pytest scripts/test_safety_anomaly.py -q
       - name: DLP resource paths — regional templates (ADR-0026)

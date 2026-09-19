@@ -64,6 +64,9 @@ recognisable trajectory. The right tool is a classifier plus explicit, readable 
 2. **Fold into the session state.** Prior `turn_signals` rows for the session (and the
    principal's 30-day counts) are read at the start of the request, overlapped with the
    agent call, so the state costs no latency. Model Armor blocks are folded in as turns.
+   The read is only complete if no other turn of the session is in flight, so the request
+   first takes a **per-session lease** (`ui/session_lock.py`, amendment below) and holds it
+   through the write: one message at a time per session, the rule the SPA already follows.
 3. **Decide**, with every threshold as data (`DEFAULT_THRESHOLDS`, `SAFETY_THRESHOLDS` to
    override):
    - **Tier 1 — the product acts, now.** `self_harm ≥ 0.7` → the answer is replaced with a
@@ -91,6 +94,43 @@ recognisable trajectory. The right tool is a classifier plus explicit, readable 
    Workflows → ServiceNow `em_event` → incident, plus Chat. `session_quarantine`,
    `self_harm`, `scam_victim`, `third_party_coercion` and `answer_policy_breach` are added to
    the workflow's elevated set, so a tier-1 event in prod is severity 2.
+
+**Amendment 2026-09-19 — a burst is a trajectory too.** Verified live the day this ADR
+was accepted: six messages to `/api/agent/chat` with one `session_id`, fired without
+waiting for replies, produced `turn_index` 1,1,1,2,2,2 and no quarantine. Each request
+read the state before any had written, so none saw the others' hits and the five-hit lock
+was unreachable — by the one client the engine exists for, since the SPA waits for each
+reply and a script does not. The fix is serialization with accounting:
+
+- **Lease.** `agent_proxy` takes a lease on the session key before the state read and
+  releases it after the evidence write. Firestore document per session (the BFF SA already
+  holds `roles/datastore.user` for ADR-0025; same database), one transaction to take, one
+  to give back, `SAFETY_LOCK_TTL_S` (120 s) expiry so a holder that dies mid-request
+  cannot hold its customer's session for long. Without a project, or when Firestore is
+  unreachable, an in-process table: per-instance serialization, reported, never a refusal.
+- **Bounded wait, then the rule.** A second request waits `SAFETY_LOCK_WAIT_S` (3 s) for
+  the holder; if the lease is still taken it is answered *"One message at a time, please"*
+  (HTTP 429 with a `response` body the SPA renders as an ordinary reply) and **registered**
+  as a pending concurrent turn — one array-union write, no lease needed.
+- **Counted under the lease.** The holder drains the pending turns into the state it
+  holds, before its own decision and again after it, each as a `concurrent_turn` security
+  signal at confidence 1.0 with its own evidence row (FK = the rejected request's
+  `conversation_id`, `reasons` = `concurrent_turn`). The signal is server-raised: it is in
+  the security class for counting and correlation, absent from the classifier taxonomy,
+  and dropped by `parse_verdict` if a model ever emits it. It is stored inside `signals`,
+  so `state_from_rows` rebuilds it with no schema change. A rejected turn is unclassified
+  by design — there is no answer to judge, and classifying the question would let a burst
+  buy classifier calls.
+
+The burst therefore reaches the same lock a patient attacker would, and reaches it
+*because* it was a burst: the third concurrent turn trips velocity review, the fifth locks
+the session, and the message that was in flight is answered with the lock, not the answer.
+One concurrent turn — a browser retry, a double-submit — is one hit, and one hit does
+nothing. `test_safety_concurrency.py` fires the burst through the FastAPI app with the
+agent, classifier and store stubbed and asserts `turn_index` strictly increasing and the
+quarantine on the fifth hit; with the lease neutralised the same test reproduces
+`[1,1,1,1,1,1]`. The `concurrent-burst` trajectory holds the offline gate to the same
+expectation.
 
 **What "real time" means here.** The decision is made before the answer leaves the BFF:
 one Flash-Lite call of added latency, the state read hidden behind the agent call. The
@@ -169,6 +209,39 @@ miniature. Verified to bite: loosening the lock to eight hits fails the build at
 - Anonymous customers get session-level correlation only: `anonymous` is every signed-out
   customer, so cross-session recurrence needs the identity ADR-0016/0025 provide. The
   design does not pretend otherwise.
+- **One message at a time per session** is now enforced by the BFF, not only by the SPA
+  (amendment above). For a human nothing changes; a client that overlaps its own turns
+  gets a 429 with the rule as its answer, and every overlapped turn counts as a
+  `concurrent_turn` security hit toward review (3) and lock (5). A single overlap — a
+  network retry — is one hit and does nothing. `SAFETY_LOCK_WAIT_S` (3 s) and
+  `SAFETY_LOCK_TTL_S` (120 s) tune it; `SAFETY_LOCK_BACKEND=memory` forces the in-process
+  table. Off (`SAFETY_SIGNALS` unset) there is no lease and no rejection: the lock is part
+  of the control, not a rate limit of its own.
+- Firestore gains a transient `finchat_session_locks` collection: one document per
+  session while a turn is in flight or a rejected turn awaits counting, deleted otherwise.
+  No new IAM (the BFF SA's `roles/datastore.user` from ADR-0025 covers it) and no new
+  dependency. Cost per turn: two small transactions, plus one write per rejected turn —
+  inside the free tier at any volume this platform sees. Enterprise mapping: a Bigtable
+  row with a lease cell on the ADR-0017 hot path, same shape.
+- Latency: a request that takes the lease uncontended adds one Firestore round trip
+  (tens of ms) before the state read starts. A request that waits adds up to
+  `SAFETY_LOCK_WAIT_S`. The state read is still overlapped with the agent call, which the
+  lease is what makes safe.
+- Failure posture, stated: when Firestore is unreachable the lease falls back to
+  per-instance serialization — correct on one Cloud Run instance, the original race
+  across several — and says so on stdout. A control on the evidence must not become an
+  outage of the product. The reconciliation (docs/26) can count `session_lock:` lines the
+  way it counts unscreened turns.
+- Known edge: requests with no `session_id` share one session key per principal (that was
+  true of the trajectory before this amendment). With the lease they also serialize with
+  one another, so a session-less script now waits on other session-less callers of the
+  same principal. The SPA always sends one; an integration that does not should.
+- A rejected turn's counting is done by the *next* holder if it arrived after the current
+  holder's final drain. If the burst is the session's last activity, its tail sits
+  pending in the lease document until another turn of that session — or forever, as a
+  document that was never deleted. That is a bounded blind spot (a handful of turns in
+  the ~100 ms between drain and release), not a lost lock: those turns are still in the
+  document and count the moment the session speaks again.
 
 ## Alternatives considered
 

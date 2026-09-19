@@ -720,6 +720,65 @@ def _safety_state_task(sess: dict):
     return asyncio.ensure_future(_load())
 
 
+async def _safety_record(sess: dict, *, conversation_id: str, turn, decision, rationale: str,
+                         model: str | None, latency_ms: int | None, turn_index: int) -> None:
+    """Write the evidence row and, at tier 1 or 2, the control event. Best-effort both."""
+    import asyncio
+    import safety_signals as ss
+    import control_events as ce
+    if GCP_PROJECT and EVAL_DATASET:
+        row = ss.evidence_row(conversation_id=conversation_id,
+                              session_key=sess["session_key"],
+                              principal_hash=sess["principal_hash"],
+                              turn_index=turn_index, persona=sess["persona"],
+                              channel="agent", turn=turn, decision=decision,
+                              rationale=rationale, model=model, latency_ms=latency_ms)
+        try:
+            await asyncio.to_thread(ss.write_row, GCP_PROJECT, EVAL_DATASET, row)
+        except Exception as e:
+            print(f"safety_signals: evidence write failed ({type(e).__name__})")
+    if decision.tier in (1, 2):
+        try:
+            ce.emit_safety_signal(
+                control_id=f"conversation.{decision.cls}."
+                           f"{decision.action if decision.tier == 1 else 'review'}",
+                cls=decision.cls or "conduct", severity=decision.severity,
+                filters=decision.filters, principal=sess["principal"],
+                session_key=sess["session_key"], trace=sess["trace"],
+                environment=sess["env"])
+        except Exception:
+            pass
+
+
+async def _safety_fold_concurrent(sess: dict, state) -> None:
+    """Fold in the turns the session lock turned away since the last holder counted them.
+
+    Runs under this request's lease, so the state it advances is the true one and the
+    indexes it assigns are the next ones. Each rejected turn is a `concurrent_turn`
+    security hit with its own evidence row (FK = the rejected request's conversation id)
+    and its own decision — the fifth one locks the session exactly as a fifth probe would,
+    and the holder's own turn, decided next, sees the lock.
+    """
+    import safety_signals as ss
+    from datetime import datetime
+    lease = sess.get("lease")
+    if lease is None:
+        return
+    for p in await lease.drain():
+        ts = p.get("ts")
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                ts = None
+        turn = ss.concurrent_turn(ts=ts if isinstance(ts, datetime) else None)
+        decision = ss.evaluate(turn, state)
+        await _safety_record(sess, conversation_id=str(p.get("conversation_id") or ""),
+                             turn=turn, decision=decision, rationale="", model=None,
+                             latency_ms=None, turn_index=state.turns + 1)
+        state.advance(turn, decision)
+
+
 async def _safety_screen(sess: dict, state_task, question: str, answer: str, *,
                          conversation_id: str, armor_filters: list[str] | None = None,
                          latency_ms: int | None = None) -> dict | None:
@@ -732,6 +791,9 @@ async def _safety_screen(sess: dict, state_task, question: str, answer: str, *,
         return None
     try:
         state = await state_task
+        # Turns rejected while this one was being answered come first: they happened
+        # before this decision, and the fifth of them can be what locks the session.
+        await _safety_fold_concurrent(sess, state)
         if armor_filters is not None:
             # Model Armor already decided this turn; it still counts toward the session.
             turn = ss.TurnSignals(armor_blocked=True, armor_class=ce.filter_class(armor_filters),
@@ -749,29 +811,13 @@ async def _safety_screen(sess: dict, state_task, question: str, answer: str, *,
             decision.action = "withhold"
             decision.reasons.append("classifier_unavailable_fail_closed")
 
-        if GCP_PROJECT and EVAL_DATASET:
-            row = ss.evidence_row(conversation_id=conversation_id,
-                                  session_key=sess["session_key"],
-                                  principal_hash=sess["principal_hash"],
-                                  turn_index=state.turns + 1, persona=sess["persona"],
-                                  channel="agent", turn=turn, decision=decision,
-                                  rationale=rationale, model=model, latency_ms=latency_ms)
-            try:
-                await asyncio.to_thread(ss.write_row, GCP_PROJECT, EVAL_DATASET, row)
-            except Exception as e:
-                print(f"safety_signals: evidence write failed ({type(e).__name__})")
-
-        if decision.tier in (1, 2):
-            try:
-                ce.emit_safety_signal(
-                    control_id=f"conversation.{decision.cls}."
-                               f"{decision.action if decision.tier == 1 else 'review'}",
-                    cls=decision.cls or "conduct", severity=decision.severity,
-                    filters=decision.filters, principal=sess["principal"],
-                    session_key=sess["session_key"], trace=sess["trace"],
-                    environment=sess["env"])
-            except Exception:
-                pass
+        await _safety_record(sess, conversation_id=conversation_id, turn=turn,
+                             decision=decision, rationale=rationale, model=model,
+                             latency_ms=latency_ms, turn_index=state.turns + 1)
+        state.advance(turn, decision)
+        # And anything turned away while the classifier ran. What arrives between here
+        # and the release is the next holder's to count.
+        await _safety_fold_concurrent(sess, state)
         if decision.action != "none":
             return {"action": decision.action, "tier": decision.tier,
                     "text": ss.HANDOFF_TEXT[decision.action]}
@@ -784,13 +830,46 @@ async def _safety_screen(sess: dict, state_task, question: str, answer: str, *,
 async def agent_proxy(path: str, request: Request):
     """Agent path with Model Armor screening on prompt (in) and response (out), and the
     conversation-level trajectory decision on every turn (ADR-0034)."""
-    import armor
-    import json as _json
     import uuid as _uuid
+    import safety_signals as ss
+    import session_lock as sl
     body = await request.body()
     sess = _safety_session(request, body)
-    state_task = _safety_state_task(sess)          # overlaps everything below
     conversation_id = str(_uuid.uuid4())           # shared by conversation_log + turn_signals
+
+    # One message at a time per session (ADR-0034 amendment, session_lock.py). The
+    # trajectory is a read-modify-write of the session's rows, and two turns in flight at
+    # once read the same state, write the same index and count the other's hit not at all.
+    # The lease is taken before the state read so what the read sees is complete, and held
+    # through the write. A turn that cannot get it within the bounded wait is answered with
+    # the rule and registered, so the holder counts it as a `concurrent_turn` security hit.
+    if ss.enabled() and sess["question"]:
+        sess["lease"] = await sl.acquire(sess["session_key"])
+        if sess["lease"] is None:
+            await sl.register_concurrent(sess["session_key"], conversation_id)
+            try:
+                await _log_eval(sess["persona"], "agent", sess["question"], "",
+                                conversation_id=conversation_id,
+                                session_key=sess["session_key"],
+                                principal_hash=sess["principal_hash"])
+            except Exception:
+                pass
+            return JSONResponse({"response": ss.CONCURRENT_TEXT,
+                                 "safety": {"action": "concurrent", "tier": 0}},
+                                status_code=429)
+    try:
+        return await _agent_turn(path, request, body, sess, conversation_id)
+    finally:
+        if sess.get("lease") is not None:
+            await sess["lease"].release()
+
+
+async def _agent_turn(path: str, request: Request, body: bytes, sess: dict,
+                      conversation_id: str) -> Response:
+    """The turn itself, under the session lease when safety signals are on."""
+    import armor
+    import json as _json
+    state_task = _safety_state_task(sess)          # overlaps everything below
 
     def _override(o: dict, status: int = 200) -> JSONResponse:
         return JSONResponse({"response": o["text"],

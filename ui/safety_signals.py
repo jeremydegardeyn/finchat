@@ -75,12 +75,24 @@ BREACH_SIGNAL = "answer_policy_breach"
 
 ALL_SIGNALS = tuple(s for _, members in SIGNAL_CLASSES for s in members) + (BREACH_SIGNAL,)
 
+# Signals the SERVER raises, never the classifier: facts about how the turn arrived, not
+# what it said. `concurrent_turn` is a message that reached the BFF while another turn of
+# the same session was still in flight and was turned away (session_lock.py). A human in
+# the SPA cannot produce one — the UI waits for each reply — so a run of them is a script,
+# and a script probing a bank's assistant is a security trajectory. It is security-class
+# for counting and correlation, but `parse_verdict` drops it if a model ever emits it and
+# the classifier prompt does not name it.
+SERVER_SIGNALS = ("concurrent_turn",)
+CONCURRENT_SIGNAL = SERVER_SIGNALS[0]
+
 # Product actions a tier-1 decision can take. `quarantine` is the only one that persists
 # by itself: it is re-derived from the session's prior rows on every turn.
 ACTIONS = ("none", "handoff_crisis", "handoff_fraud", "quarantine", "withhold")
 
 
 def signal_class(name: str) -> str | None:
+    if name in SERVER_SIGNALS:
+        return "security"
     for cls, members in SIGNAL_CLASSES:
         if name in members:
             return cls
@@ -153,6 +165,18 @@ class TurnSignals:
     def is_security_hit(self) -> bool:
         return bool(self.at_least(thresholds()["med"], "security")) or \
             (self.armor_blocked and self.armor_class == "security")
+
+    @property
+    def concurrent(self) -> bool:
+        return self.signals.get(CONCURRENT_SIGNAL, 0.0) > 0
+
+
+def concurrent_turn(ts: datetime | None = None) -> "TurnSignals":
+    """The turn the session lock turned away. Unclassified — there is no answer to judge
+    and classifying the question would let a burst buy classifier calls — so it carries
+    exactly one signal at full confidence and folds into the state like an Armor block.
+    Stored inside `signals`, so `state_from_rows` rebuilds it with no schema change."""
+    return TurnSignals(signals={CONCURRENT_SIGNAL: 1.0}, ts=ts or _now())
 
 
 @dataclass
@@ -243,6 +267,8 @@ def evaluate(turn: TurnSignals, state: SessionState) -> Decision:
     if turn.armor_blocked:
         fired.append(f"armor_{turn.armor_class or 'blocked'}")
     d.filters = fired
+    if turn.concurrent:
+        d.reasons.append("concurrent_turn")   # arrived mid-flight; counted, not answered
 
     # --- sticky quarantine: nothing the user says re-opens a locked session --------
     if state.quarantined:
@@ -379,9 +405,10 @@ CLASSIFIER_MAX_TOKENS = 2048
 
 
 def parse_verdict(text: str | None) -> tuple[dict[str, float], bool, str] | None:
-    """Parse the classifier's JSON. Unknown signal names are dropped; values are clamped.
-    None when the output is not usable — the caller records a classifier error, it does
-    not guess."""
+    """Parse the classifier's JSON. Unknown signal names are dropped — including the
+    server-raised ones in SERVER_SIGNALS, which a model must not be able to assert —
+    and values are clamped. None when the output is not usable: the caller records a
+    classifier error, it does not guess."""
     if not text:
         return None
     try:
@@ -488,6 +515,11 @@ HANDOFF_TEXT = {
         "Please try again in a few minutes or contact support."
     ),
 }
+
+# Not an action of the engine — the session lock's answer to a message that arrived while
+# the previous one was still being answered. Plain, and it names the rule.
+CONCURRENT_TEXT = ("One message at a time, please — I am still answering your previous one. "
+                   "Send this again once that reply arrives.")
 
 
 # --- evidence row -----------------------------------------------------------------------------
