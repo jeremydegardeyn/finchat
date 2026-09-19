@@ -123,6 +123,17 @@ resource "google_secret_manager_secret_iam_member" "workflow_reads_secret" {
   member    = "serviceAccount:${google_service_account.workflow[0].email}"
 }
 
+# The fallback leg writes a log entry (workflow.yaml, log_undelivered) and the alert
+# policy below reads it. Found live: the first undelivered event died here with
+# `logging.logEntries.create` denied — the SA had only ever needed ServiceNow and two
+# secrets. A fallback that cannot record the failure it exists for is not a fallback.
+resource "google_project_iam_member" "workflow_writes_logs" {
+  count   = local.notify_enabled ? 1 : 0
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.workflow[0].email}"
+}
+
 # --- workflow ----------------------------------------------------------------
 
 resource "google_service_account" "workflow" {
@@ -224,4 +235,81 @@ resource "google_bigquery_dataset_iam_member" "evidence_writer" {
   dataset_id = var.evidence_dataset
   role       = "roles/bigquery.dataEditor"
   member     = google_logging_project_sink.evidence[0].writer_identity
+}
+
+# --- fallback: email when ServiceNow did not take the event ------------------
+# The workflow logs a `control_event_undelivered` entry when the em_event POST fails
+# (workflow.yaml, post_event/except). This log-based alert policy matches that entry and
+# emails the address in `alert_email`. It is the one leg of the notification plane that
+# needs no ITSM, no webhook secret and no third-party mail API — which is the point of a
+# fallback. Two known properties of this path, both from docs/26: it is rate-limited
+# (F11 — one notification per `period`, and at most 20 incidents a day per policy) and
+# it carries only what labelExtractors lift from the entry (F12) — envelope metadata and
+# the transport error, never content. Off unless `alert_email` is set.
+
+resource "google_monitoring_notification_channel" "fallback_email" {
+  count        = local.notify_enabled && var.alert_email != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "${local.prefix} controls fallback (email)"
+  type         = "email"
+  labels = {
+    email_address = var.alert_email
+  }
+}
+
+resource "google_monitoring_alert_policy" "undelivered" {
+  count        = local.notify_enabled && var.alert_email != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "${local.prefix}: control event not delivered to ServiceNow"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "control_event_undelivered logged by the dispatch workflow"
+    condition_matched_log {
+      filter = <<-EOT
+        resource.type="workflows.googleapis.com/Workflow"
+        AND resource.labels.workflow_id="${local.prefix}-controls-dispatch"
+        AND jsonPayload.control_event_undelivered.control_id:*
+      EOT
+      label_extractors = {
+        control_id     = "EXTRACT(jsonPayload.control_event_undelivered.control_id)"
+        source         = "EXTRACT(jsonPayload.control_event_undelivered.source)"
+        severity       = "EXTRACT(jsonPayload.control_event_undelivered.severity)"
+        environment    = "EXTRACT(jsonPayload.control_event_undelivered.environment)"
+        message_key    = "EXTRACT(jsonPayload.control_event_undelivered.message_key)"
+        principal_hash = "EXTRACT(jsonPayload.control_event_undelivered.principal_hash)"
+        filters        = "EXTRACT(jsonPayload.control_event_undelivered.filters)"
+        sn_error       = "EXTRACT(jsonPayload.control_event_undelivered.sn_error)"
+      }
+    }
+  }
+
+  alert_strategy {
+    # Minimum the API allows. A probing session emits one event per flagged turn; the
+    # log entries are all kept (evidence), but one email per five minutes is enough.
+    notification_rate_limit {
+      period = "300s"
+    }
+    auto_close = "1800s"
+  }
+
+  notification_channels = [google_monitoring_notification_channel.fallback_email[0].id]
+
+  documentation {
+    mime_type = "text/markdown"
+    content   = <<-EOT
+      **ServiceNow did not take a control event** — this email is the fallback leg.
+
+      - control: `$${log.extracted_label.control_id}` (source `$${log.extracted_label.source}`)
+      - severity: `$${log.extracted_label.severity}` · environment: `$${log.extracted_label.environment}`
+      - detectors: `$${log.extracted_label.filters}`
+      - correlation key: `$${log.extracted_label.message_key}`
+      - principal (pseudonymous): `$${log.extracted_label.principal_hash}`
+      - ServiceNow error: `$${log.extracted_label.sn_error}`
+
+      The event is recorded in BigQuery `control_events` and, for `conversation_safety`,
+      the session trajectory is in `finchat_eval_<env>.session_trajectory`. No message
+      content travels in this alert by design (docs/26, ADR-0026 rule 1; ADR-0034).
+    EOT
+  }
 }

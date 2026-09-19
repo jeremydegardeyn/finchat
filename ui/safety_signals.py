@@ -375,7 +375,7 @@ Return ONLY minified JSON:
 {{"signals":{{"jailbreak_probe":0,"identity_probe":0,"system_probe":0,"social_engineering":0,"action_attempt":0,"scam_victim":0,"third_party_coercion":0,"self_harm":0,"financial_distress":0,"gambling_harm":0,"answer_policy_breach":0}},"agent_refused":false,"rationale":"<one short sentence, no quotes from the texts>"}}"""
 
 
-CLASSIFIER_MAX_TOKENS = 1024
+CLASSIFIER_MAX_TOKENS = 2048
 
 
 def parse_verdict(text: str | None) -> tuple[dict[str, float], bool, str] | None:
@@ -421,10 +421,12 @@ def classify(question: str, answer: str, transport) -> tuple[TurnSignals, str, s
                                       answer=(answer or "")[:4000])
     reason = ""
     try:
-        # 1024, not the ~150 the JSON needs: the gateway clamps this class to a thinking
+        # 2048, not the ~150 the JSON needs: the gateway clamps this class to a thinking
         # model (gemini-2.5-flash), and its reasoning is charged against the output budget
-        # before a single byte of JSON is written. At 256 every verdict came back truncated
-        # — the intent router hit the same wall (server.py, thinkingBudget note).
+        # before a single byte of JSON is written. At 256 every verdict came back truncated;
+        # at 1024 one in ~15 still did, because the reasoning length is not fixed. The
+        # honest fix is a gateway-side classification profile (thinkingBudget 0, JSON
+        # mode) — this cap is the mitigation until then. Same wall the intent router hit.
         out = transport(prompt, CLASSIFIER_MAX_TOKENS)
     except ClassifierUnavailable as e:
         out, reason = None, str(e)[:120]
@@ -435,7 +437,14 @@ def classify(question: str, answer: str, transport) -> tuple[TurnSignals, str, s
     text, model = out
     parsed = parse_verdict(text)
     if parsed is None:
-        return TurnSignals(classifier_error=True, ts=_now()), "", model
+        # Say what came back without saying what it said: length and shape only. Found
+        # live — a truncated verdict (the thinking budget is variable, so no fixed output
+        # cap is a guarantee) or a gateway-redacted one looked identical to "no reason".
+        t = (text or "")
+        shape = ("empty" if not t.strip() else
+                 "truncated" if t.lstrip().startswith(("{", "```")) and not t.rstrip().endswith(("}", "```")) else
+                 "redacted" if "[" in t and "]" in t and "signals" in t else "unparseable")
+        return TurnSignals(classifier_error=True, ts=_now()), f"parse:{shape}:len={len(t)}", model
     sig, refused, rationale = parsed
     if not (answer or "").strip():
         # No answer is an outage, not a refusal. The first live session counted the

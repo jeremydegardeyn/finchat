@@ -33,6 +33,7 @@ main:
 
     - defaults:
         assign:
+          - sn_error: ""
           - svc: ${default(map.get(entry, ["resource", "labels", "service_name"]), "")}
           - environment: ${default(map.get(ce, "environment"), "unknown")}
           - filters: ${default(map.get(ce, "filters"), [])}
@@ -139,6 +140,11 @@ main:
               description: '${default(map.get(ce, "source"), "control") + " match " + json.encode_to_string(filters)}'
               additional_info: ${info_json}
 
+    # ServiceNow is the record. When it cannot take the event, the execution still has
+    # to (a) say so somewhere a human is paged from, (b) post the Chat card it would
+    # otherwise never reach, and (c) end FAILED so reconciliation counts the drop. Before
+    # this except existed, a dead instance killed the execution here and the awareness
+    # plane went dark at exactly the moment it was the only plane left.
     - post_event:
         try:
           call: http.post
@@ -152,11 +158,40 @@ main:
           result: sn_response
         retry:
           predicate: ${http.default_retry_predicate}
-          max_retries: 5
+          # Three, not five: 2+4+8s. A dead instance used to hold the execution for a
+          # minute before failing; the fallback alert below is what should be fast, and
+          # reconciliation — not retry — is the control for a dropped event.
+          max_retries: 3
           backoff:
             initial_delay: 2
-            max_delay: 60
+            max_delay: 16
             multiplier: 2
+        except:
+          as: e
+          steps:
+            - record_undelivered:
+                assign:
+                  - sn_error: ${default(map.get(e, "message"), "ServiceNow unreachable")}
+                  - sn_response: {"code": 0, "body": {}}
+            # The fallback trigger. A log-based alert policy (main.tf, `undelivered`)
+            # matches this entry and emails the on-call — the only leg that needs no
+            # working ITSM, no webhook secret and no third-party mail API. Same rule
+            # as everywhere: envelope metadata and the transport error, never content.
+            - log_undelivered:
+                call: sys.log
+                args:
+                  severity: ERROR
+                  json:
+                    message: ${"control_event_undelivered " + default(map.get(ce, "source"), "") + "/" + default(map.get(ce, "control_id"), "")}
+                    control_event_undelivered:
+                      control_id: ${default(map.get(ce, "control_id"), "")}
+                      source: ${default(map.get(ce, "source"), "")}
+                      environment: ${environment}
+                      severity: ${severity}
+                      message_key: ${row.message_key}
+                      principal_hash: ${default(map.get(ce, "principal_hash"), "")}
+                      filters: ${json.encode_to_string(filters)}
+                      sn_error: ${sn_error}
 
     # --- Chat notification (optional, best-effort) ---------------------------
     # ServiceNow remains the record; this is awareness. It runs AFTER the em_event POST
@@ -181,7 +216,7 @@ main:
                   # of record. It is not the incident number — posting from here rather
                   # than from ServiceNow is what costs us that.
                   - sn_id: ${default(map.get(sn_response, ["body", "result", "sys_id"]), "")}
-                  - sn_link: ${sys.get_env("SN_INSTANCE_URL") + "/nav_to.do?uri=em_event.do?sys_id=" + sn_id}
+                  - sn_link: '${if(sn_error == "", sys.get_env("SN_INSTANCE_URL") + "/nav_to.do?uri=em_event.do?sys_id=" + sn_id, "ServiceNow undelivered - " + sn_error)}'
                   - ce_source: ${default(map.get(ce, "source"), "")}
                   - ce_control: ${default(map.get(ce, "control_id"), "")}
                   - ce_principal: ${default(map.get(ce, "principal_hash"), "")}
@@ -221,6 +256,13 @@ principal: " + ce_principal + "
                 assign:
                   - chat_error: ${e}
 
+    # An undelivered event ends the execution FAILED even though Chat and the fallback
+    # alert ran: the execution list is what reconciliation and a reviewer read, and a
+    # green execution for a dropped record would be a lie.
+    - fail_if_undelivered:
+        switch:
+          - condition: ${sn_error != ""}
+            raise: '${"ServiceNow did not take the event - " + sn_error}'
     - done:
         return:
           status: ${sn_response.code}

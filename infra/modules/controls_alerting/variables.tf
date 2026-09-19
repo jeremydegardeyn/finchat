@@ -55,3 +55,9 @@ variable "evidence_dataset" {
   description = "BigQuery dataset for the append-only control_events evidence table."
   default     = ""
 }
+
+variable "alert_email" {
+  type        = string
+  default     = ""
+  description = "Fallback notification: emailed when the dispatch workflow could not deliver an event to ServiceNow. Empty disables the fallback policy."
+}
