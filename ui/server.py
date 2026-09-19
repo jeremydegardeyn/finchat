@@ -655,6 +655,7 @@ def _safety_transport(prompt: str, max_tokens: int):
         raise ss.ClassifierUnavailable(f"gateway:{why}") from e
     if gw:
         return gw[0], (gw[2] or gw[1])
+    print("safety classifier: gateway gave no verdict; trying vertex directly")
     if not GCP_PROJECT:
         return None
     url = (f"https://{_vertex_host(ROUTER_LOCATION)}/v1/projects/{GCP_PROJECT}"
@@ -665,10 +666,17 @@ def _safety_transport(prompt: str, max_tokens: int):
                                              "thinkingConfig": {"thinkingBudget": 0}}}).encode()
     req = _ur.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {_access_token()}", "Content-Type": "application/json"})
-    with _ur.urlopen(req, timeout=15) as r:
-        payload = _json.loads(r.read())
+    try:
+        with _ur.urlopen(req, timeout=20) as r:
+            payload = _json.loads(r.read())
+    except _ur.HTTPError as e:
+        detail = e.read()[:200].decode("utf-8", "replace")
+        print(f"safety classifier: vertex fallback HTTP {e.code}: {detail}")
+        raise
     parts = ((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
     if not parts:
+        print(f"safety classifier: vertex returned no text "
+              f"(finishReason={(payload.get('candidates') or [{}])[0].get('finishReason')})")
         return None
     return parts[0].get("text"), _served_version(payload) or ROUTER_MODEL
 
