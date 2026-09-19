@@ -491,7 +491,9 @@ async def auth_signout(request: Request):
 
 async def _log_eval(persona: str, channel: str, question: str, answer: str, context=None,
                     latency_ms: int | None = None, model_requested: str | None = None,
-                    model_served: str | None = None, conversation_id: str | None = None):
+                    model_served: str | None = None, conversation_id: str | None = None,
+                    session_key: str | None = None, principal_hash: str | None = None,
+                    turn_index: int | None = None):
     """Best-effort capture of a conversation turn for live evaluation. Awaited (in a
     worker thread) WITHIN the request — Cloud Run throttles CPU once the response is
     sent, so a fire-and-forget background thread would never run. Never raises.
@@ -515,9 +517,20 @@ async def _log_eval(persona: str, channel: str, question: str, answer: str, cont
                    "context": (_json.dumps(context)[:8000] if context else None),
                    "latency_ms": latency_ms,
                    "model_requested": model_requested,
-                   "model_served": model_served}
+                   "model_served": model_served,
+                   # The conversation key (ADR-0034). Before it, every row was an island:
+                   # the SPA sent a session id and the BFF threw it away, which is why
+                   # nothing trajectory-level could be computed from this table.
+                   "session_key": session_key,
+                   "principal_hash": principal_hash,
+                   "turn_index": turn_index}
+            # ignore_unknown_values: a deployment whose eval schema predates the session
+            # columns still captures the turn (minus the key) instead of dropping every
+            # row until someone runs the DDL — the same graceful degradation ADR-0015
+            # promised for the dataset itself.
             bigquery.Client(project=GCP_PROJECT).insert_rows_json(
-                f"{GCP_PROJECT}.{EVAL_DATASET}.conversation_log", [row])
+                f"{GCP_PROJECT}.{EVAL_DATASET}.conversation_log", [row],
+                ignore_unknown_values=True)
         except Exception:
             pass
 
@@ -614,11 +627,166 @@ def _control_ctx(request: Request) -> tuple[str, str, str]:
     return ((u or {}).get("email", ""), trace, env or "unknown")
 
 
+# --- Conversation-level safety (ADR-0034) --------------------------------------------
+# Model Armor judges a message. This judges the conversation: the classifier runs on
+# every customer turn (prompt AND answer), the result folds into the session's state, and
+# the decision can change the answer before it leaves — hand-off script, or a locked
+# session — as well as raise a control event through the Inc 26 chain. In the request,
+# because after the response Cloud Run gives us no CPU to do it in.
+
+def _safety_transport(prompt: str, max_tokens: int):
+    """Model access for the classifier: gateway first, direct Vertex second.
+
+    A gateway policy refusal is NOT retried against Vertex — that would route the
+    customer's message around the PII screen the gateway exists to apply. It is returned
+    as "no verdict" and the row records an unscreened turn.
+    """
+    import json as _json
+    import urllib.request as _ur
+    try:
+        gw = _gw_complete(prompt, agent_id="conversation_safety_classifier",
+                          workload_class="classification",
+                          owner="ai-governance@datadinosaur.com",
+                          max_output_tokens=max_tokens)
+    except Exception as e:  # GatewayBlocked / GatewayUnavailable
+        print(f"safety classifier: gateway refused ({type(e).__name__}); no verdict")
+        return None
+    if gw:
+        return gw[0], (gw[2] or gw[1])
+    if not GCP_PROJECT:
+        return None
+    url = (f"https://{_vertex_host(ROUTER_LOCATION)}/v1/projects/{GCP_PROJECT}"
+           f"/locations/{ROUTER_LOCATION}/publishers/google/models/{ROUTER_MODEL}:generateContent")
+    body = _json.dumps({"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                        "generationConfig": {"temperature": 0, "maxOutputTokens": max_tokens,
+                                             "responseMimeType": "application/json",
+                                             "thinkingConfig": {"thinkingBudget": 0}}}).encode()
+    req = _ur.Request(url, data=body, method="POST", headers={
+        "Authorization": f"Bearer {_access_token()}", "Content-Type": "application/json"})
+    with _ur.urlopen(req, timeout=15) as r:
+        payload = _json.loads(r.read())
+    parts = ((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+    if not parts:
+        return None
+    return parts[0].get("text"), _served_version(payload) or ROUTER_MODEL
+
+
+def _safety_session(request: Request, body: bytes) -> dict:
+    """Who and which session, for the trajectory. Principal comes from the verified
+    identity when there is one; anonymous customer chat is `anonymous`, and the client's
+    session id — bound to the principal, hashed — keeps two anonymous customers apart."""
+    import json as _json
+    import safety_signals as ss
+    import control_events as ce
+    try:
+        b = _json.loads(body or b"{}") or {}
+    except ValueError:
+        b = {}
+    if not isinstance(b, dict):
+        b = {}
+    principal, trace, env = _control_ctx(request)
+    ph = ce.principal_hash(principal)
+    return {"principal": principal, "principal_hash": ph, "trace": trace, "env": env,
+            "session_key": ss.session_hash(ph, str(b.get("session_id") or "")),
+            "persona": request.headers.get("X-Persona", "customer"),
+            "question": b.get("message", "") or ""}
+
+
+def _safety_state_task(sess: dict):
+    """Start the session-state read now so it overlaps the agent call. Returns an awaitable
+    that yields a SessionState — empty on any failure, never an exception."""
+    import asyncio
+    import safety_signals as ss
+
+    async def _load():
+        if not (ss.enabled() and GCP_PROJECT and EVAL_DATASET):
+            return ss.SessionState()
+        try:
+            return await asyncio.to_thread(ss.load_state, GCP_PROJECT, EVAL_DATASET,
+                                           sess["session_key"], sess["principal_hash"])
+        except Exception as e:
+            print(f"safety_signals: state read failed ({type(e).__name__}); judging turn alone")
+            return ss.SessionState()
+    return asyncio.ensure_future(_load())
+
+
+async def _safety_screen(sess: dict, state_task, question: str, answer: str, *,
+                         conversation_id: str, armor_filters: list[str] | None = None,
+                         latency_ms: int | None = None) -> dict | None:
+    """Classify, decide, record, emit. Returns {"action", "text", "tier"} when the product
+    must answer differently, else None. Never raises."""
+    import asyncio
+    import safety_signals as ss
+    import control_events as ce
+    if not ss.enabled():
+        return None
+    try:
+        state = await state_task
+        if armor_filters is not None:
+            # Model Armor already decided this turn; it still counts toward the session.
+            turn = ss.TurnSignals(armor_blocked=True, armor_class=ce.filter_class(armor_filters),
+                                  ts=ss._now())
+            rationale, model = "", None
+        elif state.quarantined:
+            # A locked session is answered by the lock, whatever was said; the classifier
+            # would only cost a call and its verdict could not change the outcome.
+            turn, rationale, model = ss.TurnSignals(ts=ss._now()), "", None
+        else:
+            turn, rationale, model = await asyncio.to_thread(
+                ss.classify, question, answer, _safety_transport)
+        decision = ss.evaluate(turn, state)
+        if turn.classifier_error and ss.fail_closed() and decision.action == "none":
+            decision.action = "withhold"
+            decision.reasons.append("classifier_unavailable_fail_closed")
+
+        if GCP_PROJECT and EVAL_DATASET:
+            row = ss.evidence_row(conversation_id=conversation_id,
+                                  session_key=sess["session_key"],
+                                  principal_hash=sess["principal_hash"],
+                                  turn_index=state.turns + 1, persona=sess["persona"],
+                                  channel="agent", turn=turn, decision=decision,
+                                  rationale=rationale, model=model, latency_ms=latency_ms)
+            try:
+                await asyncio.to_thread(ss.write_row, GCP_PROJECT, EVAL_DATASET, row)
+            except Exception as e:
+                print(f"safety_signals: evidence write failed ({type(e).__name__})")
+
+        if decision.tier in (1, 2):
+            try:
+                ce.emit_safety_signal(
+                    control_id=f"conversation.{decision.cls}."
+                               f"{decision.action if decision.tier == 1 else 'review'}",
+                    cls=decision.cls or "conduct", severity=decision.severity,
+                    filters=decision.filters, principal=sess["principal"],
+                    session_key=sess["session_key"], trace=sess["trace"],
+                    environment=sess["env"])
+            except Exception:
+                pass
+        if decision.action != "none":
+            return {"action": decision.action, "tier": decision.tier,
+                    "text": ss.HANDOFF_TEXT[decision.action]}
+    except Exception as e:  # screening must never take the answer down
+        print(f"safety_signals: screen failed ({type(e).__name__}: {e})")
+    return None
+
+
 @app.api_route("/api/agent/{path:path}", methods=["GET", "POST"])
 async def agent_proxy(path: str, request: Request):
-    """Agent path with Model Armor screening on prompt (in) and response (out)."""
+    """Agent path with Model Armor screening on prompt (in) and response (out), and the
+    conversation-level trajectory decision on every turn (ADR-0034)."""
     import armor
+    import json as _json
+    import uuid as _uuid
     body = await request.body()
+    sess = _safety_session(request, body)
+    state_task = _safety_state_task(sess)          # overlaps everything below
+    conversation_id = str(_uuid.uuid4())           # shared by conversation_log + turn_signals
+
+    def _override(o: dict, status: int = 200) -> JSONResponse:
+        return JSONResponse({"response": o["text"],
+                             "safety": {"action": o["action"], "tier": o["tier"]}},
+                            status_code=status)
+
     if body:
         r = await armor.screen_prompt_detailed(body.decode("utf-8", "replace"))
         if not r["allowed"]:
@@ -634,6 +802,12 @@ async def agent_proxy(path: str, request: Request):
                     principal=principal, trace=trace, environment=env)
             except Exception:  # evidence must never break the block it is recording
                 pass
+            # A blocked prompt is still a turn of the conversation: the fifth block in a
+            # session is what locks it, and only the trajectory can count to five.
+            o = await _safety_screen(sess, state_task, sess["question"], "",
+                                     conversation_id=conversation_id, armor_filters=r["filters"])
+            if o:
+                return _override(o)
             return JSONResponse(
                 {"error": "Your message was blocked by safety screening.", "reason": r["reason"]},
                 status_code=400)
@@ -653,19 +827,33 @@ async def agent_proxy(path: str, request: Request):
                     principal=principal, trace=trace, environment=env)
             except Exception:
                 pass
+            o = await _safety_screen(sess, state_task, sess["question"], "",
+                                     conversation_id=conversation_id, armor_filters=r["filters"])
+            if o:
+                return _override(o)
             return JSONResponse(
                 {"error": "The response was withheld by safety screening.", "reason": r["reason"]},
                 status_code=502)
     except Exception:
         pass
-    # Capture the turn for live eval (customer banking-assistant chats).
+    # Conversation-level decision, then capture the turn for live eval.
+    q, a = sess["question"], ""
     try:
-        import json as _json
-        q = (_json.loads(body or b"{}") or {}).get("message", "")
         a = (_json.loads(resp.body or b"{}") or {}).get("response", "")
+    except Exception:
+        pass
+    o = await _safety_screen(sess, state_task, q, a, conversation_id=conversation_id,
+                             latency_ms=_latency_ms)
+    if o:
+        # The evidence row and conversation_log both keep what the model actually said,
+        # under dataset governance; the customer gets the hand-off instead.
+        resp = _override(o)
+    try:
         if q:
-            await _log_eval(request.headers.get("X-Persona", "customer"), "agent", q, a,
-                            latency_ms=_latency_ms)
+            await _log_eval(sess["persona"], "agent", q, a, latency_ms=_latency_ms,
+                            conversation_id=conversation_id,
+                            session_key=sess["session_key"],
+                            principal_hash=sess["principal_hash"])
     except Exception:
         pass
     return resp

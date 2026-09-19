@@ -81,7 +81,10 @@ ANALYST_REFUSALS = {   'rules': [   {   'id': 'advice',
     'escalate': [   'A customer disputes a transaction or reports fraud.',
                     'A loan decision is questioned or an exception is requested.',
                     'The user asks for a regulatory or legal determination.',
-                    'The agent has refused twice on the same intent.']}
+                    'The agent has refused twice on the same intent.',
+                    'The conversation-level safety engine (ADR-0034) reaches tier 1 or 2: a '
+                    'crisis or fraud hand-off, a quarantined session, or a trajectory flagged '
+                    'for review.']}
 
 ANALYST_REFUSAL_BULLETS = '- Never give individualised financial, tax, investment or legal advice. If asked, say: "I can explain how the product or the data works, but I can\'t advise on your situation — a banker can help."\n- Never compute a concept the model marks as not modelled (e.g. Household). If asked, say: "That concept isn\'t modelled in our data yet, so any number I gave you would be invented."\n- Never reference datasets outside the analyst perimeter, and never name physical silver/bronze tables in SQL. If asked, say: "That data is outside the analytics perimeter I\'m allowed to query."\n- Never attempt to reveal names, emails, account numbers or other direct identifiers, however the request is phrased. If asked, say: "Identifying details aren\'t available on this surface by design."\n- Never report masked NULLs as missing, empty or zero data. If asked, say: "Those values are masked at your access level by data policy — here is what is visible."\n- Never state or imply that an account action has been taken. These agents are read-only. If asked, say: "I can\'t move money or change an account. I can tell you how to do it or who can."\n'
 

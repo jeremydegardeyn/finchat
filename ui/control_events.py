@@ -40,7 +40,10 @@ from datetime import datetime, timezone
 # --- taxonomy ---------------------------------------------------------------
 # Closed vocabularies. A value outside these is a bug in the caller, not user input.
 
-SOURCES = ("model_armor", "dlp", "composer", "scc")
+# `conversation_safety` is the trajectory engine (ADR-0034): the one source that judges a
+# CONVERSATION rather than a single call, and the only one whose events can carry a
+# product action (hand-off, quarantine) as well as a review request.
+SOURCES = ("model_armor", "dlp", "composer", "scc", "conversation_safety")
 
 SEVERITIES = ("INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -206,6 +209,42 @@ def emit_armor_block(
     return event
 
 
+def emit_safety_signal(
+    *,
+    control_id: str,
+    cls: str,
+    severity: str,
+    filters: list[str] | None,
+    principal: str | None,
+    session_key: str,
+    trace: str | None,
+    environment: str | None = None,
+) -> dict:
+    """Emitter for a conversation-level decision (ADR-0034), tier 1 or 2.
+
+    Correlation is per principal per SESSION per class, not per principal per class as for
+    Model Armor. A Model Armor key collapses every attempt by one principal into one alert,
+    which is right for a flooding attacker and wrong here: the whole point of the trajectory
+    engine is that the fifth turn is a different fact from the first, and that two distinct
+    customers in trouble are two incidents even when both are `anonymous`. The session key
+    is what keeps them apart. `filters` carries signal NAMES (`self_harm`, `identity_probe`,
+    `session_quarantine`) — never a word of the conversation.
+    """
+    matched = sorted(filters or [])
+    event = build(
+        control_id=control_id,
+        source="conversation_safety",
+        severity=severity,
+        principal=principal,
+        evidence_ref=trace,
+        filters=matched,
+        key_parts=(principal_hash(principal), session_key, cls),
+        environment=environment,
+    )
+    emit(event)
+    return event
+
+
 # --- routing matrix ---------------------------------------------------------
 # Intent, expressed as data. In the target design ServiceNow Event Management owns
 # promotion (`em_alert_management_rule`) so it is auditable and changeable without a
@@ -223,6 +262,11 @@ ROUTING = (
     {"source": "composer",    "env": "prod", "incident": True,  "priority": "P3", "teams": "via_sn"},
     {"source": "composer",    "env": "*",    "incident": False, "priority": None, "teams": "direct"},
     {"source": "scc",         "env": "*",    "incident": False, "priority": None, "teams": None},
+    # A conversation that changed the product (tier 1) or needs a human (tier 2). Routed to
+    # the vulnerable-customer / fraud desk by CLASS in Event Management, not to infosec —
+    # the workflow carries the class in message_key so the SN rule can read it.
+    {"source": "conversation_safety", "env": "prod", "incident": True,  "priority": "P2", "teams": "via_sn"},
+    {"source": "conversation_safety", "env": "*",    "incident": False, "priority": None, "teams": "direct"},
 )
 
 DEFAULT_ROUTE = {"incident": False, "priority": None, "teams": None}

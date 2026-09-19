@@ -97,6 +97,9 @@ locals {
       "roles/storage.objectAdmin", # write the Flex Template spec to the dataflow bucket
       "roles/bigquery.jobUser",    # live-eval scorer: query conversation_log
       "roles/aiplatform.user",     # live-eval scorer: Vertex Gen AI Evaluation
+      # Tier-3 safety anomaly runner (ADR-0034): a GitHub runner has no Cloud Run stdout,
+      # so its control events enter the controls sink through the Logging API instead.
+      "roles/logging.logWriter",
       # Read-only access so the `terraform plan` CI check can refresh state across all
       # modules (datasets/pubsub/dlp/catalog/etc.). Apply is still run locally; the CI
       # SA never gets write/editor here.

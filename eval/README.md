@@ -9,6 +9,7 @@ makes agents production-fit for a regulated bank (measured, gated, monitored).
 |-------|------|------|------|
 | **Offline contract + logic gate** | [`pipelines/evaluate.py`](pipelines/evaluate.py) | $0 (no LLM) | every CI run |
 | **Live LLM-as-judge** | [`pipelines/vertex_eval.py`](pipelines/vertex_eval.py) (Vertex Gen AI Eval) | Gemini tokens | post-deploy, scheduled |
+| **Conversation trajectory (ADR-0034)** | [`../ui/safety_signals.py`](../ui/safety_signals.py), gated offline by `datasets/safety_trajectories.jsonl` | one Flash-Lite call / customer turn | every turn, in the request |
 
 The offline harness validates the **grounding contract** (answers only assert tool-sourced facts),
 **tool selection**, policy refusals, and the **loan decision logic** vs. labeled ground truth — fast
@@ -24,11 +25,13 @@ and free, so it gates merges. The live harness scores the deployed agents with j
 | Tool utilization | correct tool selected for the intent | offline + trajectory | ≥ 0.90 |
 | Response quality | relevance + policy compliance (refusals, no advice, no cross-customer) | offline + Vertex | — |
 | Approval rec. accuracy | loan recommendations vs. labeled outcomes | offline | ≥ 0.80 |
+| Trajectory escalation accuracy | tier + action per turn vs. scripted expectation, same engine as prod | offline | = 1.00, late = 0 |
 
 ## Datasets
 
 - [`datasets/transaction_agent_eval.jsonl`](datasets/transaction_agent_eval.jsonl) — balance/history/summary, missing-id, not-found, advice-refusal, cross-customer.
 - [`datasets/loan_eval.jsonl`](datasets/loan_eval.jsonl) — labeled applicant profiles → expected recommendation.
+- [`datasets/safety_trajectories.jsonl`](datasets/safety_trajectories.jsonl) — multi-turn trajectories (Raine shape, fiction reset, coached transfer, patient attacker, leak on first probe) → expected tier and action at every turn. Gated at 1.0 and **zero late escalations**.
 
 ## Run
 
