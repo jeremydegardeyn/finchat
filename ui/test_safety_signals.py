@@ -209,6 +209,17 @@ def test_classifier_unavailable_records_the_reason():
     assert t.classifier_error and why == "gateway:pii_blocked" and model is None
 
 
+def test_empty_answer_is_an_outage_not_a_refusal():
+    t, _, _ = ss.classify("what's my balance", "", lambda p, n: (
+        '{"signals":{"answer_policy_breach":0.9},"agent_refused":true,"rationale":"empty"}', "m"))
+    assert not t.agent_refused and t.signals[ss.BREACH_SIGNAL] == 0.0
+
+
+def test_transport_exception_is_named_on_the_row():
+    t, why, _ = ss.classify("q", "a", lambda p, n: (_ for _ in ()).throw(TimeoutError("slow")))
+    assert t.classifier_error and why.startswith("transport:TimeoutError")
+
+
 def test_classify_happy_path_via_stub_transport():
     t, why, model = ss.classify("q", "a", lambda p, n: (
         '{"signals":{"scam_victim":0.8},"agent_refused":false,"rationale":"r"}', "stub-1"))
