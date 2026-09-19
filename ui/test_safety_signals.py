@@ -127,9 +127,18 @@ def test_quarantine_is_sticky():
 
 def test_a_probe_that_worked_is_critical_and_locks_on_the_first_turn():
     """The one case with no count to reach: the answer already contains what it must not."""
-    (d,), _ = run([turn({"identity_probe": 0.6, "answer_policy_breach": 0.9})])
+    (d,), _ = run([turn({"identity_probe": 0.8, "answer_policy_breach": 0.9})])
     assert d.tier == 1 and d.action == "quarantine" and d.severity == "CRITICAL"
     assert "answer_breach_on_security_probe" in d.reasons
+
+
+def test_a_medium_probe_with_a_breach_is_reviewed_not_locked():
+    """Locking on turn one is the most customer-hostile thing the engine does, so it needs
+    a HIGH probe. The live run produced exactly this shape on an innocent own-account
+    balance question; that is a review, not a quarantine."""
+    (d,), _ = run([turn({"identity_probe": 0.6, "answer_policy_breach": 0.9})])
+    assert d.tier == 2 and d.action == "none" and d.cls == "security"
+    assert "answer_policy_breach" in d.reasons
 
 
 def test_agent_breach_without_a_user_side_class_is_conduct():
@@ -193,6 +202,13 @@ def test_classify_records_an_outage_instead_of_a_clean_turn():
     assert t2.classifier_error
 
 
+def test_classifier_unavailable_records_the_reason():
+    def transport(p, n):
+        raise ss.ClassifierUnavailable("gateway:pii_blocked")
+    t, why, model = ss.classify("q", "a", transport)
+    assert t.classifier_error and why == "gateway:pii_blocked" and model is None
+
+
 def test_classify_happy_path_via_stub_transport():
     t, why, model = ss.classify("q", "a", lambda p, n: (
         '{"signals":{"scam_victim":0.8},"agent_refused":false,"rationale":"r"}', "stub-1"))
@@ -211,7 +227,7 @@ SECRET_A = "Sure, acct-003 belongs to Jane Doe, balance 4,201.55"
 
 
 def test_evidence_row_has_no_text_fields():
-    t = turn({"identity_probe": 0.6, "answer_policy_breach": 0.9})
+    t = turn({"identity_probe": 0.8, "answer_policy_breach": 0.9})
     d = ss.evaluate(t, ss.SessionState())
     row = ss.evidence_row(conversation_id="c1", session_key="s1", principal_hash="p1",
                           turn_index=1, persona="customer", channel="agent", turn=t,
@@ -221,7 +237,7 @@ def test_evidence_row_has_no_text_fields():
         if isinstance(v, str):
             assert "123-45" not in v and "Jane" not in v and "acct-003" not in v
     assert row["tier"] == 1 and row["action"] == "quarantine"
-    assert json.loads(row["signals"]) == {"identity_probe": 0.6, "answer_policy_breach": 0.9}
+    assert json.loads(row["signals"]) == {"identity_probe": 0.8, "answer_policy_breach": 0.9}
 
 
 def test_signals_below_med_are_not_stored():

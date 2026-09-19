@@ -649,8 +649,10 @@ def _safety_transport(prompt: str, max_tokens: int):
                           owner="ai-governance@datadinosaur.com",
                           max_output_tokens=max_tokens)
     except Exception as e:  # GatewayBlocked / GatewayUnavailable
-        print(f"safety classifier: gateway refused ({type(e).__name__}); no verdict")
-        return None
+        import safety_signals as ss
+        why = (e.args[0] if e.args else type(e).__name__)
+        print(f"safety classifier: gateway refused ({why}); no verdict")
+        raise ss.ClassifierUnavailable(f"gateway:{why}") from e
     if gw:
         return gw[0], (gw[2] or gw[1])
     if not GCP_PROJECT:
