@@ -1,0 +1,50 @@
+name: Safety Anomaly
+
+# Tier 3 of ADR-0034: compares the latest complete 15-minute bucket of conversation
+# safety rates to the trailing 28-day baseline and raises a control event — through the
+# same sink, workflow and ServiceNow rule as a Model Armor block — when the POPULATION
+# deviates: a probing campaign across sessions, refusals collapsing after a model change,
+# turns going unscreened. Tiers 1 and 2 are decided in the request by the BFF; this is
+# the one tier whose latency is its window, and 15 minutes is that window.
+#
+# Near-zero-cost tier: a scheduled Action reusing WIF + the CI/CD SA. Enterprise mapping
+# is a Cloud Run Job on Cloud Scheduler, or a Monitoring alert on a log-based metric.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, prod]
+        default: prod
+      emit:
+        description: Write anomalies to Cloud Logging (off = print only)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+      - name: Install deps
+        run: pip install google-cloud-bigquery google-cloud-logging
+      - name: Compare the latest bucket to baseline
+        run: |
+          python scripts/safety_anomaly.py "${{ github.event.inputs.environment || 'prod' }}" \
+            ${{ (github.event_name == 'schedule' || github.event.inputs.emit == 'true') && '--emit' || '--dry-run' }}

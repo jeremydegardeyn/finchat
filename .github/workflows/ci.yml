@@ -65,6 +65,11 @@ jobs:
         run: pip install pyyaml && pytest scripts/test_controls_workflow.py -q
       - name: Reconciliation control — divergence logic (ADR-0026)
         run: pytest scripts/test_reconcile_controls.py -q
+      - name: Conversation safety — trajectory engine, sticky quarantine, no-text guard (ADR-0034)
+        working-directory: ui
+        run: pytest test_safety_signals.py -q
+      - name: Conversation safety — population anomaly comparison (ADR-0034)
+        run: pytest scripts/test_safety_anomaly.py -q
       - name: DLP resource paths — regional templates (ADR-0026)
         working-directory: products/transactions/pipeline
         run: pytest test_dlp_paths.py -q

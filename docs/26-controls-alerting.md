@@ -9,7 +9,7 @@ inconsistent (F20). Promotion is a Business Rule, not the alert management rule 
 Remaining: `model_armor_use_dlp_templates` off. SCC is **not** taken for this build — it belongs
 to the enterprise reference (§5), not to a near-zero-cost sandbox.
 **Related:** ADR-0023 (agent registry), ADR-0024 (AI gateway), `compliance/regulatory-map.md`,
-`orchestration` repo (`composer/dags/utils/alerting.py`).
+`orchestration` repo (`composer/dags/utils/alerting.py`). **ADR-0034** adds a fifth source, `conversation_safety`, whose events travel this chain unchanged: the trajectory engine (per-session correlation, product actions) and the tier-3 population anomaly runner (Logging API, no service_name).
 
 ## 1. Problem
 

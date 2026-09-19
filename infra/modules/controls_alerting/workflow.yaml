@@ -51,6 +51,9 @@ main:
 
     # Prompt injection, sensitive-data and malicious-URL hits outrank harmful-content
     # hits: the first three are attacks or leaks, the last is usually a rude user.
+    # The conversation-level engine (ADR-0034) elevates on the names that mean the
+    # PRODUCT already acted — a session locked, a crisis or fraud hand-off served, an
+    # answer that breached policy — not on a review request.
     - detect_elevated_filters:
         for:
           value: f
@@ -58,7 +61,7 @@ main:
           steps:
             - check:
                 switch:
-                  - condition: ${f == "pi_and_jailbreak" or f == "sdp" or f == "malicious_uris"}
+                  - condition: ${f == "pi_and_jailbreak" or f == "sdp" or f == "malicious_uris" or f == "session_quarantine" or f == "self_harm" or f == "scam_victim" or f == "third_party_coercion" or f == "answer_policy_breach"}
                     assign:
                       - elevated: true
 

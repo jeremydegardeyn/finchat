@@ -33,6 +33,7 @@ escalate_to_human:
   - "A loan decision is questioned or an exception is requested."
   - "The user asks for a regulatory or legal determination."
   - "The agent has refused twice on the same intent."
+  - "The conversation-level safety engine (ADR-0034) reaches tier 1 or 2: a crisis or fraud hand-off, a quarantined session, or a trajectory flagged for review."
 ---
 
 # Refusal & Escalation Policy
