@@ -5,6 +5,13 @@ Each tool calls the Transactions DaaS API (enterprise grounding: the agent reads
 the same governed data products as every other consumer). If the API is
 unreachable, tools fall back to the in-memory demo repository so the agent runs
 offline for development and evaluation.
+
+Two answers from the API are not failures and must never reach the fallback:
+a 404 is the API saying "no such account", which the tool returns as
+{"error": ...} so the model can phrase it; and the fallback itself only exists
+in a source checkout (products/transactions/api/bq.py is not COPYed into the
+Cloud Run image), so when it is absent the tool returns an error dict rather
+than raising. Both used to raise, and a raise inside a tool is a 500 on /chat.
 """
 from __future__ import annotations
 
@@ -38,6 +45,10 @@ def _id_token(audience: str):
         return None
 
 
+class NotFound(Exception):
+    """The API answered 404: the resource does not exist. A definitive answer, not an outage."""
+
+
 def _get(path: str, base: str | None = None):
     import httpx
     base = base or API_BASE
@@ -46,16 +57,31 @@ def _get(path: str, base: str | None = None):
     if token:
         headers["Authorization"] = f"Bearer {token}"
     resp = httpx.get(f"{base}{path}", headers=headers, timeout=_TIMEOUT)
+    if resp.status_code == 404:
+        raise NotFound(path)
     resp.raise_for_status()
     return resp.json()
 
 
+_UNAVAILABLE = {"error": "account service unavailable"}
+
+
 def _fallback_repo():
-    # Reuse the API's demo data layer for offline grounding.
+    """The API's demo data layer, for offline grounding — or None when it is not shipped.
+
+    bq.py lives in ../api and the agent image COPYs only this directory, so on Cloud Run
+    the import fails. That is the intended shape (a deployed agent must not answer with
+    demo balances when the real API is down); callers turn None into _UNAVAILABLE.
+    """
     import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
+    api_dir = os.path.join(os.path.dirname(__file__), "..", "api")
+    if api_dir not in sys.path:
+        sys.path.insert(0, api_dir)
     os.environ.setdefault("DEMO_MODE", "1")
-    from bq import Repository
+    try:
+        from bq import Repository
+    except ImportError:
+        return None
     return Repository()
 
 
@@ -69,9 +95,13 @@ def get_account_balance(account_id: str) -> dict:
     """
     try:
         return _get(f"/v1/accounts/{account_id}/balance")
+    except NotFound:
+        return {"error": f"account {account_id} not found"}
     except Exception:
-        row = _fallback_repo().get_balance(account_id)
-        return row or {"error": f"account {account_id} not found"}
+        repo = _fallback_repo()
+        if repo is None:
+            return dict(_UNAVAILABLE)
+        return repo.get_balance(account_id) or {"error": f"account {account_id} not found"}
 
 
 def get_transaction_history(account_id: str, limit: int = 10) -> list[dict]:
@@ -81,13 +111,22 @@ def get_transaction_history(account_id: str, limit: int = 10) -> list[dict]:
         account_id: The account identifier.
         limit: Max number of transactions to return (1-50).
     Returns:
-        A list of transactions (type, amount, currency, status, time).
+        A list of transactions (type, amount, currency, status, time). Empty when the
+        account is unknown or has no transactions; [{"error": ...}] if the account
+        service is unavailable.
     """
     limit = max(1, min(limit, 50))
     try:
         return _get(f"/v1/accounts/{account_id}/transactions?limit={limit}")
+    except NotFound:
+        # The API 404s for "no transactions" as well as "no account"; the demo
+        # repository answers both with an empty list, so the tool does too.
+        return []
     except Exception:
-        return _fallback_repo().get_transactions(account_id, limit)
+        repo = _fallback_repo()
+        if repo is None:
+            return [dict(_UNAVAILABLE)]
+        return repo.get_transactions(account_id, limit)
 
 
 def get_loan_status(loan_id: str) -> dict:
@@ -309,6 +348,10 @@ def get_account_summary(account_id: str) -> dict:
     """
     try:
         return _get(f"/v1/accounts/{account_id}/summary")
+    except NotFound:
+        return {"error": f"account {account_id} not found"}
     except Exception:
-        row = _fallback_repo().get_summary(account_id)
-        return row or {"error": f"account {account_id} not found"}
+        repo = _fallback_repo()
+        if repo is None:
+            return dict(_UNAVAILABLE)
+        return repo.get_summary(account_id) or {"error": f"account {account_id} not found"}

@@ -76,6 +76,9 @@ jobs:
       - name: ADK gateway adapter — tool-call round trip + refusal handling (ADR-0024)
         working-directory: products/transactions/agent
         run: pytest test_gateway_llm.py -q
+      - name: Account tools — 404 is an answer, missing fallback is not a crash
+        working-directory: products/transactions/agent
+        run: pytest test_tools.py -q
       - name: Gateway client — bypass accounting + refusal handling (ADR-0024)
         working-directory: ui
         run: pytest test_gateway_client.py -q
