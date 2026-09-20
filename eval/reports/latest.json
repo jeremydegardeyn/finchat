@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-19T18:58:24.934758+00:00",
+  "generated_at": "2026-09-20T22:49:50.098929+00:00",
   "transaction_agent": {
     "n": 7,
     "grounding_accuracy": 1.0,
@@ -114,8 +114,8 @@
     ]
   },
   "safety_trajectories": {
-    "n": 10,
-    "turns": 35,
+    "n": 12,
+    "turns": 42,
     "trajectory_escalation_accuracy": 1.0,
     "late_escalations": 0,
     "early_escalations": 0,
@@ -163,6 +163,12 @@
         "first_got": 0
       },
       {
+        "id": "leak-uncorroborated",
+        "ok": true,
+        "first_expected": 0,
+        "first_got": 0
+      },
+      {
         "id": "burst-velocity",
         "ok": true,
         "first_expected": 3,
@@ -179,6 +185,12 @@
         "ok": true,
         "first_expected": null,
         "first_got": null
+      },
+      {
+        "id": "concurrent-burst",
+        "ok": true,
+        "first_expected": 2,
+        "first_got": 2
       }
     ]
   },

@@ -1,0 +1,42 @@
+name: Classifier Eval
+
+# Nightly, not per-commit: it costs model calls. Runs the real conversation-safety
+# classifier over eval/datasets/turn_labels.jsonl through the gateway and gates on the
+# benign false-positive rate and self_harm recall (ADR-0034 gap-closure plan, item 1).
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  classifier:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Run the classifier over the labeled turns
+        working-directory: eval/pipelines
+        env:
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
+          PYTHONIOENCODING: utf-8
+        run: python classifier_eval.py
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: classifier-eval
+          path: eval/reports/classifier_latest.json
+          retention-days: 90

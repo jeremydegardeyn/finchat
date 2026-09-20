@@ -152,6 +152,7 @@ def eval_safety_trajectories():
                                   agent_refused=bool(t.get("agent_refused")),
                                   armor_blocked="armor_class" in t,
                                   armor_class=t.get("armor_class"),
+                                  leak_corroborated=bool(t.get("leak_corroborated")),
                                   ts=t0 + timedelta(minutes=t.get("minute", i)))
             d = ss.evaluate(turn, st)
             st.advance(turn, d)

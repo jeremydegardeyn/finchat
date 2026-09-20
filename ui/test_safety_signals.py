@@ -126,10 +126,51 @@ def test_quarantine_is_sticky():
 
 
 def test_a_probe_that_worked_is_critical_and_locks_on_the_first_turn():
-    """The one case with no count to reach: the answer already contains what it must not."""
-    (d,), _ = run([turn({"identity_probe": 0.8, "answer_policy_breach": 0.9})])
+    """The one case with no count to reach: the answer already contains what it must not,
+    and a second, independent reader agrees (Model Armor SDP or the identifier check)."""
+    t = turn({"identity_probe": 0.8, "answer_policy_breach": 0.9}); t.leak_corroborated = True
+    (d,), _ = run([t])
     assert d.tier == 1 and d.action == "quarantine" and d.severity == "CRITICAL"
     assert "answer_breach_on_security_probe" in d.reasons
+
+
+def test_uncorroborated_breach_on_a_probe_is_a_review_not_a_lock():
+    """The classifier's breach score alone is one model's opinion of an answer. Without
+    corroboration it routes to a human; it does not lock a customer out."""
+    (d,), _ = run([turn({"identity_probe": 0.8, "answer_policy_breach": 0.9})])
+    assert d.tier == 2 and d.action == "none"
+    assert "answer_policy_breach_uncorroborated" in d.reasons
+
+
+def test_answer_leaks_deterministic_check():
+    assert ss.answer_leaks("Jane's email is jane@example.com")
+    assert ss.answer_leaks("card 4111 1111 1111 1111")
+    assert ss.answer_leaks("acct-003 belongs to someone else", own_account_ids=("acct-001",))
+    assert not ss.answer_leaks("Your balance on acct-001 is 12.00 USD", own_account_ids=("acct-001",))
+    assert not ss.answer_leaks("I can't share that.")
+
+
+def test_two_refusals_on_ordinary_questions_do_not_open_a_review():
+    """Branch hours and a product we do not have are two refusals and no trajectory."""
+    ds, _ = run([turn({}, refused=True), turn({}, refused=True), turn({}, refused=True)])
+    assert [d.tier for d in ds] == [0, 0, 0]
+
+
+def test_two_refusals_on_probe_intents_still_do():
+    ds, _ = run([turn({"identity_probe": 0.6}, refused=True),
+                 turn({"identity_probe": 0.6}, refused=True)])
+    assert ds[1].tier == 2 and "refusals>=2" in ds[1].reasons
+
+
+def test_shadow_mode_records_the_action_and_does_not_take_it(monkeypatch):
+    monkeypatch.setenv("SAFETY_SHADOW", "1")
+    (d,), st = run([turn({"self_harm": 0.9})])
+    assert d.action == "none" and d.shadowed_action == "handoff_crisis"
+    assert d.tier == 2 and "shadow_mode" in d.reasons
+    assert not st.supervised   # nothing acted, so nothing to be sticky about
+    ds, st2 = run([turn(armor="security", minute=i) for i in range(5)])
+    assert ds[4].shadowed_action == "quarantine" and ds[4].action == "none"
+    assert not st2.quarantined
 
 
 def test_a_medium_probe_with_a_breach_is_reviewed_not_locked():
@@ -245,7 +286,7 @@ SECRET_A = "Sure, acct-003 belongs to Jane Doe, balance 4,201.55"
 
 
 def test_evidence_row_has_no_text_fields():
-    t = turn({"identity_probe": 0.8, "answer_policy_breach": 0.9})
+    t = turn({"identity_probe": 0.8, "answer_policy_breach": 0.9}); t.leak_corroborated = True
     d = ss.evaluate(t, ss.SessionState())
     row = ss.evidence_row(conversation_id="c1", session_key="s1", principal_hash="p1",
                           turn_index=1, persona="customer", channel="agent", turn=t,

@@ -162,3 +162,29 @@ FROM `${PROJECT}.finchat_eval_${ENV}.turn_signals` s
 LEFT JOIN `${PROJECT}.finchat_eval_${ENV}.conversation_log` l USING (conversation_id)
 WHERE s.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 28 DAY)
 GROUP BY bucket;
+
+-- ADR-0034 gap closure (plan items 2, 3, 5): shadow mode, leak corroboration, overhead.
+ALTER TABLE `${PROJECT}.finchat_eval_${ENV}.turn_signals`
+  ADD COLUMN IF NOT EXISTS shadowed_action  STRING,   -- what tier 1 would have done under SAFETY_SHADOW
+  ADD COLUMN IF NOT EXISTS leak_corroborated BOOL,    -- Model Armor SDP or identifier check agreed with a breach
+  ADD COLUMN IF NOT EXISTS classify_ms      INT64,    -- control overhead on the request path, per hop
+  ADD COLUMN IF NOT EXISTS state_ms         INT64,
+  ADD COLUMN IF NOT EXISTS lease_ms         INT64;
+
+-- Shadow-period report: would-have-fired counts, and overhead percentiles.
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_eval_${ENV}.safety_shadow_report` AS
+SELECT
+  DATE(ts)                                            AS day,
+  COUNT(*)                                            AS turns,
+  COUNTIF(shadowed_action = 'quarantine')             AS would_quarantine,
+  COUNTIF(shadowed_action = 'handoff_crisis')         AS would_handoff_crisis,
+  COUNTIF(shadowed_action = 'handoff_fraud')          AS would_handoff_fraud,
+  COUNTIF(tier = 2)                                   AS reviews,
+  COUNTIF(classifier_error)                           AS unscreened,
+  APPROX_QUANTILES(classify_ms, 100)[OFFSET(50)]      AS classify_p50_ms,
+  APPROX_QUANTILES(classify_ms, 100)[OFFSET(95)]      AS classify_p95_ms,
+  APPROX_QUANTILES(state_ms, 100)[OFFSET(95)]         AS state_p95_ms,
+  APPROX_QUANTILES(lease_ms, 100)[OFFSET(95)]         AS lease_p95_ms
+FROM `${PROJECT}.finchat_eval_${ENV}.turn_signals`
+WHERE ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+GROUP BY day ORDER BY day DESC;
