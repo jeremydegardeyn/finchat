@@ -19,6 +19,7 @@
   button.ghost { background:var(--panel); color:var(--ink); border:1px solid var(--line); font-weight:500; }
   button.bad { background:var(--bad); color:#2a0a0a; } button.ok { background:var(--ok); color:#04231a; } button.warn{ background:var(--warn); color:#2a1f02; }
   .demo-badge { font-size:12px; color:var(--warn); border:1px solid var(--warn); border-radius:999px; padding:2px 10px; }
+  .demo-badge.bad { color:var(--bad); border-color:var(--bad); }
   nav { display:flex; gap:8px; padding:12px 20px; } nav button.tab { background:transparent; color:var(--mut); border:1px solid transparent; }
   nav button.tab.active { color:var(--acc); border-bottom:2px solid var(--acc); border-radius:0; }
   main { padding:8px 20px 40px; max-width:1100px; margin:0 auto; }
@@ -51,6 +52,7 @@
 <header>
   <h1><span class="logo">◆ FinChat</span> Banking Data &amp; AI Platform</h1>
   <span id="demoBadge" class="demo-badge hidden">DEMO DATA</span>
+  <span id="outageBadge" class="demo-badge bad hidden"></span>
   <div class="spacer"></div>
   <span id="personaBox"><label style="margin:0;color:var(--mut)">Persona&nbsp;</label>
   <select id="persona"></select></span>
@@ -86,20 +88,43 @@ const DEMO = {
 };
 
 // ---------- api helper (BFF proxy, demo fallback) ----------
+// The demo fallback is for two situations: a standalone page with no BFF behind it
+// (S.demo), and a backend the BFF says is not configured (503). A LIVE backend that
+// answers 5xx, or with something that is not JSON, is an outage. It used to come back
+// as {__demo:true} as well, and every page then rendered demo data as if nothing had
+// happened — which is how a ModuleNotFoundError in the agent's tool path turned every
+// dev chat into a 500 for hours while the screen kept answering (2026-09-19). An
+// outage still carries __demo so pages keep rendering, but it is never silent: the
+// header badge and the console both say so, and chat says so instead of answering.
 async function api(kind, path, opts={}) {
+  let r;
   try {
-    const r = await fetch(`/api/${kind}/${path}`, { ...opts,
+    r = await fetch(`/api/${kind}/${path}`, { ...opts,
       headers:{ "Content-Type":"application/json", "X-Persona":S.persona,
                 ...(S.idtok?{"X-User-Token":S.idtok}:{}),
                 ...(S.accessTok?{"X-User-Access-Token":S.accessTok}:{}), ...(opts.headers||{}) } });
-    if (r.status === 503) throw new Error("demo");
-    const j = await r.json();
-    // Preserve the status so callers can tell a REFUSAL from an OUTAGE. Without it a
-    // 400 "blocked by safety screening" is just an object with .error set, which reads
-    // exactly like a backend being down.
-    if (!r.ok) j.__status = r.status;
-    return j;
-  } catch(e) { return { __demo:true }; }
+  } catch(e) {
+    return S.demo ? { __demo:true } : outage(kind, 0, "network");
+  }
+  if (r.status === 503) return { __demo:true };
+  let j;
+  try { j = await r.json(); }
+  catch(e) { return outage(kind, r.status, "non-JSON body"); }
+  // 502 with a JSON body is the BFF withholding a screened response — a refusal, owned
+  // by agentAnswer's block branch. A gateway 502 has no JSON and is caught above.
+  if (r.status >= 500 && r.status !== 502) return outage(kind, r.status, j.error || j.detail || "");
+  // Preserve the status so callers can tell a REFUSAL from an OUTAGE. Without it a
+  // 400 "blocked by safety screening" is just an object with .error set, which reads
+  // exactly like a backend being down.
+  if (!r.ok) j.__status = r.status;
+  return j;
+}
+function outage(kind, status, why) {
+  const label = status ? `HTTP ${status}` : "network";
+  console.error(`[finchat] ${kind} backend outage (${label}) ${why||""}`.trim());
+  const b = el("outageBadge");
+  if (b) { b.textContent = `${kind.toUpperCase()} BACKEND ERROR · ${label}`; b.classList.remove("hidden"); }
+  return { __outage:true, __demo:true, __status:status, error:`backend error (${label})` };
 }
 
 // ---------- views ----------
@@ -235,6 +260,12 @@ async function agentAnswer(q, acc) {
   // raised the ticket; only the screen disagreed.
   if (res.__status === 400 || res.__status === 502) {
     return res.error || "Your message was blocked by safety screening.";
+  }
+  // An outage is not demo mode either. Answering from client-side grounding here
+  // hides the failure from the one person who would report it.
+  if (res.__outage) {
+    return `The assistant is unavailable right now (${res.__status ? "HTTP " + res.__status : "no response"}). ` +
+           "This is a backend error, not an answer — please try again shortly.";
   }
   if (res.__demo || res.error || !res.response) return await groundedAnswer(q, acc);
   return res.response;
