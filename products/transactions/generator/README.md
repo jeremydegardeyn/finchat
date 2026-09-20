@@ -40,4 +40,21 @@ gcloud run jobs execute finchat-dev-generator --region us-central1
 | `--max-per-customer` | 4 | enforced 1–4 |
 | `--overdraft-rate` | 0.05 | fraction forced negative (seeds overdraft_history) |
 | `--seed` | none | reproducible runs |
+| `--account-ids` | none | comma-separated ids instead of random UUIDs; count is capped at `len(ids) * max-per-customer` |
 | `--out` / `--dry-run` | — | offline modes |
+
+### Seeding the named demo accounts
+
+`acct-001..003` are the ids that docs, the SPA fallback and the API's `DEMO_MODE` assume.
+They reach a real environment through the normal ingest path, not a special case: pin the
+ids, publish, let the streaming job land them, then derive the dimensions. The
+`<= 4 per customer` invariant is per execution, so a fuller history is several seeded runs.
+
+```bash
+./scripts/run_dataflow.sh dev 15                   # on-demand job, auto-drains
+for s in 1 2 3; do
+  python products/transactions/generator/generate.py --account-ids acct-001,acct-002,acct-003 \
+    --seed "$s" --project strongsville-city-schools --topic finchat-dev-transactions-ingest
+done
+./scripts/seed_dimensions.sh dev                   # customer/account rows for the gold views
+```
