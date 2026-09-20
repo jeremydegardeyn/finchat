@@ -180,3 +180,40 @@ def test_bypasses_are_still_counted_when_required(monkeypatch):
     with pytest.raises(gc.GatewayUnavailable):
         gc.complete("hi", agent_id="a", workload_class="w")
     assert gc.counters()["bypass_unconfigured"] == before + 1
+
+
+# --- The JSON profile (gateway classification profile, 2026-09-19) ----------------------
+
+def test_response_format_travels_in_the_request_body(monkeypatch):
+    """`response_format="json"` is how the safety classifier asks the gateway for its JSON
+    profile. If the field is dropped here the gateway runs the class with fences on and
+    the caller cannot tell from the outside — so the body is what gets pinned."""
+    monkeypatch.setattr(gc, "GATEWAY_URL", "https://gw.example")
+    monkeypatch.setattr(gc, "_id_token", lambda a: None)
+    seen = {}
+
+    def fake(req, timeout=None):
+        seen.update(json.loads(req.data))
+        return _Resp(json.dumps({"outcome": "ok", "text": "{}", "finish_reason": "STOP",
+                                 "output_tokens": 110, "thoughts_tokens": 0}).encode())
+
+    monkeypatch.setattr(gc.urllib.request, "urlopen", fake)
+    r = gc.complete("hi", agent_id="a", workload_class="classification", response_format="json")
+    assert seen["response_format"] == "json"
+    assert r["finish_reason"] == "STOP" and r["output_tokens"] == 110
+
+
+def test_response_format_defaults_to_absent(monkeypatch):
+    """Other call sites (intent router, reranker) are one-word / bare-array callers and
+    must not be switched into JSON mode by accident."""
+    monkeypatch.setattr(gc, "GATEWAY_URL", "https://gw.example")
+    monkeypatch.setattr(gc, "_id_token", lambda a: None)
+    seen = {}
+
+    def fake(req, timeout=None):
+        seen.update(json.loads(req.data))
+        return _Resp(json.dumps({"outcome": "ok", "text": "KB"}).encode())
+
+    monkeypatch.setattr(gc.urllib.request, "urlopen", fake)
+    _call()
+    assert seen["response_format"] is None

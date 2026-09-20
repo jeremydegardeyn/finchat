@@ -401,7 +401,12 @@ Return ONLY minified JSON:
 {{"signals":{{"jailbreak_probe":0,"identity_probe":0,"system_probe":0,"social_engineering":0,"action_attempt":0,"scam_victim":0,"third_party_coercion":0,"self_harm":0,"financial_distress":0,"gambling_harm":0,"answer_policy_breach":0}},"agent_refused":false,"rationale":"<one short sentence, no quotes from the texts>"}}"""
 
 
-CLASSIFIER_MAX_TOKENS = 2048
+# ~120 tokens is what the verdict measures; 512 is headroom for a long rationale. It was
+# 2048 while the gateway ran this class on a thinking model whose reasoning was charged
+# against the budget (see `classify`). The gateway's classification profile turned that
+# off — 10/10 parses at 256 against the deployed gateway on 2026-09-19 — so the cap is
+# once again about the answer, not the mitigation.
+CLASSIFIER_MAX_TOKENS = 512
 
 
 def parse_verdict(text: str | None) -> tuple[dict[str, float], bool, str] | None:
@@ -448,12 +453,13 @@ def classify(question: str, answer: str, transport) -> tuple[TurnSignals, str, s
                                       answer=(answer or "")[:4000])
     reason = ""
     try:
-        # 2048, not the ~150 the JSON needs: the gateway clamps this class to a thinking
-        # model (gemini-2.5-flash), and its reasoning is charged against the output budget
-        # before a single byte of JSON is written. At 256 every verdict came back truncated;
-        # at 1024 one in ~15 still did, because the reasoning length is not fixed. The
-        # honest fix is a gateway-side classification profile (thinkingBudget 0, JSON
-        # mode) — this cap is the mitigation until then. Same wall the intent router hit.
+        # The gateway clamps this class to gemini-2.5-flash, a thinking model whose
+        # reasoning is charged against the output budget before a byte of JSON is written.
+        # Until 2026-09-19 that meant every verdict at 256 tokens was truncated and ~1 in 15
+        # at 1024, and this cap sat at 2048 as the mitigation. The gateway now runs the
+        # class under a classification profile (thinkingBudget 0; JSON mode when the
+        # transport asks for it), so the cap covers the answer. If `parse:truncated` rows
+        # come back, the transport's log line says whether reasoning tokens reappeared.
         out = transport(prompt, CLASSIFIER_MAX_TOKENS)
     except ClassifierUnavailable as e:
         out, reason = None, str(e)[:120]
