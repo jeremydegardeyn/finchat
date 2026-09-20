@@ -10,7 +10,16 @@
 #
 # Without a drain time it's a STREAMING job that stays up until you drain it.
 # With DRAIN_MINUTES the script waits then drains (run with `&` to background it).
+#
+# A drain is not the end of billing. The pipeline's DeduplicatePerKey holds a
+# processing-time timer per idempotency key for --dedup_ttl_seconds (3600 by
+# default), and a drain waits for outstanding timers, so a job that saw its last
+# message at minute 14 stays DRAINING — with workers — until minute 74. The data
+# is not what those timers hold: every element was written on arrival, the state
+# is only the dedup memory. So after the drain request the script gives in-flight
+# work DRAIN_GRACE_MINUTES (default 5) to finish, then cancels what is left.
 set -euo pipefail
+DRAIN_GRACE_MINUTES="${DRAIN_GRACE_MINUTES:-5}"
 
 PROJECT="strongsville-city-schools"
 REGION="us-central1"
@@ -45,32 +54,89 @@ if [ "$WITH_DLP" = "dlp" ]; then
   echo "→ DLP de-identification ENABLED"
 fi
 
+job_state() {
+  gcloud dataflow jobs describe "$1" --region "$REGION" --project "$PROJECT" \
+    --format='value(currentState)' 2>/dev/null || true
+}
+
 echo "→ Launching ${JOB}"
-gcloud dataflow flex-template run "$JOB" \
+# The launch response carries the job id, so take it from there. The previous
+# version polled `jobs list` by name for 60 s; a job that sits in QUEUED longer
+# than that (they do) came back empty, the script printed "<pending>" and
+# exited, and the auto-drain it promised never armed — a streaming job left
+# running on a project that is meant to idle at ~$0 (ADR-0003).
+JOB_ID="$(gcloud dataflow flex-template run "$JOB" \
   --template-file-gcs-location "gs://${BUCKET}/templates/txn-pipeline.json" \
   --region "$REGION" --project "$PROJECT" \
   --temp-location "gs://${BUCKET}/temp" \
   --staging-location "gs://${BUCKET}/staging" \
   --service-account-email "$SA" \
-  --parameters "$PARAMS"
+  --parameters "$PARAMS" \
+  --format='value(job.id)')"
 
-echo
-echo "→ Resolving job id…"
-JOB_ID=""
-for _ in $(seq 1 12); do
-  JOB_ID="$(gcloud dataflow jobs list --region "$REGION" --project "$PROJECT" \
-    --filter="name=${JOB}" --format='value(JOB_ID)' 2>/dev/null | head -1)"
-  [ -n "$JOB_ID" ] && break
-  sleep 5
-done
-echo "Job: ${JOB_ID:-<pending>}  (name ${JOB})"
+if [ -z "$JOB_ID" ]; then
+  # Belt and braces: the launch succeeded (set -e) but the response shape was not
+  # what we expected. Fall back to the by-name lookup, for long enough this time.
+  echo "→ Launch response carried no job id; resolving by name (up to 5 min)…"
+  for _ in $(seq 1 60); do
+    JOB_ID="$(gcloud dataflow jobs list --region "$REGION" --project "$PROJECT" \
+      --filter="name=${JOB}" --format='value(id)' 2>/dev/null | head -1)"
+    [ -n "$JOB_ID" ] && break
+    sleep 5
+  done
+fi
+echo "Job: ${JOB_ID:-<unresolved>}  (name ${JOB})"
 
-if [ -n "$DRAIN_AFTER" ] && [ -n "$JOB_ID" ]; then
+if [ -n "$DRAIN_AFTER" ] && [ -z "$JOB_ID" ]; then
+  # Never exit 0 having silently dropped the one thing the caller asked for.
+  echo "!! auto-drain NOT armed: could not resolve the job id. Stop it by hand:" >&2
+  echo "   gcloud dataflow jobs list --region ${REGION} --filter='name:${JOB}'" >&2
+  exit 1
+fi
+
+if [ -n "$DRAIN_AFTER" ]; then
   echo "→ Auto-drain in ${DRAIN_AFTER} min. Ctrl-C cancels the wait (the job keeps running)."
   sleep $((DRAIN_AFTER * 60))
+  # A job can sit QUEUED/PENDING for 5+ minutes; drain is only accepted on a
+  # RUNNING job. Wait for it (bounded) rather than fail the one call that matters.
+  for _ in $(seq 1 40); do
+    STATE="$(job_state "$JOB_ID")"
+    [ "$STATE" = "JOB_STATE_RUNNING" ] && break
+    case "$STATE" in JOB_STATE_DONE|JOB_STATE_CANCELLED|JOB_STATE_FAILED|JOB_STATE_DRAINED) break ;; esac
+    echo "  job is ${STATE:-unknown}; waiting for RUNNING before draining…"
+    sleep 15
+  done
   echo "→ Draining ${JOB_ID}…"
   gcloud dataflow jobs drain "$JOB_ID" --region "$REGION" --project "$PROJECT"
-  echo "✓ Drain requested — workers stop after in-flight work finishes (idle cost → ~0)."
+
+  # Drain waits for the dedup timers (see header). Give real in-flight work a
+  # grace period, then cancel: the elements are already in BigQuery, only the
+  # dedup state is left, and that is worth nothing on a job that is ending.
+  echo "→ Waiting up to ${DRAIN_GRACE_MINUTES} min for DRAINED…"
+  STATE=""
+  for _ in $(seq 1 $((DRAIN_GRACE_MINUTES * 4))); do
+    STATE="$(job_state "$JOB_ID")"
+    case "$STATE" in JOB_STATE_DRAINED|JOB_STATE_DONE|JOB_STATE_CANCELLED|JOB_STATE_FAILED) break ;; esac
+    sleep 15
+  done
+  if [ "$STATE" = "JOB_STATE_DRAINED" ]; then
+    echo "✓ Drained — workers gone (idle cost → ~0)."
+  else
+    echo "→ Still ${STATE:-unknown} after ${DRAIN_GRACE_MINUTES} min (dedup timers); cancelling…"
+    gcloud dataflow jobs cancel "$JOB_ID" --region "$REGION" --project "$PROJECT"
+    for _ in $(seq 1 40); do
+      STATE="$(job_state "$JOB_ID")"
+      [ "$STATE" = "JOB_STATE_CANCELLED" ] && break
+      sleep 15
+    done
+    if [ "$STATE" = "JOB_STATE_CANCELLED" ]; then
+      echo "✓ Cancelled — workers gone (idle cost → ~0)."
+    else
+      echo "!! job is ${STATE:-unknown}, not CANCELLED. Check it:" >&2
+      echo "   gcloud dataflow jobs describe ${JOB_ID} --region ${REGION}" >&2
+      exit 1
+    fi
+  fi
 else
   echo "Status: gcloud dataflow jobs list --region ${REGION} --filter='name:${JOB}'"
   echo "Drain : gcloud dataflow jobs drain ${JOB_ID:-<JOB_ID>} --region ${REGION}   # stop billing when done"
