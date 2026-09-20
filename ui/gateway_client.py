@@ -107,8 +107,15 @@ def complete(prompt: str, *, agent_id: str, workload_class: str,
              owner: str | None = None, session_id: str | None = None,
              tier: str | None = None, max_output_tokens: int | None = None,
              on_behalf_of: str | None = None,
-             routing_text: str | None = None) -> dict | None:
+             routing_text: str | None = None,
+             response_format: str | None = None) -> dict | None:
     """Governed completion. Returns the gateway payload, or None to fall back.
+
+    `response_format="json"` asks the gateway for its JSON profile: reasoning off, JSON
+    mode on the model, and a response PII pass that redacts values without breaking the
+    document. The payload then carries `finish_reason`, `output_tokens` and
+    `thoughts_tokens` at the top level — MAX_TOKENS with thoughts far above output is the
+    truncation the profile exists to prevent.
 
     Raises GatewayBlocked when the gateway refused on policy grounds — callers must let
     that propagate rather than retrying directly against Vertex.
@@ -131,6 +138,7 @@ def complete(prompt: str, *, agent_id: str, workload_class: str,
         # because of its CONTEXT; routing on the assembled payload billed every semantics
         # question at premium rates.
         "routing_text": routing_text,
+        "response_format": response_format,
     }).encode()
     headers = {"Content-Type": "application/json"}
     tok = _id_token(GATEWAY_URL)

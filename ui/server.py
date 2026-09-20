@@ -80,6 +80,21 @@ except Exception:  # pragma: no cover — BFF must start even if the client is a
     _gw = None
 
 
+def _gw_payload(prompt: str, *, agent_id: str, workload_class: str,
+                owner: str | None = None, max_output_tokens: int | None = None,
+                session_id: str | None = None, on_behalf_of: str | None = None,
+                routing_text: str | None = None, response_format: str | None = None):
+    """The governed path, raw: the gateway's payload or None to fall back. For callers
+    that need more than the text — the safety classifier reads `finish_reason` and the
+    token split off it. Refusals propagate, same as `_gw_complete`."""
+    if _gw is None:
+        return None
+    return _gw.complete(prompt, agent_id=agent_id, workload_class=workload_class,
+                        owner=owner, max_output_tokens=max_output_tokens,
+                        session_id=session_id, on_behalf_of=on_behalf_of,
+                        routing_text=routing_text, response_format=response_format)
+
+
 def _gw_complete(prompt: str, *, agent_id: str, workload_class: str,
                  owner: str | None = None, max_output_tokens: int | None = None,
                  session_id: str | None = None, on_behalf_of: str | None = None,
@@ -95,12 +110,10 @@ def _gw_complete(prompt: str, *, agent_id: str, workload_class: str,
     join to quality (eval side). Without a shared key there is no cost-per-*successful*-task
     — only cost per token, which tells a CFO nothing.
     """
-    if _gw is None:
-        return None
-    r = _gw.complete(prompt, agent_id=agent_id, workload_class=workload_class,
-                     owner=owner, max_output_tokens=max_output_tokens,
-                     session_id=session_id, on_behalf_of=on_behalf_of,
-                     routing_text=routing_text)
+    r = _gw_payload(prompt, agent_id=agent_id, workload_class=workload_class,
+                    owner=owner, max_output_tokens=max_output_tokens,
+                    session_id=session_id, on_behalf_of=on_behalf_of,
+                    routing_text=routing_text)
     if not r:
         return None
     return r.get("text", ""), r.get("model"), r.get("model_served")
@@ -644,17 +657,28 @@ def _safety_transport(prompt: str, max_tokens: int):
     import json as _json
     import urllib.request as _ur
     try:
-        gw = _gw_complete(prompt, agent_id="conversation_safety_classifier",
-                          workload_class="classification",
-                          owner="ai-governance@datadinosaur.com",
-                          max_output_tokens=max_tokens)
+        # response_format="json" selects the gateway's JSON profile: reasoning off and JSON
+        # mode, so the verdict is a bare document — no ``` fences, no reasoning charged
+        # against `max_tokens`. Before the profile existed, the class ran on a thinking
+        # model and every verdict at 256 tokens came back as 7 tokens of JSON.
+        gw = _gw_payload(prompt, agent_id="conversation_safety_classifier",
+                         workload_class="classification",
+                         owner="ai-governance@datadinosaur.com",
+                         max_output_tokens=max_tokens, response_format="json")
     except Exception as e:  # GatewayBlocked / GatewayUnavailable
         import safety_signals as ss
         why = (e.args[0] if e.args else type(e).__name__)
         print(f"safety classifier: gateway refused ({why}); no verdict")
         raise ss.ClassifierUnavailable(f"gateway:{why}") from e
     if gw:
-        return gw[0], (gw[2] or gw[1])
+        if gw.get("finish_reason") == "MAX_TOKENS":
+            # The verdict is cut off and `classify` will record parse:truncated. Say WHERE
+            # the budget went while the payload that knows is still in hand: thoughts far
+            # above output means the profile is not being applied, not that the cap is low.
+            print(f"safety classifier: gateway verdict truncated at {max_tokens} "
+                  f"(output_tokens={gw.get('output_tokens')} "
+                  f"thoughts_tokens={gw.get('thoughts_tokens')} profile={gw.get('profile')})")
+        return gw.get("text", ""), (gw.get("model_served") or gw.get("model"))
     print("safety classifier: gateway gave no verdict; trying vertex directly")
     if not GCP_PROJECT:
         return None
