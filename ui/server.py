@@ -720,10 +720,15 @@ def _safety_session(request: Request, body: bytes) -> dict:
         b = {}
     principal, trace, env = _control_ctx(request)
     ph = ce.principal_hash(principal)
+    import re as _re
+    q = b.get("message", "") or ""
     return {"principal": principal, "principal_hash": ph, "trace": trace, "env": env,
             "session_key": ss.session_hash(ph, str(b.get("session_id") or "")),
             "persona": request.headers.get("X-Persona", "customer"),
-            "question": b.get("message", "") or ""}
+            "question": q,
+            # The SPA prefixes the customer's own account: "(account acct-001) ...". Those
+            # ids in an answer are the product working, not a leak (safety_signals.answer_leaks).
+            "own_accounts": tuple(_re.findall(r"\(account (acct-\d+)\)", q, flags=_re.I))}
 
 
 def _safety_state_task(sess: dict):
@@ -733,14 +738,18 @@ def _safety_state_task(sess: dict):
     import safety_signals as ss
 
     async def _load():
+        import time as _t
         if not (ss.enabled() and GCP_PROJECT and EVAL_DATASET):
             return ss.SessionState()
+        t0 = _t.perf_counter()
         try:
             return await asyncio.to_thread(ss.load_state, GCP_PROJECT, EVAL_DATASET,
                                            sess["session_key"], sess["principal_hash"])
         except Exception as e:
             print(f"safety_signals: state read failed ({type(e).__name__}); judging turn alone")
             return ss.SessionState()
+        finally:
+            sess.setdefault("overhead", {})["state_ms"] = int((_t.perf_counter() - t0) * 1000)
     return asyncio.ensure_future(_load())
 
 
@@ -756,7 +765,8 @@ async def _safety_record(sess: dict, *, conversation_id: str, turn, decision, ra
                               principal_hash=sess["principal_hash"],
                               turn_index=turn_index, persona=sess["persona"],
                               channel="agent", turn=turn, decision=decision,
-                              rationale=rationale, model=model, latency_ms=latency_ms)
+                              rationale=rationale, model=model, latency_ms=latency_ms,
+                              overhead=sess.get("overhead"))
         try:
             await asyncio.to_thread(ss.write_row, GCP_PROJECT, EVAL_DATASET, row)
         except Exception as e:
@@ -828,8 +838,16 @@ async def _safety_screen(sess: dict, state_task, question: str, answer: str, *,
             # would only cost a call and its verdict could not change the outcome.
             turn, rationale, model = ss.TurnSignals(ts=ss._now()), "", None
         else:
+            import time as _ct
+            _c0 = _ct.perf_counter()
             turn, rationale, model = await asyncio.to_thread(
                 ss.classify, question, answer, _safety_transport)
+            sess.setdefault("overhead", {})["classify_ms"] = int((_ct.perf_counter() - _c0) * 1000)
+            # A lock on a breach needs a second, independent reader of the ANSWER: Model
+            # Armor's response screen matched sensitive data, or the deterministic
+            # identifier check did. The classifier alone routes to a human.
+            turn.leak_corroborated = bool(sess.get("armor_response_sdp")) or \
+                ss.answer_leaks(answer, own_account_ids=sess.get("own_accounts", ()))
         decision = ss.evaluate(turn, state)
         if turn.classifier_error and ss.fail_closed() and decision.action == "none":
             decision.action = "withhold"
@@ -868,7 +886,10 @@ async def agent_proxy(path: str, request: Request):
     # through the write. A turn that cannot get it within the bounded wait is answered with
     # the rule and registered, so the holder counts it as a `concurrent_turn` security hit.
     if ss.enabled() and sess["question"]:
+        import time as _lt
+        _l0 = _lt.perf_counter()
         sess["lease"] = await sl.acquire(sess["session_key"])
+        sess.setdefault("overhead", {})["lease_ms"] = int((_lt.perf_counter() - _l0) * 1000)
         if sess["lease"] is None:
             await sl.register_concurrent(sess["session_key"], conversation_id)
             try:
@@ -931,6 +952,9 @@ async def _agent_turn(path: str, request: Request, body: bytes, sess: dict,
     # Screen the model response before returning it to the user.
     try:
         r = await armor.screen_response_detailed(resp.body.decode("utf-8", "replace"))
+        # Even an ALLOWED response can carry an SDP match below the block threshold; the
+        # matched filter names are the corroboration the leak rule needs.
+        sess["armor_response_sdp"] = "sdp" in (r.get("filters") or [])
         if not r["allowed"]:
             try:
                 import control_events

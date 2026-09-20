@@ -140,6 +140,15 @@ def enabled() -> bool:
     return os.getenv("SAFETY_SIGNALS", "").lower() in ("1", "true", "yes")
 
 
+def shadow() -> bool:
+    """Shadow mode: classify, record and emit review events, but never take a tier-1
+    action. This is how a deployment should run for its first weeks: the rows accumulate
+    and the false-positive rate is measured on real traffic before anyone is locked out.
+    A decision that WOULD have acted is recorded with `shadowed_action` so the count of
+    would-have-fired is a query."""
+    return os.getenv("SAFETY_SHADOW", "").lower() in ("1", "true", "yes")
+
+
 def fail_closed() -> bool:
     return os.getenv("SAFETY_FAIL_CLOSED", "").lower() in ("1", "true", "yes")
 
@@ -155,6 +164,10 @@ class TurnSignals:
     armor_class: str | None = None    # its class: security | privacy | content
     classifier_error: bool = False
     ts: datetime | None = None
+    # Independent evidence that the ANSWER carries a leak: Model Armor's response screen
+    # matched SDP, or a deterministic identifier check found one. A lock on a breach needs
+    # this as well as the classifier's opinion; the classifier alone is a review.
+    leak_corroborated: bool = False
 
     def at_least(self, level: float, cls: str | None = None) -> dict[str, float]:
         """Signals at or above `level`, optionally restricted to one class."""
@@ -183,6 +196,7 @@ def concurrent_turn(ts: datetime | None = None) -> "TurnSignals":
 class Decision:
     tier: int = 0
     action: str = "none"
+    shadowed_action: str = "none"     # what tier 1 WOULD have done, in shadow mode
     cls: str | None = None            # correlation class for the control event
     reasons: list[str] = field(default_factory=list)
     filters: list[str] = field(default_factory=list)  # signal NAMES that fired (>= med)
@@ -282,9 +296,10 @@ def evaluate(turn: TurnSignals, state: SessionState) -> Decision:
     sec_now = state.security_hits + (1 if turn.is_security_hit else 0)
     breach = turn.signals.get(BREACH_SIGNAL, 0.0)
     strong_probe = bool(turn.at_least(t["high"], "security")) or         (turn.armor_blocked and turn.armor_class == "security")
-    if strong_probe and breach >= t["leak_quarantine"]:
-        # An attempt that WORKED. The answer already contains what it should not; it is
-        # withheld and the session locked. Highest severity the envelope carries.
+    if strong_probe and breach >= t["leak_quarantine"] and turn.leak_corroborated:
+        # An attempt that WORKED, and two independent readers agree the answer carries
+        # what it should not (the classifier, and Model Armor's SDP match or a
+        # deterministic identifier check). Withheld, locked, highest severity.
         d.tier, d.action, d.cls, d.severity = 1, "quarantine", "security", "CRITICAL"
         d.reasons.append("answer_breach_on_security_probe")
         d.filters = sorted(set(d.filters + ["session_quarantine"]))
@@ -314,8 +329,12 @@ def evaluate(turn: TurnSignals, state: SessionState) -> Decision:
         confs = state.trailing_conf[-2:] + [max({**wf, **ff}.values())]
         if confs[0] < confs[1] < confs[2]:
             review.append("escalation_slope")   # the model is going along with it more
+    # "Refused twice" means twice on a security- or fraud-class intent, which is what the
+    # playbook's "same intent" meant. Two questions the assistant simply cannot answer
+    # (branch hours, a product it does not have) are not a trajectory.
     refusals_now = state.refusals + (1 if turn.agent_refused else 0)
-    if refusals_now >= t["refusals_review"] and (fired or turn.agent_refused):
+    probe_class_now = turn.is_security_hit or bool(turn.at_least(t["med"], "fraud"))
+    if refusals_now >= t["refusals_review"] and probe_class_now:
         review.append(f"refusals>={t['refusals_review']}")
     if sec_now >= t["security_review"]:
         review.append(f"security_hits>={t['security_review']}")
@@ -324,12 +343,18 @@ def evaluate(turn: TurnSignals, state: SessionState) -> Decision:
     if turn.is_security_hit and recent >= t["velocity_review"]:
         review.append(f"security_velocity>={t['velocity_review']}/{t['velocity_window_min']}m")
     if breach >= t["high"]:
-        review.append("answer_policy_breach")
+        review.append("answer_policy_breach"
+                      + ("_uncorroborated" if strong_probe and not turn.leak_corroborated else ""))
     if (wf or ff or turn.is_security_hit) and \
             state.principal_sessions_flagged >= t["principal_sessions_repeat"]:
         review.append(f"principal_repeat>={t['principal_sessions_repeat']}")
     if state.turns + 1 >= t["long_session"] and (fired or turn.agent_refused):
         review.append(f"long_session>={t['long_session']}")
+
+    if d.tier == 1 and shadow():
+        d.shadowed_action, d.action = d.action, "none"
+        d.reasons.append("shadow_mode")
+        d.tier = 2   # a human still sees it; the product does not act
 
     if review:
         d.reasons.extend(review)
@@ -371,11 +396,15 @@ Customer-side signals:
   infrastructure, or how the assistant decides what it can say
 - social_engineering: impersonating staff, a relative or an authority; urgency or threats
   to obtain access or an exception
-- action_attempt: trying to get the assistant to move money, change contact details,
-  reset credentials, or take any account action
+- action_attempt: telling the ASSISTANT ITSELF to move money, change contact details,
+  reset credentials, or take any account action now ("transfer $500", "change my phone
+  number to..."). Asking HOW to do something, whether it is possible, or what a fee is,
+  is NOT an action attempt; that is the product's ordinary use
 - scam_victim: the customer describes being told to move money / buy gift cards / share
   codes by someone (a "bank employee", "tax office", "investment advisor", romantic partner)
-- third_party_coercion: someone else appears to be in the conversation pressuring them
+- third_party_coercion: another person, present or not, is pressuring the customer to
+  act (someone beside them reading a code, a relative or partner demanding card details,
+  a threat if they do not pay)
 - self_harm: any expression of suicidal ideation, self-harm, or not wanting to be alive
 - financial_distress: cannot pay for food, housing, medicine; facing eviction or repossession
 - gambling_harm: compulsive gambling, chasing losses, borrowing to gamble
@@ -528,6 +557,25 @@ CONCURRENT_TEXT = ("One message at a time, please — I am still answering your 
                    "Send this again once that reply arrives.")
 
 
+# --- deterministic leak check -------------------------------------------------------------------
+import re as _re
+
+_EMAIL = _re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_CARD = _re.compile(r"\b(?:\d[ -]?){13,19}\b")
+_ACCT = _re.compile(r"\bacct-\d{3,}\b", _re.I)
+
+
+def answer_leaks(answer: str, own_account_ids: tuple[str, ...] = ()) -> bool:
+    """Cheap, deterministic second opinion on the ANSWER: an email, a card-length number,
+    or an account id that is not one of the customer's own. Pattern-based, so it misses
+    a name and catches a support email; it is corroboration, not the detector."""
+    a = answer or ""
+    if _EMAIL.search(a) or _CARD.search(a):
+        return True
+    own = {x.lower() for x in own_account_ids}
+    return any(m.group(0).lower() not in own for m in _ACCT.finditer(a))
+
+
 # --- evidence row -----------------------------------------------------------------------------
 
 def session_hash(principal_hash: str, session_id: str | None) -> str:
@@ -540,7 +588,7 @@ def session_hash(principal_hash: str, session_id: str | None) -> str:
 def evidence_row(*, conversation_id: str, session_key: str, principal_hash: str,
                  turn_index: int, persona: str, channel: str, turn: TurnSignals,
                  decision: Decision, rationale: str, model: str | None,
-                 latency_ms: int | None) -> dict:
+                 latency_ms: int | None, overhead: dict | None = None) -> dict:
     """The `turn_signals` row. Note what is absent: any text. The FK to `conversation_log`
     is how a reviewer with dataset access gets to the words."""
     med = thresholds()["med"]
@@ -562,11 +610,17 @@ def evidence_row(*, conversation_id: str, session_key: str, principal_hash: str,
         "signal_class": decision.cls,
         "tier": decision.tier,
         "action": decision.action,
+        "shadowed_action": decision.shadowed_action,
+        "leak_corroborated": turn.leak_corroborated,
         "reasons": decision.reasons,
         "classifier_error": turn.classifier_error,
         "classifier_model": model,
         "rationale": rationale[:300] if rationale else None,
         "latency_ms": latency_ms,
+        # What the control itself cost on the request path (plan item 5).
+        "classify_ms": (overhead or {}).get("classify_ms"),
+        "state_ms": (overhead or {}).get("state_ms"),
+        "lease_ms": (overhead or {}).get("lease_ms"),
     }
 
 
