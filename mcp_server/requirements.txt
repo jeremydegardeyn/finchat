@@ -15,3 +15,10 @@ requests==2.32.3
 # `auth.py`, which `main()` reaches only over the HTTP transport — stdio still runs on
 # the SDK and the standard library, which is what keeps `claude mcp add` a one-liner.
 pyjwt[crypto]==2.10.1
+
+# Distributed tracing to Cloud Trace (ADR-0035). The SDK ceiling is not arbitrary:
+# google-adk 2.2.0 requires opentelemetry-sdk<=1.41.1, and the agent image is the one
+# that would fail to resolve if these services drifted above it. Pinning every service
+# to the same version keeps one OTel across the platform.
+opentelemetry-sdk==1.41.1
+opentelemetry-exporter-gcp-trace==1.12.0

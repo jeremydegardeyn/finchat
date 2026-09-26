@@ -56,6 +56,18 @@ jobs:
           SHA="${GITHUB_SHA::12}"
           # Bake the latest AgentOps eval report into the UI image (Admin -> Evaluations).
           cp -f eval/reports/latest.json ui/eval_report.json 2>/dev/null || true
+
+          # Stage the canonical tracing module into each service's build context
+          # (ADR-0035). Every service but the MCP server builds from its own directory
+          # and so cannot COPY a file above it; the alternative to staging is a committed
+          # copy per service, which is six files that can disagree about a control whose
+          # whole job is to be identical everywhere. No `|| true` here: an unstaged file
+          # makes docker build fail on the COPY, which is where this should fail.
+          # scripts/test_tracing_build.py holds this list and the COPY lines together.
+          for ctx in ui products/transactions/agent products/transactions/api \
+                     products/loans/api products/process/api; do
+            cp -f observability/tracing.py "${ctx}/tracing.py"
+          done
           declare -A SVC=(
             [txn-api]=products/transactions/api
             [txn-generator]=products/transactions/generator
@@ -106,6 +118,9 @@ jobs:
           PIN_STEWARD: ${{ vars.FINCHAT_PIN_STEWARD }}
           # Unset -> every call site bypasses direct to Vertex, and counts it (ADR-0024).
           AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
+          # Span export to Cloud Trace (ADR-0035). Off by default: the module ships
+          # inert, and this variable is the whole switch. Set TRACING=1 to enable.
+          TRACING: ${{ vars.TRACING }}
           # Per-call-site Vertex location. Gemini 3 is global-endpoint-only, so a
           # model choice and a residency choice are the same choice here (ADR-0022).
           LOC_ROUTER: ${{ vars.FINCHAT_LOC_ROUTER }}
@@ -120,6 +135,8 @@ jobs:
           AGENT_PINS="$(pin AGENT "$PIN_AGENT")"
           STEWARD_PINS="$(pin STEWARD "$PIN_STEWARD")$(pin JUDGE "$PIN_JUDGE")"
           loc() { [ -n "$2" ] && printf ',FINCHAT_LOC_%s=%s' "$1" "$2" || true; }
+          # Prefixed with a comma-free form because it is inserted FIRST in each list.
+          TRC="TRACING=${TRACING:-0},"
           UI_PINS="$(pin ROUTER "$PIN_ROUTER")$(pin SEMANTICS "$PIN_SEMANTICS")$(pin JUDGE "$PIN_JUDGE")$(loc ROUTER "$LOC_ROUTER")"
           deploy() { # name image-name service-account extra-env
             # --cpu-boost: extra CPU during container startup only (no idle cost) —
@@ -130,18 +147,18 @@ jobs:
               --cpu-boost --quiet $4
           }
           deploy txn-api txn-api txn-api \
-            "--set-env-vars=GCP_PROJECT=${PROJECT},GOLD_DATASET=finchat_gold_${ENV},SILVER_DATASET=finchat_silver_${ENV} --no-allow-unauthenticated"
+            "--set-env-vars=${TRC}GCP_PROJECT=${PROJECT},GOLD_DATASET=finchat_gold_${ENV},SILVER_DATASET=finchat_silver_${ENV} --no-allow-unauthenticated"
           deploy loan-api loan-api loan-api \
-            "--set-env-vars=GCP_PROJECT=${PROJECT},LOANS_DATASET=finchat_loans_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+            "--set-env-vars=${TRC}GCP_PROJECT=${PROJECT},LOANS_DATASET=finchat_loans_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           # Process layer (ADR-0030). Composes the two system APIs above, so it is deployed
           # after them and resolves their URLs the same way the loan API resolves txn-api.
-          deploy process process process "--set-env-vars=TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+          deploy process process process "--set-env-vars=${TRC}TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           # Mobile experience API. PROCESS_API_URL is its ONLY backend — LAYER-1 as
           # configuration, matching the IAM: this SA holds no invoker grant on any system API.
-          deploy mobile mobile mobile "--set-env-vars=PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+          deploy mobile mobile mobile "--set-env-vars=${TRC}PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           # ADK agent on Cloud Run (scale-to-zero). Gemini via Vertex (agent SA has aiplatform.user).
           deploy agent agent agent \
-            "--set-env-vars=GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,KB_DATASET=finchat_kb_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),AI_GATEWAY_URL=${AI_GATEWAY_URL},AI_GATEWAY_REQUIRED=${{ vars.AI_GATEWAY_REQUIRED || '0' }}${AGENT_PINS} --memory=1Gi --no-allow-unauthenticated"
+            "--set-env-vars=${TRC}GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,KB_DATASET=finchat_kb_${ENV},TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),AI_GATEWAY_URL=${AI_GATEWAY_URL},AI_GATEWAY_REQUIRED=${{ vars.AI_GATEWAY_REQUIRED || '0' }}${AGENT_PINS} --memory=1Gi --no-allow-unauthenticated"
           # OAuth proxy for hosted MCP clients (ADR-0020). Deployed only where Terraform
           # provisioned it — it is the platform's one public service, so an environment
           # that did not ask for it does not silently acquire it.
@@ -186,7 +203,7 @@ jobs:
           # env without it must still get its UI. Same posture as the steward guard below.
           if gcloud run services describe "finchat-${ENV}-mcp" --region "${REGION}" >/dev/null 2>&1; then
             MCP_URL="$(gcloud run services describe finchat-${ENV}-mcp --region ${REGION} --format='value(status.url)')"
-            deploy mcp mcp mcp "--set-env-vars=FINCHAT_MCP_TRANSPORT=http,FINCHAT_MCP_ALLOWED_HOSTS=${MCP_URL#https://},FINCHAT_MCP_PERSONA=customer,APPROVER_EMAILS=jeremy@datadinosaur.com,ANALYST_EMAILS=jdegardeyn@datadinosaur.com,ADMIN_EMAILS=datadinosaur.noreply@gmail.com,FINCHAT_MCP_OAUTH_ISSUER=${{ vars.FINCHAT_MCP_OAUTH_ISSUER }},FINCHAT_MCP_RESOURCE=${{ vars.FINCHAT_MCP_RESOURCE }},FINCHAT_MCP_SERVICE_CALLERS=${{ vars.FINCHAT_MCP_SERVICE_CALLERS }},FINCHAT_TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),FINCHAT_LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),FINCHAT_PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)'),FINCHAT_AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
+            deploy mcp mcp mcp "--set-env-vars=${TRC}FINCHAT_MCP_TRANSPORT=http,FINCHAT_MCP_ALLOWED_HOSTS=${MCP_URL#https://},FINCHAT_MCP_PERSONA=customer,APPROVER_EMAILS=jeremy@datadinosaur.com,ANALYST_EMAILS=jdegardeyn@datadinosaur.com,ADMIN_EMAILS=datadinosaur.noreply@gmail.com,FINCHAT_MCP_OAUTH_ISSUER=${{ vars.FINCHAT_MCP_OAUTH_ISSUER }},FINCHAT_MCP_RESOURCE=${{ vars.FINCHAT_MCP_RESOURCE }},FINCHAT_MCP_SERVICE_CALLERS=${{ vars.FINCHAT_MCP_SERVICE_CALLERS }},FINCHAT_TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),FINCHAT_LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),FINCHAT_PROCESS_API_URL=$(gcloud run services describe finchat-${ENV}-process --region ${REGION} --format='value(status.url)'),FINCHAT_AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)') --no-allow-unauthenticated"
           else
             echo "finchat-${ENV}-mcp not provisioned (terraform apply pending) — skipping."
           fi
@@ -208,7 +225,7 @@ jobs:
             echo "steward not deployed in ${ENV} (db-url secret or RUNNABLE Cloud SQL absent; instance state='${STEWARD_DB_STATE:-none}') — skipping"
           fi
           deploy ui ui txn-api \
-            "--set-secrets=GOOGLE_OAUTH_CLIENT_SECRET=finchat-oauth-client-secret:latest --set-env-vars=LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)'),GCP_PROJECT=${PROJECT},MODEL_ARMOR_LOCATION=${REGION},MODEL_ARMOR_TEMPLATE=finchat-${ENV}-armor,CONTROL_EVENTS=${{ vars.CONTROL_EVENTS || '0' }},SAFETY_SIGNALS=${{ vars.SAFETY_SIGNALS || '0' }},SAFETY_FAIL_CLOSED=${{ vars.SAFETY_FAIL_CLOSED || '0' }},AI_GATEWAY_REQUIRED=${{ vars.AI_GATEWAY_REQUIRED || '0' }},SILVER_DATASET=finchat_silver_${ENV},GOLD_DATASET=finchat_gold_${ENV},LOANS_DATASET=finchat_loans_${ENV},GRAPH_DATASET=finchat_graph_${ENV},KB_DATASET=finchat_kb_${ENV},EVAL_DATASET=finchat_eval_${ENV},DATA_AGENT_ID=finchat-${ENV}-analyst,ANON_ANALYST_SA=finchat-${ENV}-analyst-anon@${PROJECT}.iam.gserviceaccount.com,CA_LOCATION=global,VERTEX_LOCATION=${REGION},GOOGLE_OAUTH_CLIENT_ID=240219253111-nj35dnaod2mdccu6d81v98urp9h7se72.apps.googleusercontent.com,APPROVER_EMAILS=jeremy@datadinosaur.com,ANALYST_EMAILS=jdegardeyn@datadinosaur.com,ADMIN_EMAILS=datadinosaur.noreply@gmail.com,STEWARD_URL=$(gcloud run services describe finchat-${ENV}-steward --region ${REGION} --format='value(status.url)' 2>/dev/null || true),AI_GATEWAY_URL=${AI_GATEWAY_URL}${UI_PINS} --allow-unauthenticated"
+            "--set-secrets=GOOGLE_OAUTH_CLIENT_SECRET=finchat-oauth-client-secret:latest --set-env-vars=${TRC}LOAN_API_URL=$(gcloud run services describe finchat-${ENV}-loan-api --region ${REGION} --format='value(status.url)'),TXN_API_URL=$(gcloud run services describe finchat-${ENV}-txn-api --region ${REGION} --format='value(status.url)'),AGENT_URL=$(gcloud run services describe finchat-${ENV}-agent --region ${REGION} --format='value(status.url)'),GCP_PROJECT=${PROJECT},MODEL_ARMOR_LOCATION=${REGION},MODEL_ARMOR_TEMPLATE=finchat-${ENV}-armor,CONTROL_EVENTS=${{ vars.CONTROL_EVENTS || '0' }},SAFETY_SIGNALS=${{ vars.SAFETY_SIGNALS || '0' }},SAFETY_FAIL_CLOSED=${{ vars.SAFETY_FAIL_CLOSED || '0' }},AI_GATEWAY_REQUIRED=${{ vars.AI_GATEWAY_REQUIRED || '0' }},SILVER_DATASET=finchat_silver_${ENV},GOLD_DATASET=finchat_gold_${ENV},LOANS_DATASET=finchat_loans_${ENV},GRAPH_DATASET=finchat_graph_${ENV},KB_DATASET=finchat_kb_${ENV},EVAL_DATASET=finchat_eval_${ENV},DATA_AGENT_ID=finchat-${ENV}-analyst,ANON_ANALYST_SA=finchat-${ENV}-analyst-anon@${PROJECT}.iam.gserviceaccount.com,CA_LOCATION=global,VERTEX_LOCATION=${REGION},GOOGLE_OAUTH_CLIENT_ID=240219253111-nj35dnaod2mdccu6d81v98urp9h7se72.apps.googleusercontent.com,APPROVER_EMAILS=jeremy@datadinosaur.com,ANALYST_EMAILS=jdegardeyn@datadinosaur.com,ADMIN_EMAILS=datadinosaur.noreply@gmail.com,STEWARD_URL=$(gcloud run services describe finchat-${ENV}-steward --region ${REGION} --format='value(status.url)' 2>/dev/null || true),AI_GATEWAY_URL=${AI_GATEWAY_URL}${UI_PINS} --allow-unauthenticated"
 
       # Rebuilt only when the pipeline actually changed. It used to run on every deploy to
       # every environment, costing a docker build and push each time, and because it was

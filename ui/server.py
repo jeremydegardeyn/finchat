@@ -28,6 +28,25 @@ from _okf_context import (ANALYST_PERIMETER, ANALYST_JOIN_BULLETS, ANALYST_KNOWL
 from analytics_denial import REQUEST_ACCESS_URL, analytics_denied
 from masked_results import annotate as annotate_masked
 
+# Distributed tracing (ADR-0035). One canonical module in observability/, and this
+# seven-line bootstrap in each service that uses it, because every service has its own
+# Docker build context and so cannot COPY a file above its own directory: the image build
+# drops the canonical copy in beside this file, and in a repo checkout the walk-up finds
+# it. Depth-independent on purpose — the alternative is a per-service relative path that
+# is wrong the first time a service moves. See docs/30.
+try:
+    import tracing                                        # image: copied beside us
+except ImportError:                                       # checkout: walk up to the root
+    import os as _os, sys as _sys
+    _d = _os.path.dirname(_os.path.abspath(__file__))
+    while _d != _os.path.dirname(_d):
+        if _os.path.isdir(_os.path.join(_d, "observability")):
+            _sys.path.insert(0, _os.path.join(_d, "observability")); break
+        _d = _os.path.dirname(_d)
+    import tracing
+
+tracing.init("ui-bff")
+
 LOAN_API_URL = os.getenv("LOAN_API_URL", "")
 TXN_API_URL = os.getenv("TXN_API_URL", "")
 AGENT_URL = os.getenv("AGENT_URL", "")
@@ -89,10 +108,36 @@ def _gw_payload(prompt: str, *, agent_id: str, workload_class: str,
     token split off it. Refusals propagate, same as `_gw_complete`."""
     if _gw is None:
         return None
-    return _gw.complete(prompt, agent_id=agent_id, workload_class=workload_class,
-                        owner=owner, max_output_tokens=max_output_tokens,
-                        session_id=session_id, on_behalf_of=on_behalf_of,
-                        routing_text=routing_text, response_format=response_format)
+    # Every gateway call in the BFF funnels through here, which is why the span lives
+    # here and not in gateway_client.py: one place, and it can see the outcome. The
+    # per-request outcome is what the in-process counters at /api/gateway/transit cannot
+    # give you — a transit share of 0.94 does not say WHICH calls bypassed, or whether the
+    # bypasses were slow (ADR-0024).
+    with tracing.span("gateway.complete", client=True, route=agent_id):
+        try:
+            payload = _gw.complete(prompt, agent_id=agent_id, workload_class=workload_class,
+                                   owner=owner, max_output_tokens=max_output_tokens,
+                                   session_id=session_id, on_behalf_of=on_behalf_of,
+                                   routing_text=routing_text,
+                                   response_format=response_format)
+        except Exception as e:
+            # GatewayBlocked (the control fired) and GatewayUnavailable (required and
+            # down) are different facts and the span keeps them apart. `outcome` on a
+            # GatewayBlocked is a closed vocabulary — pii_blocked, budget_exceeded,
+            # unregistered_workload — so it is a label, not content.
+            tracing.set_attrs(gateway_outcome=getattr(e, "outcome", None) or "unavailable",
+                              bypass_reason=type(e).__name__)
+            tracing.record_error(e)
+            raise
+        if payload is None:
+            # A counted bypass: unconfigured, unreachable, or the gateway could not serve.
+            # The caller now goes direct to Vertex, and the trace shows that it did.
+            tracing.set_attrs(gateway_outcome="bypass")
+        else:
+            tracing.set_attrs(gateway_outcome=payload.get("outcome") or "ok",
+                              model_served=payload.get("model_served"),
+                              model_requested=payload.get("model"))
+        return payload
 
 
 def _gw_complete(prompt: str, *, agent_id: str, workload_class: str,
@@ -160,6 +205,35 @@ def _persona_for(email: str) -> str | None:
     return None
 
 app = FastAPI(title="FinChat UI BFF", version="1.0.0")
+
+
+# The root span of every trace on this platform, because the BFF is where every persona's
+# request arrives (ADR-0035). One middleware rather than a decorator per route: a route
+# added without its span is a hole in exactly the traces someone will go looking for.
+#
+# The span name is the route TEMPLATE, never the resolved path — `/api/loan/{path}` and
+# not `/api/loan/status/LN-00042`. A resolved path is both unbounded cardinality in Cloud
+# Trace and, on some routes here, an identifier; the template is the thing you group by.
+@app.middleware("http")
+async def _trace_requests(request: Request, call_next):
+    if not tracing.ENABLED:
+        return await call_next(request)
+    route = request.url.path
+    for prefix in ("/api/loan/", "/api/txn/", "/api/agent/", "/api/steward/"):
+        if route.startswith(prefix):
+            route = prefix + "{path}"
+            break
+    with tracing.server_span(f"{request.method} {route}", request.headers,
+                             route=route, env=tracing._env_from_dataset()) as sp:
+        resp = await call_next(request)
+        if sp is not None:
+            tracing.set_attrs(http_status=resp.status_code)
+        # The trace id on the response is what lets a demo — or a support call — name the
+        # one trace to open, instead of hunting for it by timestamp.
+        tid = tracing.current_trace_id()
+        if tid:
+            resp.headers["X-FinChat-Trace"] = tid
+        return resp
 
 
 @app.get("/healthz")
@@ -513,9 +587,20 @@ async def _log_eval(persona: str, channel: str, question: str, answer: str, cont
     latency_ms is the wall-clock answer-generation time (operational eval signal).
     model_requested/model_served carry the pinning evidence (ADR-0022) — the second is
     what a drift investigation actually needs, and it is NULL when the surface does not
-    report it rather than being back-filled from the request."""
+    report it rather than being back-filled from the request.
+
+    trace_id is read from the active span rather than passed in (ADR-0035). It is the
+    join key that makes a bad judge score actionable: `latency_ms` says the turn took
+    nine seconds and the trace says which hop spent them. Read here, at capture time,
+    because here is where the request's span is still current."""
     if not (GCP_PROJECT and EVAL_DATASET and (question or "").strip()):
         return
+
+    # Read here rather than inside _do(). `asyncio.to_thread` does copy the contextvars
+    # context, so the span would in fact still be current in the worker — but that is an
+    # implementation detail of the thread hop, and this value is an audit join key. Read
+    # it where it is unambiguously in scope.
+    _trace_id = tracing.current_trace_id()
 
     def _do():
         try:
@@ -536,7 +621,8 @@ async def _log_eval(persona: str, channel: str, question: str, answer: str, cont
                    # nothing trajectory-level could be computed from this table.
                    "session_key": session_key,
                    "principal_hash": principal_hash,
-                   "turn_index": turn_index}
+                   "turn_index": turn_index,
+                   "trace_id": _trace_id or None}
             # ignore_unknown_values: a deployment whose eval schema predates the session
             # columns still captures the turn (minus the key) instead of dropping every
             # row until someone runs the DDL — the same graceful degradation ADR-0015
@@ -555,7 +641,8 @@ async def _log_eval(persona: str, channel: str, question: str, answer: str, cont
 
 
 async def _proxy(base: str, path: str, request: Request,
-                 extra_headers: dict | None = None) -> Response:
+                 extra_headers: dict | None = None,
+                 upstream: str = "") -> Response:
     if not base:
         return JSONResponse({"error": "backend not configured", "demo": True}, status_code=503)
     url = f"{base}/{path}"
@@ -571,10 +658,23 @@ async def _proxy(base: str, path: str, request: Request,
         headers["Authorization"] = f"Bearer {token}"
     if extra_headers:
         headers.update(extra_headers)
+    # Carry the trace across the hop (ADR-0035). This header dict is built fresh rather
+    # than forwarded, which is correct for auth — a client-sent Authorization must never
+    # be relayed — and was silently wrong for correlation: every downstream service
+    # started its OWN trace, so the trace id control_events hands to ServiceNow resolved
+    # to the BFF's log entries and nothing else. inject() is a no-op when tracing is off.
+    tracing.inject(headers)
     body = await request.body()
-    r = await _client().request(request.method, url, params=request.query_params,
-                                content=body or None, headers=headers,
-                                timeout=90.0)  # agent cold-start + Gemini latency
+    with tracing.span(f"proxy {upstream or 'backend'}", client=True,
+                      upstream=upstream or "backend"):
+        try:
+            r = await _client().request(request.method, url, params=request.query_params,
+                                        content=body or None, headers=headers,
+                                        timeout=90.0)  # agent cold-start + Gemini latency
+        except Exception as e:
+            tracing.record_error(e)
+            raise
+        tracing.set_attrs(http_status=r.status_code)
     return Response(content=r.content, status_code=r.status_code,
                     media_type=r.headers.get("content-type", "application/json"))
 
@@ -594,12 +694,13 @@ async def loan_proxy(path: str, request: Request):
             return deny
         u = _verify_user(request)
         extra = {"X-Approver": u["email"]}  # verified identity -> append-only audit
-    return await _proxy(LOAN_API_URL, path, request, extra_headers=extra)
+    return await _proxy(LOAN_API_URL, path, request, extra_headers=extra,
+                        upstream="loan-api")
 
 
 @app.api_route("/api/txn/{path:path}", methods=["GET", "POST"])
 async def txn_proxy(path: str, request: Request):
-    return await _proxy(TXN_API_URL, path, request)
+    return await _proxy(TXN_API_URL, path, request, upstream="txn-api")
 
 
 @app.api_route("/api/steward/{path:path}", methods=["GET", "POST"])
@@ -616,7 +717,8 @@ async def steward_proxy(path: str, request: Request):
         if path.rstrip("/").endswith("/review"):
             u = _verify_user(request)
             extra = {"X-Approver": u["email"]}  # verified identity -> steward audit
-    return await _proxy(STEWARD_URL, path, request, extra_headers=extra)
+    return await _proxy(STEWARD_URL, path, request, extra_headers=extra,
+                        upstream="steward")
 
 
 def _control_ctx(request: Request) -> tuple[str, str, str]:
@@ -635,7 +737,12 @@ def _control_ctx(request: Request) -> tuple[str, str, str]:
     resource.labels.env on the log entry, which the workload cannot forge (docs/26 F18).
     """
     u = _verify_user(request) if _auth_enabled() else None
-    trace = request.headers.get("X-Cloud-Trace-Context", "").split("/")[0]
+    # The active span's trace id when tracing is on, the inbound header when it is not.
+    # Same value either way — the span tree is seeded FROM that header (ADR-0035) — but
+    # asking the span is what guarantees it, and what makes the id in a ServiceNow event
+    # resolve to a span tree rather than to a log filter that only matches the BFF.
+    trace = (tracing.current_trace_id()
+             or request.headers.get("X-Cloud-Trace-Context", "").split("/")[0])
     env = SILVER_DATASET.rsplit("_", 1)[-1] if "_" in SILVER_DATASET else ""
     return ((u or {}).get("email", ""), trace, env or "unknown")
 
@@ -814,7 +921,8 @@ async def _safety_screen(sess: dict, state_task, question: str, answer: str, *,
     if not ss.enabled():
         return None
     try:
-        state = await state_task
+        with tracing.span("safety.state"):
+            state = await state_task
         # Turns rejected while this one was being answered come first: they happened
         # before this decision, and the fifth of them can be what locks the session.
         await _safety_fold_concurrent(sess, state)
@@ -828,20 +936,25 @@ async def _safety_screen(sess: dict, state_task, question: str, answer: str, *,
             # would only cost a call and its verdict could not change the outcome.
             turn, rationale, model = ss.TurnSignals(ts=ss._now()), "", None
         else:
-            turn, rationale, model = await asyncio.to_thread(
-                ss.classify, question, answer, _safety_transport)
+            with tracing.span("safety.classify", client=True):
+                turn, rationale, model = await asyncio.to_thread(
+                    ss.classify, question, answer, _safety_transport)
         decision = ss.evaluate(turn, state)
         if turn.classifier_error and ss.fail_closed() and decision.action == "none":
             decision.action = "withhold"
             decision.reasons.append("classifier_unavailable_fail_closed")
 
-        await _safety_record(sess, conversation_id=conversation_id, turn=turn,
-                             decision=decision, rationale=rationale, model=model,
-                             latency_ms=latency_ms, turn_index=state.turns + 1)
+        with tracing.span("safety.record"):
+            await _safety_record(sess, conversation_id=conversation_id, turn=turn,
+                                 decision=decision, rationale=rationale, model=model,
+                                 latency_ms=latency_ms, turn_index=state.turns + 1)
         state.advance(turn, decision)
         # And anything turned away while the classifier ran. What arrives between here
         # and the release is the next holder's to count.
         await _safety_fold_concurrent(sess, state)
+        # The outcome on the root span: "which traces ended in a hand-off" is a question
+        # about the whole turn, so it belongs at the top of the tree, not on a leaf.
+        tracing.set_attrs(safety_action=decision.action, safety_tier=decision.tier)
         if decision.action != "none":
             return {"action": decision.action, "tier": decision.tier,
                     "text": ss.HANDOFF_TEXT[decision.action]}
@@ -893,6 +1006,12 @@ async def _agent_turn(path: str, request: Request, body: bytes, sess: dict,
     """The turn itself, under the session lease when safety signals are on."""
     import armor
     import json as _json
+    # Set on the root span, not on each child: every span in the trace inherits the
+    # trace id, so one attribution at the top is what makes the whole tree searchable by
+    # conversation. Hash and opaque ids only — never the email (ADR-0035).
+    tracing.set_attrs(conversation_id=conversation_id, channel="agent",
+                      persona=sess["persona"], session_key=sess["session_key"],
+                      principal_hash=sess["principal_hash"])
     state_task = _safety_state_task(sess)          # overlaps everything below
 
     def _override(o: dict, status: int = 200) -> JSONResponse:
@@ -901,7 +1020,10 @@ async def _agent_turn(path: str, request: Request, body: bytes, sess: dict,
                             status_code=status)
 
     if body:
-        r = await armor.screen_prompt_detailed(body.decode("utf-8", "replace"))
+        with tracing.span("armor.screen_prompt", client=True):
+            r = await armor.screen_prompt_detailed(body.decode("utf-8", "replace"))
+            tracing.set_attrs(armor_action="block" if not r["allowed"] else "allow",
+                              armor_filters=r["filters"] or None)
         if not r["allowed"]:
             # Imported here, inside the guard, and never at function top level. Terraform
             # and CI/CD deploy on different clocks, so a revision can be running an image
@@ -926,11 +1048,14 @@ async def _agent_turn(path: str, request: Request, body: bytes, sess: dict,
                 status_code=400)
     import time as _time
     _t0 = _time.perf_counter()
-    resp = await _proxy(AGENT_URL, path, request)
+    resp = await _proxy(AGENT_URL, path, request, upstream="agent")
     _latency_ms = int((_time.perf_counter() - _t0) * 1000)
     # Screen the model response before returning it to the user.
     try:
-        r = await armor.screen_response_detailed(resp.body.decode("utf-8", "replace"))
+        with tracing.span("armor.screen_response", client=True):
+            r = await armor.screen_response_detailed(resp.body.decode("utf-8", "replace"))
+            tracing.set_attrs(armor_action="block" if not r["allowed"] else "allow",
+                              armor_filters=r["filters"] or None)
         if not r["allowed"]:
             try:
                 import control_events
@@ -1241,8 +1366,10 @@ async def _run_ca(q: str, user_token: str | None = None) -> dict:
         # Preferred: the PERSISTENT Data Agent — context (semantic-perimeter tables +
         # system instruction) is a governed resource, not a per-request payload.
         agent = f"projects/{GCP_PROJECT}/locations/{CA_LOCATION}/dataAgents/{DATA_AGENT_ID}"
-        r = await _client().post(url, json={**base, "data_agent_context": {"data_agent": agent}},
-                                 headers={"Authorization": f"Bearer {token}"}, timeout=150.0)
+        with tracing.span("ca.chat", client=True, tool="data_agent", cache="agent"):
+            r = await _client().post(url, json={**base, "data_agent_context": {"data_agent": agent}},
+                                     headers={"Authorization": f"Bearer {token}"}, timeout=150.0)
+            tracing.set_attrs(http_status=r.status_code)
         if r.status_code >= 400:  # e.g. agent not created in this env -> inline fallback
             r = None
     if r is None:
@@ -1250,8 +1377,14 @@ async def _run_ca(q: str, user_token: str | None = None) -> dict:
             "system_instruction": _ANALYST_SYSTEM_INSTRUCTION,  # teaches the graph joins
             "datasource_references": {"bq": {"table_references": tables}},
         }}
-        r = await _client().post(url, json=payload, headers={"Authorization": f"Bearer {token}"},
-                                 timeout=150.0)
+        # The fallback re-sends the whole perimeter and system instruction on every call.
+        # Separating the two spans is what makes "the Data Agent is missing in this env"
+        # visible as a latency shape rather than as a mystery.
+        with tracing.span("ca.chat", client=True, tool="inline_context", cache="inline"):
+            r = await _client().post(url, json=payload,
+                                     headers={"Authorization": f"Bearer {token}"},
+                                     timeout=150.0)
+            tracing.set_attrs(http_status=r.status_code)
     if r.status_code in (401, 403) and restricted:
         return analytics_denied(r.status_code, r.text)
     if r.status_code >= 400:
@@ -1288,11 +1421,15 @@ async def _run_kb(q: str) -> dict:
     token = _id_token(AGENT_URL)  # OIDC to the private agent
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    tracing.inject(headers)   # this path bypasses _proxy, so it injects for itself
     try:
-        r = await _client().post(f"{AGENT_URL}/chat", headers=headers, json={
-            "message": q, "user_id": "analyst", "session_id": "analyst-kb"}, timeout=90.0)
+        with tracing.span("agent.chat", client=True, upstream="agent", route="kb"):
+            r = await _client().post(f"{AGENT_URL}/chat", headers=headers, json={
+                "message": q, "user_id": "analyst", "session_id": "analyst-kb"}, timeout=90.0)
+            tracing.set_attrs(http_status=r.status_code)
         data = r.json()
     except Exception as e:
+        tracing.record_error(e)
         return {"mode": "kb", "error": f"knowledge base unavailable: {type(e).__name__}"}
     return {"mode": "kb", "answer": data.get("response") or "(no answer)"}
 
@@ -1386,12 +1523,17 @@ async def _run_platform(q: str, user_email: str | None = None) -> dict:
         top_k => 6, distance_type => 'COSINE')
     """
     try:
-        from google.cloud import bigquery
-        client = bigquery.Client(project=GCP_PROJECT)
-        job = client.query(sql, job_config=bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("q", "STRING", q)]))
-        rows = [dict(r) for r in job.result()]
+        with tracing.span("bq.vector_search", client=True, tool="platform_chunks",
+                          dataset=KB_DATASET):
+            from google.cloud import bigquery
+            client = bigquery.Client(project=GCP_PROJECT)
+            job = client.query(sql, job_config=bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ScalarQueryParameter("q", "STRING", q)]))
+            rows = [dict(r) for r in job.result()]
+            # The row COUNT, never the rows: they are document chunks, which is content.
+            tracing.set_attrs(rows=len(rows))
     except Exception as e:
+        tracing.record_error(e)
         return {"mode": "platform", "error": f"platform search unavailable: {type(e).__name__}"}
 
     if not rows:
@@ -1568,12 +1710,23 @@ async def analyst_ask(request: Request):
     _t0 = _time.perf_counter()
     _u = _verify_user(request)
     _email = _u["email"] if _u else None
-    mode = await _classify_intent(q, _email)
+    tracing.set_attrs(persona="analyst", channel="analyst_ask")
+    with tracing.span("analyst.classify_intent", client=True):
+        mode = await _classify_intent(q, _email)
+        tracing.set_attrs(route=mode)
     utok = request.headers.get("X-User-Access-Token") or None
-    res = await (_run_ca(q, user_token=utok) if mode == "analytics"
-                 else _run_kb(q) if mode == "kb"
-                 else _run_platform(q, _email) if mode == "platform"
-                 else _run_okf(q, _email))
+    # `route` on the ROOT span too: the router's choice is the fact you group traces by,
+    # and a leaf attribute is not reachable from a trace list.
+    tracing.set_attrs(route=mode)
+    with tracing.span(f"analyst.run_{mode}", route=mode):
+        res = await (_run_ca(q, user_token=utok) if mode == "analytics"
+                     else _run_kb(q) if mode == "kb"
+                     else _run_platform(q, _email) if mode == "platform"
+                     else _run_okf(q, _email))
+        tracing.set_attrs(model_requested=res.get("model_requested"),
+                          model_served=res.get("model_served"),
+                          rows=len(res.get("rows") or []) or None,
+                          error_type="route_error" if res.get("error") else None)
     _latency_ms = int((_time.perf_counter() - _t0) * 1000)
     # Capture for live eval; for analytics the generated SQL + rows are the grounding context.
     ctx = None
@@ -1654,21 +1807,33 @@ def chat_logs(request: Request, limit: int = 25, offset: int = 0, hours: int = 1
     if not (GCP_PROJECT and EVAL_DATASET):
         return {"configured": False, "rows": []}
     ds = f"{GCP_PROJECT}.{EVAL_DATASET}"
-    sql = f"""
+
+    def _sql(with_trace: bool) -> str:
+        return f"""
       SELECT l.ts, l.persona, l.channel, l.question, l.answer, l.latency_ms,
              l.model_requested, l.model_served,
+             {'l.trace_id' if with_trace else 'CAST(NULL AS STRING) AS trace_id'},
              s.overall, s.groundedness, s.safety, s.rationale
       FROM `{ds}.conversation_log` l
       LEFT JOIN `{ds}.conversation_scores` s USING (conversation_id)
       WHERE l.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(hours)} HOUR)
       ORDER BY l.ts DESC LIMIT {int(limit)} OFFSET {int(offset)}
     """
+
     count_sql = (f"SELECT COUNT(*) n FROM `{ds}.conversation_log` "
                  f"WHERE ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(hours)} HOUR)")
     try:
         from google.cloud import bigquery
         client = bigquery.Client(project=GCP_PROJECT)
-        rows = [dict(r) for r in client.query(sql).result()]
+        try:
+            rows = [dict(r) for r in client.query(_sql(True)).result()]
+        except Exception:
+            # eval_schema.sql is applied by hand per the runbook, not by CI, so this
+            # image can be live before `trace_id` exists (ADR-0035). The insert path
+            # already degrades — ignore_unknown_values — and this is the read half of the
+            # same promise: an un-migrated dataset costs you the trace column, not the
+            # whole Admin log view.
+            rows = [dict(r) for r in client.query(_sql(False)).result()]
         total = list(client.query(count_sql).result())[0]["n"]
     except Exception as e:
         return JSONResponse({"error": f"logs unavailable: {type(e).__name__}"}, status_code=502)

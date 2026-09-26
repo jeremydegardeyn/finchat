@@ -174,6 +174,17 @@ def _request(base: str, path: str, *, method: str = "GET",
     if token:
         hdrs["Authorization"] = f"Bearer {token}"
 
+    # Carry the trace into the backends (ADR-0035). The agent channel is the one surface
+    # whose caller is someone else's client, so a trace that starts here is the only
+    # record of what an external agent asked this platform to do. Imported lazily and
+    # guarded: the stdio transport runs on the standard library alone, which is what keeps
+    # `claude mcp add` a one-liner, and it must not acquire an OpenTelemetry dependency.
+    try:
+        import tracing
+        tracing.inject(hdrs)
+    except Exception:
+        pass
+
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:

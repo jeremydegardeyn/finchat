@@ -9,7 +9,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY main.py sources.py overview.py analyst_routing.py ./
+COPY main.py sources.py overview.py analyst_routing.py tracing.py ./
 ENV PORT=8090
 EXPOSE 8090
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]

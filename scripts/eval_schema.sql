@@ -162,3 +162,44 @@ FROM `${PROJECT}.finchat_eval_${ENV}.turn_signals` s
 LEFT JOIN `${PROJECT}.finchat_eval_${ENV}.conversation_log` l USING (conversation_id)
 WHERE s.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 28 DAY)
 GROUP BY bucket;
+
+-- =============================================================================
+-- Distributed tracing (ADR-0035).
+-- conversation_log gains the trace id. Until now this table could say a turn took
+-- 9,400 ms and nothing could say which of the BFF, the gateway, the classifier, the
+-- agent, its tools or BigQuery spent them. With the id, a row joins to a span tree.
+--
+-- Additive and idempotent, the same way the session columns were: a deployment running
+-- an older image writes NULL here rather than failing every insert. The BFF passes
+-- ignore_unknown_values, so the reverse order (new image, old schema) also degrades to a
+-- captured turn without the id instead of a dropped row.
+-- =============================================================================
+ALTER TABLE `${PROJECT}.finchat_eval_${ENV}.conversation_log`
+  ADD COLUMN IF NOT EXISTS trace_id STRING
+    OPTIONS(description='Cloud Trace id (32 hex) for this turn. Open at '
+                        'console.cloud.google.com/traces/list?tid=<trace_id>. '
+                        'NULL when TRACING was off for the serving revision.');
+
+-- slow_turns : the operational counterpart to eval_summary's quality view. A turn in the
+-- slowest decile, with the trace id to open and the identifiers to group by, so "the
+-- analyst path got slow this week" resolves to a route and a set of traces rather than to
+-- a p95 that moved.
+--
+-- Deliberately a view over the raw table rather than a scheduled extract: at FinChat's
+-- volume the scan is cents, and a materialized copy is one more thing that can be stale
+-- while telling you it is not.
+CREATE OR REPLACE VIEW `${PROJECT}.finchat_eval_${ENV}.slow_turns` AS
+WITH windowed AS (
+  SELECT conversation_id, ts, persona, channel, latency_ms, trace_id,
+         model_served, session_key,
+         APPROX_QUANTILES(latency_ms, 10) OVER () AS deciles
+  FROM `${PROJECT}.finchat_eval_${ENV}.conversation_log`
+  WHERE latency_ms IS NOT NULL
+    AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+)
+SELECT conversation_id, ts, persona, channel, latency_ms, trace_id, model_served,
+       session_key,
+       deciles[OFFSET(9)] AS p90_ms
+FROM windowed
+WHERE latency_ms >= deciles[OFFSET(9)]
+ORDER BY latency_ms DESC;

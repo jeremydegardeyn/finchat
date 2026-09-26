@@ -33,6 +33,10 @@ COPY products/process/api/overview.py \
 # allow-list from it, so the image carries the SOURCE rather than a compiled copy
 # — a copy would be a second place the allow-list could be true. Stdlib only.
 COPY scripts/agents_catalog.py ./scripts/
+# Tracing (ADR-0035). This image builds from the repo root, so unlike every other service
+# it copies the canonical module directly rather than through the build's staging step.
+# sys.path[0] is mcp_server/ (see CMD), which is why it lands there and not at /app.
+COPY observability/tracing.py ./mcp_server/
 COPY knowledge/ontology.yaml ./knowledge/
 COPY contracts/ ./contracts/
 

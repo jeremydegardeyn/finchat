@@ -39,3 +39,14 @@ Engine when its managed sessions/eval/warm-pool are worth the baseline.
   service; Vertex Gen AI Eval remains available for live scoring.
 - Cold-start latency (a few seconds + model time) is accepted; an enterprise toggle (min-instances or
   Agent Engine warm pool) removes it.
+- **Tracing: closed, not given up ([ADR-0035](0035-distributed-tracing.md)).** The Context
+  above lists tracing among what Agent Engine provides and this decision forgoes. That was
+  wrong about where the capability lives. ADK instruments itself — `invoke_agent`,
+  `call_llm`, `execute_tool` spans under the tracer `gcp.vertex.agent`, with the invocation
+  id, session id, model and token counts — and had been building those spans on Cloud Run
+  all along, dropping them into the no-op default `TracerProvider` because nothing
+  configured a real one. Agent Engine's "native tracing" is that configuration. Wiring a
+  Cloud Trace exporter here obtains the same spans for one IAM role, against the
+  $150-440/mo the per-engine baseline would cost across two agents and two environments.
+  What remains genuinely Agent-Engine-only is managed sessions, the managed eval service,
+  and the warm pool.

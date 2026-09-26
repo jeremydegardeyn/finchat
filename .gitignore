@@ -54,3 +54,12 @@ products/transactions/agent/kb/repo_corpus.jsonl
 # it describes how to exchange an AWS role for a Google token — but it is a build
 # artifact that names one environment, so it is regenerated rather than committed.
 aws/mcp-harness/aws-credentials.json
+
+# Tracing module, staged into each service's build context by build-deploy.yml
+# (ADR-0035). observability/tracing.py is the only copy that is committed — a service
+# with its own copy is a content control with its own version of itself.
+ui/tracing.py
+products/transactions/agent/tracing.py
+products/transactions/api/tracing.py
+products/loans/api/tracing.py
+products/process/api/tracing.py
