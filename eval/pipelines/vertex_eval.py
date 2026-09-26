@@ -725,9 +725,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=str(REPORTS / "vertex_latest.json"))
     args = ap.parse_args(argv)
 
-    from vertexai._genai import types as t
-
     if args.probe:
+        from vertexai._genai import types as t
         return probe(_client(args.project, args.location), t)
 
     cases = load_cases()
@@ -737,6 +736,13 @@ def main(argv=None) -> int:
     if args.dry_run:
         # Frames built from the dataset's own labels on both sides, so the shapes and the
         # serializer are inspectable without a deployment or a bill.
+        #
+        # Deliberately reachable WITHOUT google-cloud-aiplatform installed — pandas is the
+        # only dependency here. `main` used to import the SDK before this branch, so the
+        # one step that promises "no service calls" could not run unless the ~200MB service
+        # client was present; CI installs pandas alone and died on the import. The CI step
+        # is the guard for this: it runs --dry-run in an environment with no SDK, which is
+        # the only place the claim gets tested.
         rows = [{
             "id": c["id"], "prompt": c["query"], "response": "(dry-run)",
             "reference": c["reference"], "context": "", "calls": expected_calls(c),
@@ -778,6 +784,9 @@ def main(argv=None) -> int:
     if args.collect_only:
         report["summary_metrics"] = {"skipped": "collect-only"}
     else:
+        # Imported here rather than at the top of main: only the paths that actually talk
+        # to the service need the SDK. See the --dry-run branch above.
+        from vertexai._genai import types as t
         client = _client(args.project, args.location)
         dest = args.dest or None
         summaries, gate_failures = {}, []
