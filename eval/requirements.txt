@@ -1,0 +1,27 @@
+# Dependencies for eval/pipelines. Declared as a file rather than left to the caller
+# because the two pipelines here have very different needs and conflating them is how
+# `vertex_eval.py` ended up documented as runnable while nothing installed what it
+# imports.
+#
+#   evaluate.py       — the CI gate. Needs NOTHING from this file: it imports the product
+#                       modules and the stdlib, which is what makes it free and fast
+#                       enough to gate merges. Do not add a dependency that it needs.
+#   classifier_eval.py— needs only google-auth (via gcloud for the id token) + stdlib.
+#   vertex_eval.py    — needs the two below.
+
+# The Gen AI evaluation service client is `vertexai.Client(...).evals`, which ships inside
+# google-cloud-aiplatform. Floored at 1.153.x because that is the version whose evals
+# surface this pipeline is written against — the older `vertexai.preview.evaluation`
+# module it used to import is a different API with different metric names.
+google-cloud-aiplatform>=1.153.1
+
+# The eval frames are DataFrames; the SDK's flatten schema reads them directly.
+pandas>=2.2
+
+# Declared rather than inherited. `vertex_eval._id_token` calls
+# `google.auth.transport.requests`, which imports `requests` lazily — google-auth alone
+# imports fine and then fails at the first token mint, the helper swallows it and returns
+# None, and the call goes to the private agent unauthenticated and 403s. The repo has a
+# guard for exactly this (scripts/test_service_requirements.py); it applies here the
+# moment this file exists.
+requests==2.32.4

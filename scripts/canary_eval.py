@@ -99,7 +99,16 @@ def ask_live(agent_url: str, case: dict, timeout: float = 60.0) -> tuple[str, st
         payload = json.loads(r.read())
     # The agent service echoes the serving version when it has one; absent means the
     # surface did not report it, which is logged as unknown rather than assumed.
-    return (payload.get("response") or ""), payload.get("model_version")
+    #
+    # `model_served` is the field name /chat actually uses, matching the analyst routes in
+    # ui/server.py. This read used to be `model_version`, which /chat never returned — so
+    # every canary run recorded served=None and `version_changed()` could not fire. The
+    # control's headline claim ("quality fell the day the serving version changed") was
+    # unreachable for as long as the fallback below was the only branch that ran. The
+    # agent end is fixed too: gateway_llm now carries Vertex's `modelVersion` through ADK's
+    # custom_metadata, which is what gives this field something to read.
+    served = payload.get("model_served") or payload.get("model_version")
+    return (payload.get("response") or ""), served
 
 
 # --- Scoring ----------------------------------------------------------------
