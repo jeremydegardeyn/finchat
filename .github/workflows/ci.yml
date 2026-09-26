@@ -318,5 +318,13 @@ jobs:
           - ui
     steps:
       - uses: actions/checkout@v5
+      # The same staging the deploy does (ADR-0035). These contexts are service
+      # directories, so a Dockerfile here cannot COPY observability/tracing.py from above
+      # itself. Without this the build fails on the COPY — which is exactly how it was
+      # found: the deploy staged and this job did not. Unconditional rather than per
+      # service, because an extra file in a build context that never COPYs it costs
+      # nothing, and a list here is a third place the set of tracing services could drift.
+      - name: Stage the tracing module into the build context
+        run: cp -f observability/tracing.py "${{ matrix.service }}/tracing.py"
       - name: Build image (no push)
         run: docker build -t finchat-ci-test ${{ matrix.service }}

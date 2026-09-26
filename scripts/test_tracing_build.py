@@ -19,6 +19,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "build-deploy.yml"
+# CI builds the same images without pushing them, from the same service-directory
+# contexts, and so needs the same staging. Omitted at first, which failed every image
+# build on the first PR while the deploy would have worked — a guard that checks one of
+# two build paths is a guard that reports green for half the problem.
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CANONICAL = ROOT / "observability" / "tracing.py"
 
 # The MCP server is deliberately absent: its image builds from the repo root (ADR-0028),
@@ -54,6 +59,16 @@ def test_every_staged_context_is_staged_by_the_build():
     # The staging loop lists contexts; each must appear in it.
     for ctx in STAGED:
         assert ctx in text, f"{ctx} is not staged by build-deploy.yml"
+
+
+def test_ci_stages_it_too():
+    """Both build paths, not just the one that ships. The CI matrix passes the service
+    directory as the build context exactly as the deploy does, so a Dockerfile COPYing
+    tracing.py fails there unless CI stages it as well."""
+    text = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert "observability/tracing.py" in text, (
+        "ci.yml does not stage tracing.py — every docker-build matrix job whose "
+        "Dockerfile COPYs it will fail on the COPY")
 
 
 def test_every_staged_context_copies_it_into_its_image():
