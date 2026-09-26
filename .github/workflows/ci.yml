@@ -26,7 +26,7 @@ jobs:
       # a style linter here would be noise nobody reads.
       - name: Static check — undefined names
         run: |
-          python -m pyflakes ui/*.py scripts/*.py mcp_server/*.py \
+          python -m pyflakes ui/*.py scripts/*.py mcp_server/*.py observability/*.py \
               products/*/*/*.py products/*/*/*/*.py \
               2>/dev/null | grep -E "undefined name" && {
               echo "::error::undefined name(s) found — see above"; exit 1; } || true
@@ -52,6 +52,17 @@ jobs:
       - name: Control-event envelope + redaction guard (ADR-0026)
         working-directory: ui
         run: pytest test_control_events.py -q
+      # The content control on spans. Installs the SDK rather than skipping past the
+      # SDK-dependent half: the export path — where redaction actually happens — is not
+      # testable without it, and a guard that silently skips is not a guard.
+      - name: Tracing — spans carry structure, never content (ADR-0035)
+        working-directory: observability
+        run: |
+          pip install opentelemetry-sdk==1.41.1 opentelemetry-exporter-gcp-trace==1.12.0 \
+                      fastapi==0.115.0 httpx==0.27.2
+          pytest test_tracing.py -q
+      - name: Tracing — build wiring and OTel pin drift guard (ADR-0035)
+        run: pytest scripts/test_tracing_build.py -q
       - name: Safety block reaches the user, not demo data (ADR-0026)
         working-directory: ui
         run: pytest test_block_surfacing.py -q
@@ -137,6 +148,24 @@ jobs:
 
       - name: Canary wiring smoke (no live endpoint)
         run: python scripts/canary_eval.py dev --offline
+      - name: Agent trajectory surface — no trace without opt-in, serving version reported
+        # The /chat evaluation surface (ADR-0015 update). Guards two things: the customer
+        # turn stays free of the tool trace, which the BFF would otherwise proxy straight
+        # to the browser; and the ADR-0022 serving version survives ADK's event plumbing.
+        # Needs pytest only — trajectory.py takes no framework import, which is why the
+        # folding logic lives there instead of in server.py.
+        working-directory: products/transactions/agent
+        run: pytest test_trajectory.py -q
+      - name: Managed eval wiring — frames, payload shape, refusal rubric derivation
+        # Declares its own extras: the job installs pytest and pyflakes only. pandas is
+        # needed for the frames (and therefore for --dry-run); the vertexai-dependent
+        # tests skip themselves rather than pull a ~200MB SDK into the gate. Both steps
+        # here are free — the paid run is managed-eval.yml, dispatch only.
+        working-directory: eval/pipelines
+        run: |
+          pip install pandas==2.3.3
+          pytest test_vertex_eval.py -q
+          python vertex_eval.py --dry-run
       - name: Generator invariant check (<=4 per customer)
         working-directory: products/transactions/generator
         run: |
@@ -289,5 +318,13 @@ jobs:
           - ui
     steps:
       - uses: actions/checkout@v5
+      # The same staging the deploy does (ADR-0035). These contexts are service
+      # directories, so a Dockerfile here cannot COPY observability/tracing.py from above
+      # itself. Without this the build fails on the COPY — which is exactly how it was
+      # found: the deploy staged and this job did not. Unconditional rather than per
+      # service, because an extra file in a build context that never COPYs it costs
+      # nothing, and a list here is a third place the set of tracing services could drift.
+      - name: Stage the tracing module into the build context
+        run: cp -f observability/tracing.py "${{ matrix.service }}/tracing.py"
       - name: Build image (no push)
         run: docker build -t finchat-ci-test ${{ matrix.service }}

@@ -38,6 +38,7 @@ Lightweight ADRs capturing significant, hard-to-reverse decisions and their rati
 | [0032](0032-aws-workload-federation-for-the-agent-channel.md) | AWS workload federation for the agent channel | Accepted |
 | [0033](0033-bian-alignment.md) | Align the ontology and the system APIs to BIAN, as annotations | Accepted |
 | [0034](0034-conversation-safety-signals.md) | Conversation-level safety signals: detect the trajectory, not the turn | Accepted |
+| [0035](0035-distributed-tracing.md) | Distributed tracing on Cloud Trace: spans carry structure, never content | Accepted |
 
 _Future ADRs (planned): row/column-level security model, idempotency & exactly-once strategy,
 environment promotion gating._

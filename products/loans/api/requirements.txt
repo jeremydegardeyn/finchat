@@ -3,3 +3,10 @@ uvicorn[standard]==0.30.6
 google-cloud-bigquery==3.25.0
 pydantic==2.9.2
 httpx==0.27.2
+
+# Distributed tracing to Cloud Trace (ADR-0035). The SDK ceiling is not arbitrary:
+# google-adk 2.2.0 requires opentelemetry-sdk<=1.41.1, and the agent image is the one
+# that would fail to resolve if these services drifted above it. Pinning every service
+# to the same version keeps one OTel across the platform.
+opentelemetry-sdk==1.41.1
+opentelemetry-exporter-gcp-trace==1.12.0

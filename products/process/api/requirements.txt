@@ -8,3 +8,10 @@ requests==2.32.3
 # No BigQuery client, and that absence is the point: a process API reaches data only
 # through the system APIs that own it (LAYER-2, ADR-0030). Adding one here would make
 # this a second copy of the domain model.
+
+# Distributed tracing to Cloud Trace (ADR-0035). The SDK ceiling is not arbitrary:
+# google-adk 2.2.0 requires opentelemetry-sdk<=1.41.1, and the agent image is the one
+# that would fail to resolve if these services drifted above it. Pinning every service
+# to the same version keeps one OTel across the platform.
+opentelemetry-sdk==1.41.1
+opentelemetry-exporter-gcp-trace==1.12.0

@@ -248,7 +248,9 @@ def stubbed(monkeypatch):
     rows: list[dict] = []
     store_mu = threading.Lock()
 
-    async def fake_proxy(base, path, request, extra_headers=None):
+    # **kw rather than naming `upstream`: this stub stands in for the real signature, and
+    # the next argument added to _proxy should not break four safety tests.
+    async def fake_proxy(base, path, request, extra_headers=None, **kw):
         await asyncio.sleep(0.3)   # the agent thinking; long enough for the burst to land
         return fastapi.Response(content=json.dumps({"response": "I can't share that."}),
                                 media_type="application/json")

@@ -498,6 +498,16 @@ def main() -> None:
 
     transport = os.getenv("FINCHAT_MCP_TRANSPORT", "stdio").strip().lower()
     if transport in ("http", "streamable-http", "streamable_http"):
+        # Tracing on the HTTP transport only (ADR-0035), and for the same reason `auth`
+        # is imported inside this function: over stdio this process runs on a laptop
+        # against the standard library, with no credentials to export spans with and
+        # nothing to correlate them to. Guarded because the stdio image carries neither
+        # the module nor OpenTelemetry.
+        try:
+            import tracing
+            tracing.init("mcp")
+        except Exception:
+            pass
         # DNS-rebinding protection trusts localhost only by default, so a server
         # behind Cloud Run's front end rejects the proxied Host with 421 unless the
         # public host is allow-listed. Nothing in the error says so.

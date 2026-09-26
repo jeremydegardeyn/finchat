@@ -11,3 +11,10 @@ httpx>=0.27
 # the other services on purpose: google-adk 2.2.0 floors it at 2.32.4, and copying
 # their 2.32.3 across made this the one service that would not resolve at all.
 requests==2.32.4
+
+# Cloud Trace export for the spans ADK ALREADY builds (ADR-0035). google-adk declares
+# opentelemetry-api and -sdk as hard dependencies but the exporter only under its `gcp`
+# extra, so this image could produce spans and had nowhere to send them. Deliberately NOT
+# pinning the sdk here: google-adk owns that pin (>=1.36,<=1.41.1) and a second opinion
+# about it is how this image becomes the one that will not resolve.
+opentelemetry-exporter-gcp-trace==1.12.0

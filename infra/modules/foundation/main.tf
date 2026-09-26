@@ -37,19 +37,34 @@ locals {
       # an access token, and stores the refresh token so later sessions never prompt.
       "roles/datastore.user",               # refresh-token store (Firestore)
       "roles/secretmanager.secretAccessor", # OAuth client secret for the code exchange
+      # Span export (ADR-0035). cloudtrace.agent is write-only — it grants
+      # PatchTraces and nothing else, so a compromised workload can add spans and
+      # cannot read anyone's. Reading traces is a human's grant (cloudtrace.user),
+      # deliberately not held by any workload here.
+      "roles/cloudtrace.agent",
     ] }
     # Process + experience layers (ADR-0030). Both hold NO project roles on purpose:
     # they reach nothing directly, only other Cloud Run services, and that is granted
     # per-target via `invokers` rather than project-wide. A process API that needed
     # bigquery.dataViewer would be a process API that had started querying.
-    process = { display = "Process API — cross-domain composition (Cloud Run)", roles = [] }
-    mobile  = { display = "Mobile Experience API (Cloud Run)", roles = [] }
+    # ADR-0035 adds the one exception to "no project roles": cloudtrace.agent lets the
+    # workload write its own spans. It confers no read of data or of other traces, so it
+    # does not weaken the argument above — a process API that could query BigQuery would
+    # be a process API that had started querying; one that can emit a span has not.
+    process = { display = "Process API — cross-domain composition (Cloud Run)", roles = [
+      "roles/cloudtrace.agent",
+    ] }
+    mobile = { display = "Mobile Experience API (Cloud Run)", roles = [
+      "roles/cloudtrace.agent",
+    ] }
     # The agent channel (ADR-0028/0031), deployed over streamable HTTP. Also empty, and
     # for a sharper reason than the two above: this identity is what a remote MCP client
     # is ultimately acting as, so every project role granted here is a role granted to
     # every caller of the MCP endpoint. It reaches data only through the same governed
     # APIs the web channel uses, each granted per-target below.
-    mcp = { display = "MCP server — agent channel over HTTP (Cloud Run)", roles = [] }
+    mcp = { display = "MCP server — agent channel over HTTP (Cloud Run)", roles = [
+      "roles/cloudtrace.agent",
+    ] }
     # The OAuth proxy (ADR-0020). It reads the Google client secret and nothing
     # else: it never touches data, never calls another FinChat service, and is the
     # only service here reachable from the public internet by design. Firestore is
@@ -65,6 +80,7 @@ locals {
       "roles/bigquery.dataEditor",
       "roles/bigquery.jobUser",
       "roles/workflows.invoker",
+      "roles/cloudtrace.agent",
     ] }
     agent = { display = "Conversational + loan agents", roles = [
       "roles/aiplatform.user",
@@ -72,6 +88,10 @@ locals {
       "roles/bigquery.jobUser",
       "roles/run.invoker",
       "roles/dataplex.catalogViewer", # discover_data_product: search the catalog
+      # ADK builds its own spans (invoke_agent / call_llm / execute_tool) and needs this
+      # to export them — the Agent Engine tracing capability ADR-0010 gave up, obtained
+      # on Cloud Run for the price of one role (ADR-0035).
+      "roles/cloudtrace.agent",
     ] }
     # Anonymous Ask-the-Data tier (ADR-0019): impersonated by the BFF for guests.
     # Resource-level grants live outside this map: dataset READER on graph/gold/
@@ -143,6 +163,7 @@ locals {
     "cloudbuild.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "cloudtrace.googleapis.com",
     "eventarc.googleapis.com",
     "billingbudgets.googleapis.com",
   ]

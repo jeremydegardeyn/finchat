@@ -14,15 +14,45 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import FastAPI, HTTPException, Header, Query, Request
 from pydantic import BaseModel, Field
 
 from store import LoanStore
 from risk import synthesize_credit_profile, score_risk
 
+
+# Distributed tracing (ADR-0035). Same seven-line bootstrap as every other service; see
+# ui/server.py for why each service has to carry it.
+try:
+    import tracing                                        # image: copied beside us
+except ImportError:                                       # checkout: walk up to the root
+    import sys as _sys
+    _d = os.path.dirname(os.path.abspath(__file__))
+    while _d != os.path.dirname(_d):
+        if os.path.isdir(os.path.join(_d, "observability")):
+            _sys.path.insert(0, os.path.join(_d, "observability")); break
+        _d = os.path.dirname(_d)
+    import tracing
+
+tracing.init("loan-api")
+
 app = FastAPI(title="FinChat Loan API", version="1.0.0",
               description="Loan submission, status, and authenticated approver decisions.")
 store = LoanStore()
+
+@app.middleware("http")
+async def _trace_requests(request: Request, call_next):
+    """Continue the caller's trace. The span name is the route TEMPLATE, never the
+    resolved path: a resolved path here carries a loan or account id."""
+    if not tracing.ENABLED:
+        return await call_next(request)
+    route = request.scope.get("route")
+    name = getattr(route, "path", None) or request.url.path
+    with tracing.server_span(f"{request.method} {name}", request.headers, route=name):
+        resp = await call_next(request)
+        tracing.set_attrs(http_status=resp.status_code)
+        return resp
+
 
 TXN_API_URL = os.getenv("TXN_API_URL", "")
 

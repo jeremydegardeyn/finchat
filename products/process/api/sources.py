@@ -127,6 +127,16 @@ def _get(base: str, path: str, params: dict | None = None):
     tok = _id_token(base)
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
+    # Carry the trace into the system APIs (ADR-0035). Without it the process layer is
+    # where every trace ends, which is the worst place for it to end: composing two
+    # system APIs is exactly the shape whose latency you cannot reason about from one
+    # number. Imported lazily and guarded — this module is imported by tests that run
+    # with neither the tracing module nor OpenTelemetry installed.
+    try:
+        import tracing
+        tracing.inject(headers)
+    except Exception:
+        pass
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:

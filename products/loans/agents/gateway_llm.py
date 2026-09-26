@@ -128,6 +128,16 @@ def complete(prompt: str, *, agent_id: str, workload_class: str, owner: str,
     return (payload.get("text") or "").strip()
 
 
+def _version_meta(requested: str | None, served: str | None, path: str) -> dict:
+    """What the agent turn records about which model answered it (ADR-0022).
+
+    Namespaced under `finchat` in `custom_metadata` because that dict is ADK's, shared
+    with anything else that writes to it; an unnamespaced key would collide the day
+    another callback wants one.
+    """
+    return {"model_requested": requested, "model_served": served, "path": path}
+
+
 def _build_body(llm_request) -> dict:
     """Serialize an ADK LlmRequest into a Vertex generateContent body.
 
@@ -247,7 +257,22 @@ try:
 
             _count("transited")
             resp = types.GenerateContentResponse.model_validate(payload["response"])
-            yield LlmResponse.create(resp)
+            out = LlmResponse.create(resp)
+            # ADR-0022, evidence half. `LlmResponse.create()` keeps content, grounding
+            # metadata and usage — and drops `modelVersion`, which is the one field that
+            # says which version actually answered. So on the agent surface the control
+            # had nothing to record: `scripts/canary_eval.py` has been reading
+            # `model_version` off /chat since it was written and getting None every run,
+            # which silently disabled its version-change diagnosis.
+            #
+            # `custom_metadata` survives: ADK's `_finalize_model_response_event` merges
+            # the LlmResponse dump into the Event, and Event carries the same field. That
+            # is the channel /chat reads it back out of.
+            out.custom_metadata = {**(out.custom_metadata or {}),
+                                   "finchat": _version_meta(self.model,
+                                                            resp.model_version,
+                                                            "gateway")}
+            yield out
 
         async def _direct(self, llm_request, stream: bool):
             """Counted fallback: ADK's own Gemini path, ungoverned.
@@ -258,6 +283,12 @@ try:
             from google.adk.models.google_llm import Gemini
             async for r in Gemini(model=self.model).generate_content_async(
                     llm_request, stream):
+                # Tagged too, with `model_served` left None. ADK's own backend discards
+                # `modelVersion` the same way, and substituting the requested id would
+                # turn an unknown into a fact — the failure mode model_pins.py calls
+                # pinning theatre. An ungoverned turn is also worth seeing in the trace.
+                r.custom_metadata = {**(r.custom_metadata or {}),
+                                     "finchat": _version_meta(self.model, None, "direct")}
                 yield r
 
     _ADK_AVAILABLE = True

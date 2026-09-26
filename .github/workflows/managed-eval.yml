@@ -1,0 +1,76 @@
+name: Managed Eval
+
+# Scores the golden set against the LIVE agent using the Gen AI evaluation service's
+# managed autorater (ADR-0015, managed tier).
+#
+# Dispatch only, with no schedule, on purpose. Every rubric metric is judge tokens per
+# case, and this is the near-zero-cost tier: the loops that run unattended are the free
+# offline gate, the daily judge over real traffic (bounded by --limit), and the canary.
+# This one runs when someone wants a second opinion from a judge FinChat did not write —
+# after a deploy, or when a hand-rolled score is being doubted.
+#
+# `metrics: tools` costs nothing: the tool_* metrics are computation-based. Prefer it for
+# wiring checks.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+      metrics:
+        description: Which metrics to run ('tools' is free)
+        type: choice
+        options: [all, tools, quality]
+        default: all
+      probe_only:
+        description: Verify wiring and the tool-call payload shape, then stop ($0)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SA }}
+      - name: Install deps
+        # eval/requirements.txt, not an inline list: it pins `requests` because
+        # vertex_eval mints an OIDC token through google.auth's requests transport, which
+        # imports it lazily and otherwise fails at the first mint (see the file).
+        run: pip install -r eval/requirements.txt
+      - name: Verify wiring and the tool-call payload shape
+        # Free, and it runs on every dispatch including the paid ones. The tool metrics
+        # take trajectories as a JSON string whose shape is an API contract no local test
+        # can check, so this is the only place the repo finds out it drifted — better
+        # before spending judge tokens on a run whose tool metrics would be meaningless.
+        working-directory: eval/pipelines
+        run: python vertex_eval.py --probe
+      - name: Score the golden set against the live agent
+        if: ${{ github.event.inputs.probe_only != 'true' }}
+        working-directory: eval/pipelines
+        env:
+          AGENT_URL: ${{ vars.AGENT_URL }}
+        run: |
+          python vertex_eval.py \
+            --metrics "${{ github.event.inputs.metrics || 'all' }}"
+      - name: Upload the report
+        if: ${{ always() && github.event.inputs.probe_only != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-eval-report-${{ github.event.inputs.environment || 'dev' }}
+          path: eval/reports/vertex_latest.json
+          if-no-files-found: warn
