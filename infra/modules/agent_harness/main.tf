@@ -42,7 +42,7 @@ resource "google_sql_database_instance" "steward" {
 
   lifecycle {
     # Cloud Scheduler owns start/stop (Option B: the instance is parked between nightly
-    # runs so it bills storage rather than compute). Terraform sees the parked state as
+    # runs; parked still bills the public IP, see enable_scheduled_stop). Terraform sees the parked state as
     # drift and would restore ALWAYS on every apply, silently reversing the cost control
     # and running a db-f1-micro 24/7. Same rationale as ignore_changes on Cloud Run
     # images: whoever owns the field at runtime should keep owning it.
