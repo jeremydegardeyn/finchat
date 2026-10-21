@@ -232,7 +232,32 @@ resource "google_artifact_registry_repository" "images" {
   format        = "DOCKER"
   description   = "FinChat service container images (${var.env})"
   labels        = var.labels
-  depends_on    = [google_project_service.apis]
+
+  # Every push to main builds every service, so without a policy the repo keeps every
+  # build forever (dev reached 27.6 GB and prod 16.3 GB by 2026-10, ~$4.50/mo between
+  # them). KEEP overrides DELETE: the 10 newest versions of each package survive at any
+  # age, which always includes the image the current Cloud Run revision runs and the
+  # txn-pipeline image the Flex Template spec points at.
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "keep-10-most-recent"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 10
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-older-than-30d"
+    action = "DELETE"
+    condition {
+      tag_state  = "ANY"
+      older_than = "2592000s" # 30 days
+    }
+  }
+
+  depends_on = [google_project_service.apis]
 }
 
 # --- Platform buckets --------------------------------------------------------
