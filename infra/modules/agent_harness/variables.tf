@@ -50,8 +50,10 @@ variable "schedule_goal" {
 
 # --- Option B: scheduled stop/start of the Cloud SQL "autosave" ---------------
 # Cloud SQL has no scale-to-zero. The steward is nightly, so we START the instance
-# before the run and STOP it after the window — paying compute ~1 of 24h (stopped
-# ≈ storage/backups only, ~$2-4/mo). A stopped DB can't receive a wake, so CI sets
+# before the run and STOP it after the window — paying compute ~1 of 24h. Stopping
+# saves almost nothing on a shared-core tier: a stopped instance still bills its
+# public IPv4 at $0.01/h against $0.0105/h for db-f1-micro compute, so prod cost
+# ~$8.80/mo either way (billing export, 2026-10). A stopped DB can't receive a wake, so CI sets
 # HUMAN_WAIT_SECONDS small enough that escalations AUTO-DEFER to the next window.
 variable "enable_scheduled_stop" {
   type        = bool
