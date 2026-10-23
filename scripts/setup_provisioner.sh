@@ -98,6 +98,10 @@ ROLES=(
   # Only prod sets enable_model_armor_floor = true, so it is the only environment that
   # reaches this resource, and the only one where the gap was visible.
   roles/modelarmor.floorSettingsAdmin
+  # google_iam_workload_identity_pool + _provider (the AWS MCP client federation in
+  # envs/<env>/main.tf). Added after the list above was derived, so PR plans failed on
+  # `iam.workloadIdentityPools.get` while refreshing the pool.
+  roles/iam.workloadIdentityPoolAdmin
 )
 
 for role in "${ROLES[@]}"; do
