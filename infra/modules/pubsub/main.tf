@@ -84,6 +84,12 @@ resource "google_pubsub_subscription" "to_bigquery" {
     dead_letter_topic     = google_pubsub_topic.dlq.id
     max_delivery_attempts = var.max_delivery_attempts
   }
+
+  # Without this, Pub/Sub's default 31-day inactivity TTL applies, and the generator
+  # publishes too rarely to keep the subscription alive. The audit log shows
+  # Subscriber.InternalExpireInactiveSubscription removing it in Jul, Sep and Oct 2026;
+  # each time it then reappeared as an unexplained create on the next plan.
+  expiration_policy { ttl = "" }
 }
 
 # --- Pull subscription for the Dataflow streaming pipeline --------------------
